@@ -36,6 +36,19 @@ compiled payloads before using `aoti_load_package`.
 LM7 0.1 validates this path only for CPU. Packages require a compatible PyTorch
 runtime and target architecture and do not provide a stable cross-version ABI.
 
+### Compiler debug artifacts
+
+`lm7.export(..., debug=True)` stores source capture details under `debug/` and
+enables PyTorch's Inductor trace for FX graphs, pre/post-fusion IR, and generated
+output code. The artifact manifest contains a normalized index with a pipeline
+level, kind, and relative path for each emitted file.
+
+PTX, assembly, CUBIN, and other low-level outputs are indexed when the selected
+target and toolchain emit them. LM7 does not synthesize or claim unavailable
+levels. The current CPU-only AOT path normally emits C++ source rather than PTX.
+Debug output may contain model structure and generated code and is disabled by
+default.
+
 The eager backend is both the reference implementation and the fallback. Only
 backend compilation failures trigger fallback; exceptions from model execution
 are returned to the caller unchanged.

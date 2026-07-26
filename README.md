@@ -52,6 +52,29 @@ This path requires PyTorch's Beta AOTInductor package APIs and a working
 platform C++ compiler. The compiled package is target- and PyTorch-version
 specific.
 
+Pass `debug=True` to include compiler intermediates in the artifact:
+
+```python
+artifact = lm7.export(
+    model,
+    args=(example_input,),
+    target="cpu",
+    backend="aot_inductor",
+    output="model-debug.lm7",
+    debug=True,
+)
+
+for path in artifact.debug_files():
+    print(path)
+```
+
+LM7 always records the exported graph and asks Inductor for its FX graphs,
+pre/post-fusion IR, and generated output code. The manifest indexes every file
+that PyTorch actually emits. Final assembly, PTX, or accelerator binaries are
+target- and toolchain-dependent; they are included and classified when present,
+but are not guaranteed. Debug artifacts can reveal model structure and generated
+code and should be handled as sensitive development data.
+
 ## Installation
 
 ```bash

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, asdict, dataclass
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
 PROGRAM_NAME = "exported_program.pt2"
 COMPILED_PROGRAM_NAME = "compiled_model.pt2"
+DEBUG_DIR_NAME = "debug"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,8 @@ class ArtifactManifest:
     compiled_file: str | None = None
     compiled_sha256: str | None = None
     runtime_requirements: Mapping[str, Any] | None = None
+    debug_requested: bool = False
+    debug_artifacts: tuple[Mapping[str, str], ...] = ()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ArtifactManifest:
@@ -79,6 +83,9 @@ class ExportArtifact:
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.module()(*args, **kwargs)
 
+    def debug_files(self) -> tuple[Path, ...]:
+        return tuple(self.path / artifact["path"] for artifact in self.manifest.debug_artifacts)
+
 
 def export(
     model: torch.nn.Module | torch.export.ExportedProgram,
@@ -89,6 +96,7 @@ def export(
     output: str | os.PathLike[str],
     backend: str = "export",
     options: Mapping[str, Any] | None = None,
+    debug: bool = False,
     dynamic_shapes: Any = None,
     strict: bool = False,
 ) -> ExportArtifact:
@@ -144,6 +152,9 @@ def export(
         program_sha256 = _file_sha256(program_path)
         compiled_file = None
         compiled_sha256 = None
+        debug_dir = staging / DEBUG_DIR_NAME
+        if debug:
+            _write_export_debug_files(exported_program, debug_dir)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -152,9 +163,15 @@ def export(
             if not support.available:
                 raise BackendUnavailableError(support.reason)
             compiled_path = staging / COMPILED_PROGRAM_NAME
-            selected_backend.compile_exported(exported_program, compiled_path, options)
+            compiler_options = dict(options or {})
+            if debug:
+                compiler_options.update(_debug_inductor_options(debug_dir))
+            selected_backend.compile_exported(exported_program, compiled_path, compiler_options)
             compiled_file = COMPILED_PROGRAM_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+            if debug:
+                _extract_package_debug_files(compiled_path, debug_dir)
+        debug_artifacts = _index_debug_artifacts(staging, debug_dir) if debug else ()
         manifest = ArtifactManifest(
             format_version=FORMAT_VERSION,
             lm7_version=_lm7_version(),
@@ -175,6 +192,8 @@ def export(
                 "device": resolved_target.vendor,
                 "api_status": "beta" if backend == "aot_inductor" else "stable",
             },
+            debug_requested=debug,
+            debug_artifacts=debug_artifacts,
         )
         (staging / MANIFEST_NAME).write_text(
             json.dumps(asdict(manifest), indent=2, sort_keys=True) + "\n",
@@ -306,3 +325,93 @@ def _lm7_version() -> str:
     from . import __version__
 
     return __version__
+
+
+def _debug_inductor_options(debug_dir: Path) -> dict[str, Any]:
+    return {
+        "trace.enabled": True,
+        "trace.debug_dir": str(debug_dir),
+        "trace.fx_graph": True,
+        "trace.fx_graph_transformed": True,
+        "trace.ir_pre_fusion": True,
+        "trace.ir_post_fusion": True,
+        "trace.output_code": True,
+    }
+
+
+def _write_export_debug_files(
+    exported_program: torch.export.ExportedProgram, debug_dir: Path
+) -> None:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    (debug_dir / "exported_program.txt").write_text(str(exported_program) + "\n", encoding="utf-8")
+    (debug_dir / "exported_graph.py").write_text(
+        exported_program.graph_module.code, encoding="utf-8"
+    )
+    (debug_dir / "graph_signature.txt").write_text(
+        str(exported_program.graph_signature) + "\n", encoding="utf-8"
+    )
+
+
+def _index_debug_artifacts(staging: Path, debug_dir: Path) -> tuple[Mapping[str, str], ...]:
+    if not debug_dir.is_dir():
+        return ()
+    artifacts = []
+    for path in sorted(item for item in debug_dir.rglob("*") if item.is_file()):
+        level, kind = _debug_artifact_kind(path)
+        artifacts.append(
+            {
+                "level": level,
+                "kind": kind,
+                "path": path.relative_to(staging).as_posix(),
+                "sha256": _file_sha256(path),
+            }
+        )
+    return tuple(artifacts)
+
+
+def _extract_package_debug_files(package_path: Path, debug_dir: Path) -> None:
+    if not zipfile.is_zipfile(package_path):
+        return
+    selected_suffixes = {
+        ".c",
+        ".cpp",
+        ".cu",
+        ".py",
+        ".ptx",
+        ".s",
+        ".asm",
+        ".cubin",
+        ".hsaco",
+    }
+    package_debug_dir = debug_dir / "package"
+    with zipfile.ZipFile(package_path) as archive:
+        for entry in sorted(archive.infolist(), key=lambda item: item.filename):
+            if entry.is_dir() or Path(entry.filename).suffix.lower() not in selected_suffixes:
+                continue
+            package_debug_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = entry.filename.replace("\\", "__").replace("/", "__")
+            (package_debug_dir / safe_name).write_bytes(archive.read(entry))
+
+
+def _debug_artifact_kind(path: Path) -> tuple[str, str]:
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if name.startswith(("exported_", "graph_signature")):
+        return "export", "graph"
+    if name.startswith("fx_graph"):
+        return "fx", "graph"
+    if "ir_pre_fusion" in name:
+        return "inductor_ir_pre_fusion", "ir"
+    if "ir_post_fusion" in name:
+        return "inductor_ir_post_fusion", "ir"
+    if suffix == ".ptx":
+        return "device_code", "ptx"
+    if suffix in {".s", ".asm"}:
+        return "machine_code", "assembly"
+    if suffix in {".cubin", ".hsaco"}:
+        return "device_binary", suffix.removeprefix(".")
+    if name.startswith("output_code"):
+        return "generated_code", "source"
+    if suffix in {".cpp", ".c", ".cu", ".py"}:
+        return "generated_code", "source"
+    return "compiler_debug", "diagnostic"
