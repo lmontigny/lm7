@@ -6,3 +6,4 @@ add MLperf ai inference test
 validate on cpu first
 nvidia H100, B100, B200 for perf validation 1 gpu
 add example like https://github.com/zml/zml/tree/master/examples/llm, Llama 3.1Qwen 3.5 LFM 2.5
+add cmd to select hf model and complie it (so not pytorch code level)
