@@ -109,3 +109,59 @@ def test_cache_key_changes_with_target_and_signature():
 def test_module_export_requires_args(tmp_path):
     with pytest.raises(ValueError, match="args must be supplied"):
         lm7.export(model(), target="cpu", output=tmp_path / "model.lm7")
+
+
+def test_shape_profile_is_persisted_and_validated(tmp_path):
+    source = model()
+    profile = lm7.ShapeProfile({"input": {0: lm7.DynamicDimension("batch", min=1, max=4)}})
+    artifact = lm7.export(
+        source,
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        output=tmp_path / "dynamic.lm7",
+        shape_profile=profile,
+    )
+
+    assert artifact.manifest.shape_profile == {
+        "argument_order": ["input"],
+        "inputs": {
+            "input": {
+                "0": {
+                    "name": "batch",
+                    "min": 1,
+                    "max": 4,
+                }
+            }
+        },
+    }
+    assert artifact(torch.randn(3, 4)).shape == (3, 3)
+
+    loaded = lm7.load_artifact(artifact.path)
+    assert loaded(torch.randn(4, 4)).shape == (4, 3)
+    with pytest.raises(ValueError, match=r"expected \[1, 4\]"):
+        loaded(torch.randn(5, 4))
+
+
+def test_shape_profile_rejects_unknown_inputs(tmp_path):
+    profile = lm7.ShapeProfile({"missing": {0: lm7.DynamicDimension("batch", min=1, max=4)}})
+    with pytest.raises(ValueError, match="unknown or unbound"):
+        lm7.export(
+            model(),
+            args=(torch.randn(2, 4),),
+            target="cpu",
+            output=tmp_path / "dynamic.lm7",
+            shape_profile=profile,
+        )
+
+
+def test_shape_profile_and_raw_dynamic_shapes_are_mutually_exclusive(tmp_path):
+    profile = lm7.ShapeProfile({"input": {0: lm7.DynamicDimension("batch", min=1, max=4)}})
+    with pytest.raises(ValueError, match="cannot be supplied together"):
+        lm7.export(
+            model(),
+            args=(torch.randn(2, 4),),
+            target="cpu",
+            output=tmp_path / "dynamic.lm7",
+            shape_profile=profile,
+            dynamic_shapes={"input": None},
+        )

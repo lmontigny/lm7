@@ -107,6 +107,25 @@ An artifact is a directory containing `manifest.json` and
 `exported_program.pt2`. Loading validates the format version and SHA-256 payload
 checksum. LM7 never overwrites an existing output path implicitly.
 
+For bounded dynamic dimensions, attach a named shape profile. Input names match
+the model's `forward` parameters:
+
+```python
+profile = lm7.ShapeProfile({"input": {0: lm7.DynamicDimension("batch", min=1, max=32)}})
+artifact = lm7.export(
+    model,
+    args=(example_input,),
+    target="cpu",
+    output="dynamic-model.lm7",
+    shape_profile=profile,
+)
+
+artifact(torch.randn(8, 16))  # accepted
+```
+
+The profile is stored in `manifest.json` and checked when the artifact is
+called. Inputs outside the declared bounds fail with a clear `ValueError`.
+
 ### 4. Test real CPU AOTInductor compilation
 
 AOTInductor requires PyTorch's Beta package APIs and a working platform C++

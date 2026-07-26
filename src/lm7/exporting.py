@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import shutil
 import tempfile
 import zipfile
 from collections.abc import Callable, Mapping
-from dataclasses import MISSING, asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,40 @@ DEBUG_DIR_NAME = "debug"
 
 
 @dataclass(frozen=True)
+class DynamicDimension:
+    """A named, bounded dynamic tensor dimension."""
+
+    name: str
+    min: int = 1
+    max: int = 2**31 - 1
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("Dynamic dimension name cannot be empty.")
+        if self.min < 0:
+            raise ValueError("Dynamic dimension minimum cannot be negative.")
+        if self.max < self.min:
+            raise ValueError("Dynamic dimension maximum must be at least its minimum.")
+
+
+@dataclass(frozen=True)
+class ShapeProfile:
+    """Dynamic dimensions keyed by model argument name and tensor dimension."""
+
+    inputs: Mapping[str, Mapping[int, DynamicDimension]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for input_name, dimensions in self.inputs.items():
+            if not input_name:
+                raise ValueError("Shape profile input names cannot be empty.")
+            for dimension, constraint in dimensions.items():
+                if dimension < 0:
+                    raise ValueError("Shape profile dimension indexes cannot be negative.")
+                if not isinstance(constraint, DynamicDimension):
+                    raise TypeError("Shape profile constraints must be DynamicDimension instances.")
+
+
+@dataclass(frozen=True)
 class ArtifactManifest:
     format_version: int
     lm7_version: str
@@ -51,6 +86,7 @@ class ArtifactManifest:
     runtime_requirements: Mapping[str, Any] | None = None
     debug_requested: bool = False
     debug_artifacts: tuple[Mapping[str, str], ...] = ()
+    shape_profile: Mapping[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ArtifactManifest:
@@ -81,6 +117,7 @@ class ExportArtifact:
         return self.exported_program.module()
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        _validate_shape_profile(self.manifest.shape_profile, args, kwargs)
         return self.module()(*args, **kwargs)
 
     def debug_files(self) -> tuple[Path, ...]:
@@ -98,10 +135,13 @@ def export(
     options: Mapping[str, Any] | None = None,
     debug: bool = False,
     dynamic_shapes: Any = None,
+    shape_profile: ShapeProfile | None = None,
     strict: bool = False,
 ) -> ExportArtifact:
     """Capture and persist a versioned LM7 source artifact."""
     kwargs = dict(kwargs or {})
+    if dynamic_shapes is not None and shape_profile is not None:
+        raise ValueError("dynamic_shapes and shape_profile cannot be supplied together.")
     if backend not in {"export", "aot_inductor"}:
         raise BackendUnavailableError(
             f"Export backend {backend!r} is not supported; choose 'export' or 'aot_inductor'."
@@ -114,12 +154,22 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
+        profile_metadata = (
+            _shape_profile_metadata(model, args, kwargs, shape_profile)
+            if shape_profile is not None
+            else None
+        )
+        torch_dynamic_shapes = (
+            _torch_dynamic_shapes(profile_metadata)
+            if profile_metadata is not None
+            else dynamic_shapes
+        )
         try:
             exported_program = torch.export.export(
                 model,
                 args,
                 kwargs,
-                dynamic_shapes=dynamic_shapes,
+                dynamic_shapes=torch_dynamic_shapes,
                 strict=strict,
             )
         except Exception as exc:
@@ -130,6 +180,8 @@ def export(
         signature = input_signature(args, kwargs)
     else:
         raise TypeError("model must be an nn.Module or torch.export.ExportedProgram.")
+    if isinstance(model, torch.export.ExportedProgram):
+        profile_metadata = None
 
     resolved_target = _artifact_target(target)
     if backend == "aot_inductor" and resolved_target.vendor != "cpu":
@@ -194,6 +246,7 @@ def export(
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
+            shape_profile=profile_metadata,
         )
         (staging / MANIFEST_NAME).write_text(
             json.dumps(asdict(manifest), indent=2, sort_keys=True) + "\n",
@@ -326,6 +379,92 @@ def _lm7_version() -> str:
     from . import __version__
 
     return __version__
+
+
+def _shape_profile_metadata(
+    model: torch.nn.Module,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+    profile: ShapeProfile,
+) -> Mapping[str, Any]:
+    try:
+        bound = inspect.signature(model.forward).bind(*args, **kwargs)
+    except TypeError as exc:
+        raise ValueError(f"Cannot bind shape profile to model inputs: {exc}.") from exc
+    unknown = set(profile.inputs) - set(bound.arguments)
+    if unknown:
+        raise ValueError(
+            "Shape profile references unknown or unbound model inputs: "
+            f"{', '.join(sorted(unknown))}."
+        )
+    inputs: dict[str, dict[str, Mapping[str, Any]]] = {}
+    for input_name, dimensions in profile.inputs.items():
+        value = bound.arguments[input_name]
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Shape profile input {input_name!r} is not a tensor.")
+        serialized_dimensions: dict[str, Mapping[str, Any]] = {}
+        for dimension, constraint in dimensions.items():
+            if dimension >= value.dim():
+                raise ValueError(
+                    f"Shape profile dimension {dimension} is out of range for input "
+                    f"{input_name!r} with {value.dim()} dimensions."
+                )
+            size = value.shape[dimension]
+            if not constraint.min <= size <= constraint.max:
+                raise ValueError(
+                    f"Example input {input_name!r} dimension {dimension} has size {size}, "
+                    f"outside [{constraint.min}, {constraint.max}]."
+                )
+            serialized_dimensions[str(dimension)] = asdict(constraint)
+        inputs[input_name] = serialized_dimensions
+    return {"argument_order": list(bound.arguments), "inputs": inputs}
+
+
+def _torch_dynamic_shapes(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    inputs = profile["inputs"]
+    return {
+        input_name: {
+            int(dimension): torch.export.Dim(
+                constraint["name"],
+                min=constraint["min"],
+                max=constraint["max"],
+            )
+            for dimension, constraint in inputs.get(input_name, {}).items()
+        }
+        or None
+        for input_name in profile["argument_order"]
+    }
+
+
+def _validate_shape_profile(
+    profile: Mapping[str, Any] | None,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+) -> None:
+    if profile is None:
+        return
+    argument_order = profile["argument_order"]
+    values = dict(kwargs)
+    values.update(zip(argument_order, args, strict=False))
+    for input_name, dimensions in profile["inputs"].items():
+        if input_name not in values:
+            raise ValueError(f"Shape-profiled input {input_name!r} was not supplied.")
+        value = values[input_name]
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Shape-profiled input {input_name!r} must be a tensor.")
+        for dimension_text, constraint in dimensions.items():
+            dimension = int(dimension_text)
+            if dimension >= value.dim():
+                raise ValueError(
+                    f"Input {input_name!r} has no dimension {dimension} required by its "
+                    "shape profile."
+                )
+            size = value.shape[dimension]
+            if not constraint["min"] <= size <= constraint["max"]:
+                raise ValueError(
+                    f"Input {input_name!r} dimension {dimension} has size {size}; "
+                    f"expected [{constraint['min']}, {constraint['max']}]."
+                )
 
 
 def _debug_inductor_options(debug_dir: Path) -> dict[str, Any]:
