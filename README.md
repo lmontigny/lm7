@@ -209,19 +209,22 @@ find artifacts/cuda-debug -type f | sort
 ### 7. Test a Hugging Face language model
 
 Hugging Face integration tests are opt-in because they download model weights
-and require a CUDA GPU. Install the optional dependencies and run the compact,
-ungated SmolLM2 model:
+and require a CUDA GPU. Install the optional dependencies and run one of the
+compact, ungated test models:
 
 ```bash
 python -m pip install -e ".[dev,hf]"
-python examples/hf_smollm2.py \
+python examples/hf_causal_lm.py \
   --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
+python examples/hf_causal_lm.py \
+  --model hf://LiquidAI/LFM2.5-230M
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
 The example compares compiled logits with eager CUDA and performs a short,
-deterministic generation smoke test. Hugging Face stores downloaded files in
-its normal external cache; LM7 does not add model weights to the repository.
+deterministic generation smoke test. SmolLM2 is Apache-2.0; LFM2.5 uses the LFM
+Open License 1.0. Hugging Face stores downloaded files in its normal external
+cache; LM7 does not add model weights to the repository.
 
 ## Targets and diagnostics
 

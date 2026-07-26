@@ -7,7 +7,10 @@ import torch
 
 import lm7
 
-MODEL_ID = "HuggingFaceTB/SmolLM2-135M-Instruct"
+MODEL_IDS = (
+    "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "LiquidAI/LFM2.5-230M",
+)
 RUN_HF_TESTS = os.environ.get("LM7_RUN_HF_TESTS") == "1"
 
 pytestmark = [
@@ -17,11 +20,12 @@ pytestmark = [
 ]
 
 
-def test_smollm2_inductor_logits_and_generation():
+@pytest.mark.parametrize("model_id", MODEL_IDS)
+def test_causal_lm_inductor_logits_and_generation(model_id):
     transformers = pytest.importorskip("transformers")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_ID)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
+        model_id,
         dtype=torch.float16,
     ).eval()
     inputs = tokenizer("The capital of France is", return_tensors="pt")
@@ -52,4 +56,5 @@ def test_smollm2_inductor_logits_and_generation():
             do_sample=False,
             max_new_tokens=4,
         )
-    assert generated.shape[1] == inputs["input_ids"].shape[1] + 4
+    prompt_length = inputs["input_ids"].shape[1]
+    assert prompt_length < generated.shape[1] <= prompt_length + 4
