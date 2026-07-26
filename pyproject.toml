@@ -15,6 +15,7 @@ dependencies = ["torch>=2.0"]
 dev = ["pytest>=8", "ruff>=0.6"]
 hf = ["transformers>=4.46", "safetensors>=0.4"]
 tensorrt = ["torch-tensorrt==2.12.1"]
+openxla = ["torch_xla[tpu]==2.9.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -27,6 +28,7 @@ markers = [
     "rocm: requires a ROCm-capable AMD GPU",
     "hf: requires Hugging Face model downloads and a CUDA GPU",
     "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
+    "tpu: requires PyTorch/XLA on a Google TPU VM",
 ]
 
 [tool.ruff]

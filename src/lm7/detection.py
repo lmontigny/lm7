@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import platform
+import re
 from typing import Any
 
 import torch
@@ -63,6 +66,8 @@ def detect_targets() -> list[DeviceInfo]:
     except (AttributeError, RuntimeError):
         pass
 
+    devices.extend(_detect_tpu_targets())
+
     cpu_arch = platform.machine().lower() or None
     devices.append(
         DeviceInfo(TargetSpec("cpu", "cpu", architecture=cpu_arch), platform.processor() or "CPU")
@@ -74,7 +79,10 @@ def resolve_target(requested: str | TargetSpec) -> TargetSpec:
     parsed = parse_target(requested)
     devices = detect_targets()
     if parsed.vendor == "auto":
-        return next((d.target for d in devices if d.target.kind == "gpu"), devices[-1].target)
+        return next(
+            (d.target for d in devices if d.target.kind in {"gpu", "accelerator"}),
+            devices[-1].target,
+        )
     for device in devices:
         target = device.target
         if parsed.vendor != target.vendor or parsed.kind != target.kind:
@@ -106,4 +114,41 @@ def torch_device(target: TargetSpec) -> torch.device:
         return torch.device("xpu", ordinal)
     if target.vendor == "apple":
         return torch.device("mps")
+    if target.vendor == "tpu":
+        return torch.device("xla", ordinal)
     return torch.device("cpu")
+
+
+def _detect_tpu_targets() -> list[DeviceInfo]:
+    try:
+        if importlib.util.find_spec("torch_xla") is None:
+            return []
+        torch_xla = importlib.import_module("torch_xla")
+        runtime = importlib.import_module("torch_xla.runtime")
+        if runtime.device_type() != "TPU":
+            return []
+        count = runtime.addressable_device_count()
+        attributes = runtime.global_runtime_device_attributes()
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError):
+        # Optional runtime discovery must not make CPU/GPU detection fail when
+        # libtpu is missing or the current host cannot initialize PJRT.
+        return []
+
+    first_attributes = dict(attributes[0]) if attributes else {}
+    device_kind = str(first_attributes.get("device_kind", "Google TPU"))
+    model_match = re.search(r"\bv\d+[a-z]?\b", device_kind.lower())
+    model = model_match.group(0) if model_match else None
+    capabilities = {
+        "openxla": getattr(torch_xla, "__version__", None),
+        "pjrt_device": "TPU",
+        "addressable_device_count": count,
+        "runtime_attributes": first_attributes,
+    }
+    return [
+        DeviceInfo(
+            TargetSpec("tpu", "accelerator", model=model, ordinal=ordinal),
+            device_kind,
+            capabilities=capabilities,
+        )
+        for ordinal in range(count)
+    ]

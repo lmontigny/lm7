@@ -133,5 +133,10 @@ class CompiledModule(torch.nn.Module):
                 if variant is None:
                     variant = self._compile_variant(signature, args, kwargs)
         prepared_args, prepared_kwargs = self._prepare_inputs(args, kwargs)
-        with torch.inference_mode():
+        context = (
+            torch.no_grad()
+            if self.target is not None and self.target.vendor == "tpu"
+            else torch.inference_mode()
+        )
+        with context:
             return variant(*prepared_args, **prepared_kwargs)

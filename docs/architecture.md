@@ -18,6 +18,13 @@ Inductor in automatic planning while model and dynamic-shape coverage remain
 experimental. TensorRT engine construction happens on the first call and the
 resulting callable is process-local.
 
+The optional `openxla` adapter uses PyTorch/XLA to register the OpenXLA
+`torch.compile` backend. TPU discovery is lazy and accepts only a PJRT runtime
+whose device type is `TPU`; an installed XLA CPU runtime is not reported as TPU
+hardware. LM7 uses `torch.no_grad()` for TPU execution because PyTorch/XLA
+tracing requires tensor version counters that `torch.inference_mode()` removes.
+See [Google TPU support](google-tpu.md) for setup and current scope.
+
 ## Source artifacts
 
 `lm7.export()` captures an `nn.Module` through `torch.export` or accepts an
