@@ -34,6 +34,13 @@ class TensorRTBackend:
             version = importlib.metadata.version("torch-tensorrt")
         except importlib.metadata.PackageNotFoundError:
             version = None
+        if getattr(torch.version, "hip", None):
+            return BackendInfo(
+                self.name,
+                version,
+                False,
+                "A ROCm PyTorch build is active; TensorRT requires NVIDIA CUDA.",
+            )
         if not torch.cuda.is_available():
             return BackendInfo(
                 self.name,

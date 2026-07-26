@@ -57,6 +57,12 @@ def main() -> None:
         help="Workload to benchmark.",
     )
     parser.add_argument("--backend", nargs="+", default=["eager", "inductor"])
+    parser.add_argument(
+        "--target",
+        choices=("auto", "nvidia", "amd"),
+        default="auto",
+        help="GPU vendor to benchmark; auto uses the locally detected GPU.",
+    )
     parser.add_argument("--dtype", choices=("float32", "float16", "bfloat16"), default="float16")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--warmup", type=int, default=5)
@@ -71,7 +77,7 @@ def main() -> None:
     arguments = parser.parse_args()
 
     if not torch.cuda.is_available():
-        raise SystemExit("CUDA is unavailable in this PyTorch environment.")
+        raise SystemExit("CUDA/ROCm is unavailable in this PyTorch environment.")
     if arguments.batch_size < 1:
         parser.error("--batch-size must be at least 1")
 
@@ -87,7 +93,7 @@ def main() -> None:
             model,
             args=args,
             kwargs=kwargs,
-            target="nvidia",
+            target=arguments.target,
             backend=backend,
             warmup=arguments.warmup,
             repeats=arguments.repeats,
@@ -117,6 +123,7 @@ def main() -> None:
             "batch_size": arguments.batch_size,
             "prompt": arguments.prompt if arguments.model in HF_MODELS else None,
             "compile_mode": arguments.compile_mode,
+            "target": arguments.target,
         },
         "results": results,
     }

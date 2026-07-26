@@ -34,6 +34,25 @@ def test_probe_reports_missing_optional_dependency(monkeypatch):
     assert ".[tensorrt]" in info.reason
 
 
+def test_probe_rejects_rocm_runtime(monkeypatch):
+    monkeypatch.setattr(
+        tensorrt_backend_module.importlib.util,
+        "find_spec",
+        lambda name: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        tensorrt_backend_module.importlib.metadata,
+        "version",
+        lambda name: "test-version",
+    )
+    monkeypatch.setattr(torch.version, "hip", "7.0-test")
+
+    info = TensorRTBackend().probe()
+
+    assert not info.available
+    assert "ROCm" in info.reason
+
+
 def test_support_is_nvidia_only(monkeypatch):
     backend = TensorRTBackend()
     monkeypatch.setattr(

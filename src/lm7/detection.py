@@ -20,8 +20,10 @@ def detect_targets() -> list[DeviceInfo]:
                 architecture = None
                 capabilities: dict[str, Any] = {}
                 if is_rocm:
-                    architecture = getattr(props, "gcnArchName", None)
+                    gcn_arch_name = getattr(props, "gcnArchName", None)
+                    architecture = str(gcn_arch_name).split(":", 1)[0] if gcn_arch_name else None
                     capabilities["hip"] = torch.version.hip
+                    capabilities["gcn_arch_name"] = gcn_arch_name
                 else:
                     major, minor = torch.cuda.get_device_capability(ordinal)
                     architecture = f"sm{major}{minor}"
