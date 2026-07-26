@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/lmontigny/lm7/actions/workflows/ci.yml/badge.svg)](https://github.com/lmontigny/lm7/actions/workflows/ci.yml)
 
-LM7 is an early PyTorch-first prototype for running the same inference model on
-different local hardware through one stable API.
+LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
+Give it an `nn.Module`; LM7 detects the machine, selects a compatible backend,
+moves inputs when requested, and returns a normal callable module.
 
 ```python
 import torch
@@ -15,15 +16,13 @@ output = model(torch.randn(2, 16))
 ```
 
 > [!WARNING]
-> LM7 is an early prototype. It is inference-only, does not support every
-> PyTorch model, and does not promise a stable compiled-artifact ABI yet.
+> LM7 is an early inference-only prototype. Model coverage and compiled-artifact
+> compatibility are not yet stable.
 
-## Installation
+## Install
 
-LM7 requires Python 3.10 or newer and PyTorch 2.x. Accelerator toolchains and
-platform C++ compilers are not installed by LM7.
-
-### Linux and macOS
+LM7 currently targets Linux with Python 3.10 or newer and PyTorch 2.x. Start
+with an environment containing the PyTorch build appropriate for your hardware:
 
 ```bash
 git clone https://github.com/lmontigny/lm7.git
@@ -31,78 +30,88 @@ cd lm7
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+For development tools:
+
+```bash
 python -m pip install -e ".[dev]"
 ```
 
-For the optional NVIDIA TensorRT backend, use a separate environment because
-Torch-TensorRT releases require a matching PyTorch/CUDA release:
+LM7 does not install GPU drivers, CUDA/ROCm toolchains, or platform C++
+compilers.
+
+## Use LM7
+
+### Let LM7 choose
+
+`target="auto"` prefers a detected GPU and otherwise uses the CPU. Compilation
+is lazy: the first call selects a backend and compiles the input shape.
+
+```python
+compiled = lm7.compile(
+    model.eval(),
+    target="auto",
+    transfers="automatic",
+    fallback="warn",
+)
+result = compiled(example_input)
+
+print(compiled.target)
+print(compiled.selected_backend)
+```
+
+`fallback="warn"` falls back to eager PyTorch if compilation fails. Use
+`fallback="error"` when a compiler failure must stop execution.
+
+### Choose hardware or a backend
+
+Hardware targets and compiler backends are separate:
+
+```python
+lm7.compile(model, target="cpu")
+lm7.compile(model, target="nvidia")
+lm7.compile(model, target="nvidia:sm89")
+lm7.compile(model, target="amd:gfx942")
+
+lm7.compile(model, target="nvidia", backend="inductor")
+lm7.compile(model, target="nvidia", backend="tensorrt")
+```
+
+| Backend | Availability | Purpose |
+| --- | --- | --- |
+| `eager` | Any detected PyTorch device | Reference execution and fallback |
+| `inductor` | PyTorch with `torch.compile` | Default JIT compiler |
+| `aot_inductor` | CPU prototype | Persistent ahead-of-time `.pt2` package |
+| `tensorrt` | Optional NVIDIA prototype | Torch-TensorRT JIT engine |
+
+TensorRT must be installed in a version-matched environment and selected
+explicitly:
 
 ```bash
-python -m pip install -e ".[dev,tensorrt]"
+python -m pip install -e ".[tensorrt]"
 ```
 
 The current extra installs Torch-TensorRT 2.12.1 and its compatible PyTorch
-2.12/CUDA 13 packages. Check the installed pair before mixing this extra into
-an existing PyTorch environment.
+2.12/CUDA 13 stack.
 
-Confirm the environment before running the AOT test:
-
-```bash
-uname -a
-c++ --version
-```
-
-## Test locally
-
-### 1. Run the fast CPU checks
-
-These checks do not require a GPU or native compiler:
-
-```bash
-python -m pytest
-python -m ruff check .
-python -m ruff format --check .
-```
-
-The complete suite uses mocks for compiler-specific behavior, so it should pass
-on a normal CPU-only development machine.
-
-### 2. Test lazy compilation and fallback
-
-```bash
-python examples/basic_mlp.py
-```
-
-The example prints a `torch.Size([2, 4])` result and the planner explanation.
-LM7 prefers JIT Inductor on CPU when `torch.compile` exists. If the machine
-lacks a compatible C++ compiler, `fallback="warn"` emits a warning and executes
-with eager PyTorch instead. That warning is expected; it is not a model failure.
-
-Inspect the current machine and selection policy directly:
-
-```bash
-python -c "import lm7; print(lm7.detect_targets())"
-python -c "import lm7; print(lm7.backends())"
-python -c "import lm7; print(lm7.explain(target='auto'))"
-```
-
-### 3. Test source-artifact export
-
-Source artifacts use `torch.export` and do not require a C++ compiler:
-
-```bash
-python -m pytest tests/test_exporting.py -q
-```
-
-The public API is:
+### Inspect the decision
 
 ```python
-import torch
-import lm7
+print(lm7.detect_targets())
+print(lm7.backends())
+print(lm7.explain(model, target="auto"))
+```
 
-model = torch.nn.Linear(16, 4).eval()
-example_input = torch.randn(2, 16)
+The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
+`LM7_CACHE_DIR` provide defaults. Explicit function arguments take precedence.
 
+## Export and deploy
+
+Create a source artifact with `torch.export`:
+
+```python
 artifact = lm7.export(
     model,
     args=(example_input,),
@@ -111,257 +120,67 @@ artifact = lm7.export(
 )
 
 loaded = lm7.load_artifact("model.lm7")
-torch.testing.assert_close(loaded(example_input), model(example_input))
+output = loaded(example_input)
 ```
 
-An artifact is a directory containing `manifest.json` and
-`exported_program.pt2`. Loading validates the format version and SHA-256 payload
-checksum. LM7 never overwrites an existing output path implicitly.
+An `.lm7` artifact is a directory containing a versioned manifest, checksums,
+and a PyTorch `.pt2` program. Use `backend="aot_inductor"` to build the current
+CPU AOT prototype. Compiled artifacts remain specific to compatible PyTorch,
+runtime, and hardware versions.
 
-For bounded dynamic dimensions, attach a named shape profile. Input names match
-the model's `forward` parameters:
+Applications targeting several machines can combine artifacts:
 
 ```python
-profile = lm7.ShapeProfile({"input": {0: lm7.DynamicDimension("batch", min=1, max=32)}})
-artifact = lm7.export(
-    model,
-    args=(example_input,),
-    target="cpu",
-    output="dynamic-model.lm7",
-    shape_profile=profile,
+bundle = lm7.create_bundle(
+    ["build/cpu.lm7", "build/nvidia.lm7"],
+    output="model.bundle.lm7",
 )
 
-artifact(torch.randn(8, 16))  # accepted
+deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 ```
 
-The profile is stored in `manifest.json` and checked when the artifact is
-called. Inputs outside the declared bounds fail with a clear `ValueError`.
+## Hugging Face models
 
-### 4. Test real CPU AOTInductor compilation
-
-AOTInductor requires PyTorch's Beta package APIs and a working platform C++
-toolchain.
-
-On Linux, first verify that a compiler is visible:
+Install the optional dependencies:
 
 ```bash
-c++ --version
-python examples/aot_mlp.py
+python -m pip install -e ".[hf]"
 ```
 
-To retain the artifact and verify that another Python process can load it:
+Then try either compact, ungated test model:
 
 ```bash
-python examples/aot_mlp.py --output artifacts/model.lm7
-python examples/aot_mlp.py --load artifacts/model.lm7
-```
-
-If `c++` is unavailable, the smoke test should exit nonzero, explain that the
-compiler is unavailable, and leave no partial artifact behind.
-
-`tests/test_aot_inductor.py` verifies LM7's orchestration with mocked compiler
-APIs. `examples/aot_mlp.py` is the end-to-end test that invokes the real local
-toolchain.
-
-### 5. Inspect compiler IR and generated code
-
-The AOT example enables `debug=True`. A successful artifact contains a `debug/`
-directory:
-
-```python
-artifact = lm7.export(
-    model,
-    args=(example_input,),
-    target="cpu",
-    backend="aot_inductor",
-    output="model-debug.lm7",
-    debug=True,
-)
-
-for path in artifact.debug_files():
-    print(path)
-```
-
-LM7 requests and indexes:
-
-- Exported graph and graph signature
-- FX graphs before and after Inductor transformations
-- Inductor IR before and after fusion
-- Generated C++, CUDA, Python, or Triton source
-- PTX, assembly, CUBIN, or HSACO when the target and toolchain emit them
-
-Every indexed file has a SHA-256 checksum in `manifest.json`. CPU compilation
-normally emits C++ rather than PTX. Debug output can expose model structure and
-generated code, so treat it as sensitive development data.
-
-### 6. Test NVIDIA TorchInductor
-
-On a Linux machine with a CUDA-enabled PyTorch installation, run the real GPU
-integration test:
-
-```bash
-nvidia-smi
-python -m pytest tests/test_nvidia_integration.py -q
-python examples/cuda_mlp.py --target nvidia
-```
-
-LM7 detects the GPU architecture, moves the model and CPU inputs when
-`transfers="automatic"`, compiles through TorchInductor, and validates the
-result against eager CUDA. To retain the FX graphs, Inductor IR, and generated
-Triton or CUDA source:
-
-```bash
-TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
-  --target nvidia \
-  --debug-dir artifacts/cuda-debug
-find artifacts/cuda-debug -type f | sort
-```
-
-### 7. Test a Hugging Face language model
-
-Hugging Face integration tests are opt-in because they download model weights
-and require a CUDA GPU. Install the optional dependencies and run one of the
-compact, ungated test models:
-
-```bash
-python -m pip install -e ".[dev,hf]"
 python examples/hf_causal_lm.py \
   --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
 python examples/hf_causal_lm.py \
   --model hf://LiquidAI/LFM2.5-230M
-LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
-The example compares compiled logits with eager CUDA and performs a short,
-deterministic generation smoke test. SmolLM2 is Apache-2.0; LFM2.5 uses the LFM
-Open License 1.0. Hugging Face stores downloaded files in its normal external
-cache; LM7 does not add model weights to the repository.
+Model weights stay in the normal Hugging Face cache and are not added to this
+repository.
 
-### 8. Package per-target artifacts
-
-Compiled artifacts are target-specific. Build each artifact on compatible
-hardware, collect the artifact directories, and package them into one immutable
-bundle:
-
-```python
-bundle = lm7.create_bundle(
-    [
-        "build/cpu-x86_64.lm7",
-        "build/nvidia-sm89.lm7",
-    ],
-    output="model.bundle.lm7",
-)
-
-print(bundle.available_targets())
-```
-
-At deployment, LM7 detects the current machine and loads the best compatible
-entry:
-
-```python
-bundle = lm7.load_bundle("model.bundle.lm7")
-model = bundle.load(target="auto")
-output = model(example_input)
-```
-
-The bundle records a checksum for every nested artifact manifest and each
-artifact continues to validate its exported and compiled payloads. LM7
-currently produces packaged AOT artifacts only for CPU; NVIDIA execution uses
-lazy TorchInductor until packaged GPU AOT support is implemented.
-
-### 9. Benchmark local GPU inference
-
-The benchmark harness compares first-call cost and steady-state eager,
-TorchInductor, and optional TensorRT execution. It reports median and p95
-latency, throughput, peak allocated GPU memory, and environment metadata:
+## Examples
 
 ```bash
-python benchmarks/gpu.py \
-  --model mlp \
-  --backend eager inductor tensorrt \
-  --dtype float16 \
-  --batch-size 8 \
-  --warmup 5 \
-  --repeats 30 \
-  --output artifacts/benchmarks/mlp-fp16-b8.json
+python examples/basic_mlp.py
+python examples/aot_mlp.py
+python examples/cuda_mlp.py --target nvidia
+python benchmarks/gpu.py --model mlp --backend eager inductor
 ```
 
-With the optional Hugging Face dependencies installed, use `--model smollm2`
-or `--model lfm25`. Use `--compile-mode reduce-overhead` or
-`--compile-mode max-autotune` to evaluate Inductor tuning tradeoffs. Results are
-descriptive measurements for the current machine; LM7 does not enforce
-hardware-specific timing thresholds in portable CI.
-
-TensorRT is an optional, NVIDIA-only JIT backend. Select it explicitly:
-
-```python
-compiled = lm7.compile(
-    model,
-    target="nvidia",
-    backend="tensorrt",
-    fallback="error",
-)
-output = compiled(example_input)
-```
-
-The first call builds the TensorRT engine and can take tens of seconds. LM7
-keeps Inductor ahead of TensorRT in automatic planning until broader model and
-shape coverage is established. TensorRT engines are currently process-local;
-portable packaged engines are not implemented.
-
-## Targets and diagnostics
-
-Hardware targets and compiler backends are separate:
-
-```python
-lm7.compile(model, target="cpu")
-lm7.compile(model, target="nvidia:h100")
-lm7.compile(model, target="amd:gfx942")
-
-print(lm7.detect_targets())
-print(lm7.backends())
-print(lm7.explain(model, target="auto"))
-```
-
-Explicit function arguments override `LM7_TARGET`, `LM7_BACKEND`,
-`LM7_FALLBACK`, and `LM7_CACHE_DIR`.
-
-## Current backends
-
-| Backend | Status | Notes |
-| --- | --- | --- |
-| `eager` | Supported | Reference and fallback execution on detected PyTorch devices |
-| `inductor` | When `torch.compile` exists | JIT compilation through public `torch.compile` |
-| `aot_inductor` | CPU prototype | Ahead-of-time `.pt2` package; requires PyTorch package APIs and C++ toolchain |
-| `tensorrt` | Optional NVIDIA prototype | JIT engine through Torch-TensorRT; install `.[tensorrt]` and select explicitly |
-
-Auto planning prefers Inductor when it reports support. TensorRT currently has
-a lower planner priority and must be selected explicitly for deterministic
-testing. If compilation fails, `fallback="warn"` warns and uses eager
-execution. Set `fallback="error"` for strict behavior.
+See [development and testing](docs/development.md) for environment checks, GPU
+integration tests, compiler IR output, and benchmarks. See
+[architecture](docs/architecture.md) for the backend and artifact design.
 
 ## Current limitations
 
 - Inference only; training and backward compilation are unsupported.
 - Only local PyTorch devices are detected.
-- JIT compiled callables are cached only in memory.
-- AOTInductor is validated only for CPU.
-- TensorRT requires a version-matched NVIDIA CUDA, PyTorch, and Torch-TensorRT stack.
-- PyTorch's AOTInductor package APIs are Beta.
-- Compiled artifacts require compatible PyTorch, target architecture, and
-  platform runtime versions.
-- Cache identity hashes graph and state metadata, not full weight contents.
-- Remote hardware, vendor compiler adapters, stable dynamic-shape profiles,
-  quantization, and distributed inference are future work.
+- JIT compiled callables and TensorRT engines are process-local.
+- AOTInductor is validated only for CPU and uses Beta PyTorch APIs.
+- Quantization, distributed inference, remote hardware, and a stable compiled
+  artifact ABI are future work.
 
-See [the architecture notes](docs/architecture.md) for extension points.
+## License
 
-## Development commands
-
-```bash
-python -m pytest
-python -m ruff check .
-python -m ruff format --check .
-python examples/basic_mlp.py
-python examples/aot_mlp.py
-```
+LM7 is licensed under the [BSD 3-Clause License](LICENSE).
