@@ -12,47 +12,140 @@ model = lm7.compile(model, target="auto")
 output = model(torch.randn(2, 16))
 ```
 
-## Exported artifacts
+> [!WARNING]
+> LM7 is an early prototype. It is inference-only, does not support every
+> PyTorch model, and does not promise a stable compiled-artifact ABI yet.
 
-LM7 can capture a model with the public `torch.export` API and save a versioned
-source artifact:
+## Installation
+
+LM7 requires Python 3.10 or newer and PyTorch 2.x. Accelerator toolchains and
+platform C++ compilers are not installed by LM7.
+
+### Linux and macOS
+
+```bash
+git clone https://github.com/lmontigny/lm7.git
+cd lm7
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+### Windows PowerShell
+
+```powershell
+git clone https://github.com/lmontigny/lm7.git
+Set-Location lm7
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+If PowerShell blocks virtual-environment activation, either adjust the execution
+policy for the current process or call `.venv\Scripts\python.exe` directly.
+
+## Test locally
+
+### 1. Run the fast CPU checks
+
+These checks do not require a GPU or native compiler:
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
+
+The complete suite uses mocks for compiler-specific behavior, so it should pass
+on a normal CPU-only development machine.
+
+### 2. Test lazy compilation and fallback
+
+```bash
+python examples/basic_mlp.py
+```
+
+The example prints a `torch.Size([2, 4])` result and the planner explanation.
+LM7 prefers JIT Inductor on CPU when `torch.compile` exists. If the machine
+lacks a compatible C++ compiler, `fallback="warn"` emits a warning and executes
+with eager PyTorch instead. That warning is expected; it is not a model failure.
+
+Inspect the current machine and selection policy directly:
+
+```bash
+python -c "import lm7; print(lm7.detect_targets())"
+python -c "import lm7; print(lm7.backends())"
+python -c "import lm7; print(lm7.explain(target='auto'))"
+```
+
+### 3. Test source-artifact export
+
+Source artifacts use `torch.export` and do not require a C++ compiler:
+
+```bash
+python -m pytest tests/test_exporting.py -q
+```
+
+The public API is:
 
 ```python
+import torch
+import lm7
+
+model = torch.nn.Linear(16, 4).eval()
+example_input = torch.randn(2, 16)
+
 artifact = lm7.export(
     model,
-    args=(torch.randn(2, 16),),
+    args=(example_input,),
     target="cpu",
     output="model.lm7",
 )
 
 loaded = lm7.load_artifact("model.lm7")
-output = loaded.module()(torch.randn(2, 16))
+torch.testing.assert_close(loaded(example_input), model(example_input))
 ```
 
 An artifact is a directory containing `manifest.json` and
 `exported_program.pt2`. Loading validates the format version and SHA-256 payload
-checksum. Existing output paths are never overwritten implicitly.
+checksum. LM7 never overwrites an existing output path implicitly.
 
-To compile and package a CPU model ahead of time with AOTInductor:
+### 4. Test real CPU AOTInductor compilation
 
-```python
-artifact = lm7.export(
-    model,
-    args=(torch.randn(2, 16),),
-    target="cpu",
-    backend="aot_inductor",
-    output="model.lm7",
-)
+AOTInductor requires PyTorch's Beta package APIs and a working platform C++
+toolchain.
 
-loaded = lm7.load_artifact("model.lm7")
-output = loaded(torch.randn(2, 16))
+On Linux, first verify that a compiler is visible:
+
+```bash
+c++ --version
+python examples/aot_mlp.py
 ```
 
-This path requires PyTorch's Beta AOTInductor package APIs and a working
-platform C++ compiler. The compiled package is target- and PyTorch-version
-specific.
+On Windows, install Visual Studio or standalone Visual Studio Build Tools with
+the **Desktop development with C++** workload. Run the test from a Developer
+PowerShell or Developer Command Prompt so `cl.exe` and the Windows SDK are on
+`PATH`:
 
-Pass `debug=True` to include compiler intermediates in the artifact:
+```powershell
+cl
+python examples\aot_mlp.py
+```
+
+If `cl` is not recognized, the shell is not configured for MSVC or the C++
+workload is missing. The smoke test should exit nonzero, explain that the
+compiler is unavailable, and leave no partial artifact behind.
+
+`tests/test_aot_inductor.py` verifies LM7's orchestration with mocked compiler
+APIs. `examples/aot_mlp.py` is the end-to-end test that invokes the real local
+toolchain.
+
+### 5. Inspect compiler IR and generated code
+
+The AOT example enables `debug=True`. A successful artifact contains a `debug/`
+directory:
 
 ```python
 artifact = lm7.export(
@@ -68,21 +161,17 @@ for path in artifact.debug_files():
     print(path)
 ```
 
-LM7 always records the exported graph and asks Inductor for its FX graphs,
-pre/post-fusion IR, and generated output code. The manifest indexes every file
-that PyTorch actually emits. Final assembly, PTX, or accelerator binaries are
-target- and toolchain-dependent; they are included and classified when present,
-but are not guaranteed. Debug artifacts can reveal model structure and generated
-code and should be handled as sensitive development data.
+LM7 requests and indexes:
 
-## Installation
+- Exported graph and graph signature
+- FX graphs before and after Inductor transformations
+- Inductor IR before and after fusion
+- Generated C++, CUDA, Python, or Triton source
+- PTX, assembly, CUBIN, or HSACO when the target and toolchain emit them
 
-```bash
-python -m pip install -e ".[dev]"
-```
-
-LM7 requires Python 3.10+ and PyTorch 2.x. It does not install accelerator
-toolchains.
+Every indexed file has a SHA-256 checksum in `manifest.json`. CPU compilation
+normally emits C++ rather than PTX. Debug output can expose model structure and
+generated code, so treat it as sensitive development data.
 
 ## Targets and diagnostics
 
@@ -105,32 +194,35 @@ Explicit function arguments override `LM7_TARGET`, `LM7_BACKEND`,
 
 | Backend | Status | Notes |
 | --- | --- | --- |
-| `eager` | Supported | Reference/fallback execution on detected PyTorch devices |
-| `inductor` | Supported when `torch.compile` exists | JIT compilation through public `torch.compile` |
-| `aot_inductor` | CPU prototype when package APIs and a C++ compiler exist | Ahead-of-time `.pt2` package |
+| `eager` | Supported | Reference and fallback execution on detected PyTorch devices |
+| `inductor` | When `torch.compile` exists | JIT compilation through public `torch.compile` |
+| `aot_inductor` | CPU prototype | Ahead-of-time `.pt2` package; requires PyTorch package APIs and C++ toolchain |
 
 Auto planning prefers Inductor when it reports support. If compilation fails,
-`fallback="warn"` emits a warning and uses eager execution. Set
-`fallback="error"` for strict behavior.
+`fallback="warn"` warns and uses eager execution. Set `fallback="error"` for
+strict behavior.
 
 ## Current limitations
 
-LM7 is not production-ready and does not promise full PyTorch model coverage.
-Only local PyTorch devices are detected. Compiled callables are cached only in
-memory. Exported source artifacts and CPU AOTInductor packages are persistent.
-Cache identity deliberately hashes graph and state metadata rather than all
-weight contents. AOTInductor's Python package APIs are Beta, and compiled
-packages are not a stable cross-version ABI. Remote hardware, non-CPU AOT
-validation, vendor compiler adapters, production dynamic-shape profiles,
-quantization, training, and distributed inference are future work.
+- Inference only; training and backward compilation are unsupported.
+- Only local PyTorch devices are detected.
+- JIT compiled callables are cached only in memory.
+- AOTInductor is validated only for CPU.
+- PyTorch's AOTInductor package APIs are Beta.
+- Compiled artifacts require compatible PyTorch, target architecture, and
+  platform runtime versions.
+- Cache identity hashes graph and state metadata, not full weight contents.
+- Remote hardware, vendor compiler adapters, stable dynamic-shape profiles,
+  quantization, and distributed inference are future work.
 
 See [the architecture notes](docs/architecture.md) for extension points.
 
-## Development
+## Development commands
 
 ```bash
-pytest
-ruff check .
-ruff format --check .
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
 python examples/basic_mlp.py
+python examples/aot_mlp.py
 ```

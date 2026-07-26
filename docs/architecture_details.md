@@ -93,13 +93,13 @@ The initial system will not:
 Users should normally specify:
 
 ```python
-target="amd:mi300x"
+target = "amd:mi300x"
 ```
 
 They should not need to specify:
 
 ```python
-backend="iree"
+backend = "iree"
 ```
 
 The backend remains an expert override:
@@ -572,22 +572,18 @@ class Support:
 class Backend:
     name: str
 
-    def probe(self) -> BackendInfo:
-        ...
+    def probe(self) -> BackendInfo: ...
 
-    def supports(self, request: CompileRequest) -> Support:
-        ...
+    def supports(self, request: CompileRequest) -> Support: ...
 
     def compile(
         self,
         request: CompileRequest,
         example_args: tuple[object, ...],
         example_kwargs: dict[str, object],
-    ) -> "Artifact":
-        ...
+    ) -> "Artifact": ...
 
-    def load(self, artifact: "Artifact") -> "Runner":
-        ...
+    def load(self, artifact: "Artifact") -> "Runner": ...
 ```
 
 Compilation and execution may later be split into separate protocols when one
@@ -605,6 +601,7 @@ The following must remain valid on a minimal CPU installation:
 
 ```python
 import lm7
+
 lm7.detect_targets()
 ```
 
@@ -828,11 +825,9 @@ class Runner:
         self,
         args: tuple[object, ...],
         kwargs: dict[str, object],
-    ) -> object:
-        ...
+    ) -> object: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 ```
 
 Native runtimes may include:
