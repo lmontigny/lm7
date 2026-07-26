@@ -188,6 +188,27 @@ def test_aot_compile_failure_leaves_no_output(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_aot_compile_failure_can_preserve_debug_output(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("compiler failed")
+
+    monkeypatch.setattr(torch._inductor, "aoti_compile_and_package", fail)
+    debug_output = tmp_path / "failure-debug"
+    monkeypatch.setenv("LM7_DEBUG_FAILURE_DIR", str(debug_output))
+    with pytest.raises(CompilationError, match="compiler failed"):
+        lm7.export(
+            model(),
+            args=(torch.randn(1, 4),),
+            target="cpu",
+            backend="aot_inductor",
+            output=tmp_path / "model.lm7",
+            debug=True,
+        )
+
+    assert (debug_output / "exported_program.txt").is_file()
+    assert (debug_output / "exported_graph.py").is_file()
+
+
 def test_source_only_manifest_remains_loadable(tmp_path):
     source = model()
     example = torch.randn(2, 4)

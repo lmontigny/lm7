@@ -201,6 +201,7 @@ def export(
         )
         staging.replace(destination)
     except Exception:
+        _preserve_failure_debug(debug_dir if debug else None)
         shutil.rmtree(staging, ignore_errors=True)
         raise
     compiled_callable = None
@@ -391,6 +392,20 @@ def _extract_package_debug_files(package_path: Path, debug_dir: Path) -> None:
             package_debug_dir.mkdir(parents=True, exist_ok=True)
             safe_name = entry.filename.replace("\\", "__").replace("/", "__")
             (package_debug_dir / safe_name).write_bytes(archive.read(entry))
+
+
+def _preserve_failure_debug(debug_dir: Path | None) -> None:
+    configured = os.environ.get("LM7_DEBUG_FAILURE_DIR")
+    if debug_dir is None or not configured or not debug_dir.is_dir():
+        return
+    destination = Path(configured).expanduser().resolve()
+    if destination.exists():
+        suffix = 1
+        while destination.with_name(f"{destination.name}-{suffix}").exists():
+            suffix += 1
+        destination = destination.with_name(f"{destination.name}-{suffix}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(debug_dir, destination)
 
 
 def _debug_artifact_kind(path: Path) -> tuple[str, str]:

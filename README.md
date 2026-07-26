@@ -1,5 +1,7 @@
 # LM7
 
+[![CI](https://github.com/lmontigny/lm7/actions/workflows/ci.yml/badge.svg)](https://github.com/lmontigny/lm7/actions/workflows/ci.yml)
+
 LM7 is an early PyTorch-first prototype for running the same inference model on
 different local hardware through one stable API.
 
@@ -122,6 +124,13 @@ On Linux, first verify that a compiler is visible:
 ```bash
 c++ --version
 python examples/aot_mlp.py
+```
+
+To retain the artifact and verify that another Python process can load it:
+
+```bash
+python examples/aot_mlp.py --output artifacts/model.lm7
+python examples/aot_mlp.py --load artifacts/model.lm7
 ```
 
 On Windows, install Visual Studio or standalone Visual Studio Build Tools with
