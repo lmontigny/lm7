@@ -34,23 +34,6 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-### Windows through WSL 2
-
-LM7 does not currently target native Windows compilation. Install Ubuntu under
-WSL 2, then use the Linux workflow:
-
-```bash
-# Run these commands inside Ubuntu/WSL.
-sudo apt-get update
-sudo apt-get install --yes g++ git python3-venv
-git clone https://github.com/lmontigny/lm7.git
-cd lm7
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-```
-
 Confirm the environment before running the AOT test:
 
 ```bash
@@ -141,15 +124,6 @@ To retain the artifact and verify that another Python process can load it:
 ```bash
 python examples/aot_mlp.py --output artifacts/model.lm7
 python examples/aot_mlp.py --load artifacts/model.lm7
-```
-
-On Windows, run the same commands inside Ubuntu/WSL 2:
-
-```bash
-sudo apt-get update
-sudo apt-get install --yes g++
-c++ --version
-python examples/aot_mlp.py
 ```
 
 If `c++` is unavailable, the smoke test should exit nonzero, explain that the
