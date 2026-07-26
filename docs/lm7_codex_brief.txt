@@ -1,0 +1,1109 @@
+LM7 — CODEX DEVELOPMENT BRIEF
+=============================
+
+Repository
+----------
+
+GitHub: https://github.com/lmontigny/lm7
+
+Assume that the repository may initially be empty or contain only minimal
+scaffolding. Inspect and preserve existing files before making changes.
+
+
+1. PRODUCT VISION
+-----------------
+
+LM7 should let a PyTorch user run the same inference model on different
+hardware by changing one line:
+
+    import lm7
+
+    model = lm7.compile(model, target="auto")
+    output = model(inputs)
+
+Explicit hardware selection should also be possible:
+
+    model = lm7.compile(model, target="nvidia:h100")
+    model = lm7.compile(model, target="amd:mi300x")
+    model = lm7.compile(model, target="intel:gpu")
+    model = lm7.compile(model, target="cpu")
+
+The user selects hardware, not a compiler. LM7 selects and invokes the best
+existing compiler/runtime for that target.
+
+LM7 is NOT intended to be another ML compiler built from scratch. It is a
+PyTorch-first frontend, compiler orchestration layer, artifact cache, and
+unified runtime interface.
+
+
+2. CORE PRODUCT PROMISE
+-----------------------
+
+Primary statement:
+
+    Run the same PyTorch inference model on any supported accelerator by
+    changing one line.
+
+Desired user experience:
+
+    model = lm7.compile(model)
+
+This should:
+
+1. Detect available local hardware.
+2. Determine which installed compiler backends support that hardware.
+3. Select a backend using a documented policy.
+4. Lazily capture the model on the first invocation.
+5. Compile or retrieve a cached artifact.
+6. Move inputs and weights when automatic transfers are enabled.
+7. Execute the model.
+8. Return PyTorch-compatible outputs.
+
+The first version should prioritize correctness, clear behavior, and a clean
+extensible architecture over maximum model coverage or peak performance.
+
+
+3. IMPORTANT DESIGN PRINCIPLES
+------------------------------
+
+1. Do not write a new graph compiler.
+2. Do not introduce custom MLIR dialects or optimization passes in v1.
+3. Use torch.export.ExportedProgram as the common source-level graph contract
+   when an export is required.
+4. Do not prematurely lower every backend through StableHLO or another common
+   low-level IR. Native backends should receive the richest representation they
+   support.
+5. Keep hardware targets separate from compiler backends:
+
+       target="nvidia:h100"
+       backend="auto"
+
+   not:
+
+       target="triton"
+
+6. Backends must be plugins behind stable LM7 interfaces.
+7. Make heavy dependencies optional. Importing lm7 should not require IREE,
+   TensorRT, OpenVINO, XLA, Neuron, or even a GPU-enabled PyTorch wheel.
+8. Provide deterministic and inspectable selection. Users must be able to ask
+   why a target/backend was selected.
+9. Prefer an eager fallback during early development, with an explicit warning.
+10. Offer a strict mode for production that forbids silent fallback.
+
+
+4. HIGH-LEVEL ARCHITECTURE
+--------------------------
+
+    PyTorch nn.Module
+            |
+            v
+    lm7.compile(model, target="auto")
+            |
+            v
+    Target detection and resolution
+            |
+            v
+    Lazy model capture / torch.export
+            |
+            v
+    Backend planner and registry
+       |         |          |          |
+       v         v          v          v
+    NVIDIA     AMD       Intel/CPU    Other
+    adapters   adapters  adapters     adapters
+       |         |          |          |
+       +---------+----------+----------+
+                         |
+                         v
+                Artifact cache/package
+                         |
+                         v
+                Unified Module wrapper
+
+The architecture has five distinct layers:
+
+1. Public API
+2. Target detection
+3. Backend planning
+4. Compiler/runtime adapters
+5. Artifact cache and execution wrapper
+
+
+5. PUBLIC API
+-------------
+
+Minimum API:
+
+    lm7.compile(
+        model,
+        target="auto",
+        *,
+        backend="auto",
+        mode="lazy",
+        transfers="automatic",
+        fallback="warn",
+        cache=True,
+        options=None,
+    )
+
+Proposed semantics:
+
+target:
+    "auto"                  Best supported local target
+    "cpu"                   Local CPU
+    "nvidia"                Any local NVIDIA GPU
+    "nvidia:h100"           NVIDIA H100 class
+    "nvidia:sm90"           NVIDIA compute capability
+    "amd"                   Any local AMD GPU
+    "amd:mi300x"            AMD MI300X
+    "amd:gfx942"            AMD architecture
+    "intel:gpu"             Intel GPU
+    "apple:metal"           Apple GPU
+    "tpu"                   Google TPU, later
+    "aws:trainium"          AWS Trainium, later
+
+backend:
+    "auto"                  Planner selects backend
+    "eager"                 PyTorch eager fallback/reference
+    "inductor"              TorchInductor
+    "aot_inductor"          AOTInductor
+    "iree"                  IREE/Turbine
+    "openvino"              OpenVINO
+    "tensorrt"              Torch-TensorRT/TensorRT
+    "xla"                   PyTorch/XLA
+    "neuron"                torch-neuronx
+
+mode:
+    "lazy"                  Compile on first invocation
+    "aot"                   Require example inputs or an ExportedProgram
+    "eager"                 Do not compile
+
+transfers:
+    "automatic"             Wrapper moves inputs/weights as needed
+    "explicit"              Inputs must already be on the target device
+
+fallback:
+    "warn"                  Fall back and emit a clear warning
+    "error"                 Fail if selected compilation is unavailable
+    "silent"                Allowed only if deliberately implemented/documented
+
+Useful secondary APIs:
+
+    lm7.detect_targets()
+    lm7.explain(model=None, target="auto")
+    lm7.backends()
+    lm7.clear_cache()
+    lm7.version()
+
+Potential CLI:
+
+    lm7 doctor
+    lm7 targets
+    lm7 backends
+    lm7 cache list
+    lm7 cache clear
+
+Environment variables:
+
+    LM7_TARGET=amd:mi300x
+    LM7_BACKEND=auto
+    LM7_CACHE_DIR=/path/to/cache
+    LM7_FALLBACK=warn
+    LM7_LOG_LEVEL=INFO
+
+Explicit function arguments must override environment variables.
+
+
+6. TARGET AND BACKEND ARE DIFFERENT CONCEPTS
+--------------------------------------------
+
+Target identifies where execution happens:
+
+    TargetSpec(
+        vendor="nvidia",
+        kind="gpu",
+        architecture="sm90",
+        model="h100",
+        ordinal=0,
+    )
+
+Backend identifies which software stack compiles and executes:
+
+    BackendInfo(
+        name="aot_inductor",
+        version="...",
+        supported_targets=[...],
+        priority=...,
+    )
+
+The user normally provides only a target. The planner resolves a backend.
+
+
+7. INITIAL BACKEND POLICY
+-------------------------
+
+Long-term candidate matrix:
+
+NVIDIA GPU:
+    Primary candidates:
+        - Torch-TensorRT with AOTInductor fallback
+        - AOTInductor/TorchInductor
+    Kernel paths selected internally by those projects may include:
+        - Triton
+        - CUTLASS
+        - CuTeDSL
+        - cuBLAS/cuDNN
+    Additional candidate:
+        - IREE CUDA
+
+AMD GPU:
+    Primary candidate:
+        - TorchInductor/AOTInductor with Triton and ROCm libraries
+    Additional candidates:
+        - IREE ROCm
+        - MIGraphX where useful
+
+Intel GPU:
+    Primary candidates:
+        - OpenVINO
+        - TorchInductor XPU
+    Additional candidate:
+        - IREE Vulkan
+
+x86 CPU:
+    Primary candidates:
+        - AOTInductor CPU
+        - OpenVINO/oneDNN
+    Additional candidate:
+        - IREE LLVM CPU
+
+Apple/mobile:
+    Later:
+        - Core ML or ExecuTorch delegates
+        - IREE Metal/Vulkan
+
+Google TPU:
+    Later:
+        - PyTorch/XLA -> XLA -> PJRT
+
+AWS Trainium/Inferentia:
+    Later:
+        - torch-neuronx -> Neuron compiler/runtime
+
+New accelerators:
+    Later:
+        - StableHLO/PJRT vendor plugin
+        - IREE HAL/target plugin
+
+Do not implement all these adapters in the first milestone. The architecture
+must make them possible without changing the public API.
+
+
+8. FIRST IMPLEMENTATION MILESTONE
+---------------------------------
+
+Implement a small but complete vertical slice.
+
+Required:
+
+1. Python package named "lm7".
+2. Public lm7.compile() function.
+3. TargetSpec model and parser.
+4. Local hardware detector.
+5. Backend protocol/abstract base class.
+6. Backend registry.
+7. Eager backend.
+8. Inductor backend if the installed PyTorch version supports torch.compile.
+9. Lazy CompiledModule wrapper.
+10. In-memory and filesystem cache scaffolding.
+11. Structured diagnostics and explainability.
+12. Tests that do not require GPU hardware.
+13. Simple CPU example.
+14. README explaining current limitations honestly.
+
+First milestone user experience:
+
+    import torch
+    import lm7
+
+    model = torch.nn.Sequential(
+        torch.nn.Linear(16, 32),
+        torch.nn.ReLU(),
+        torch.nn.Linear(32, 4),
+    ).eval()
+
+    model = lm7.compile(model, target="auto")
+    output = model(torch.randn(2, 16))
+
+On a CPU-only development machine, "auto" should select CPU and preferably the
+Inductor backend if available. If compilation is not available, it should use
+the eager backend and emit an actionable warning.
+
+
+9. PROPOSED REPOSITORY STRUCTURE
+--------------------------------
+
+    lm7/
+    |-- pyproject.toml
+    |-- README.md
+    |-- LICENSE
+    |-- src/
+    |   `-- lm7/
+    |       |-- __init__.py
+    |       |-- api.py
+    |       |-- config.py
+    |       |-- errors.py
+    |       |-- logging.py
+    |       |-- module.py
+    |       |-- targets.py
+    |       |-- detection.py
+    |       |-- planner.py
+    |       |-- cache.py
+    |       `-- backends/
+    |           |-- __init__.py
+    |           |-- base.py
+    |           |-- registry.py
+    |           |-- eager.py
+    |           `-- inductor.py
+    |-- tests/
+    |   |-- test_api.py
+    |   |-- test_targets.py
+    |   |-- test_detection.py
+    |   |-- test_registry.py
+    |   |-- test_planner.py
+    |   |-- test_eager_backend.py
+    |   `-- test_cache.py
+    |-- examples/
+    |   `-- basic_mlp.py
+    `-- docs/
+        `-- architecture.md
+
+Do not create empty placeholder modules for every future backend. Document the
+extension points and add adapters only when they have real behavior and tests.
+
+
+10. CORE TYPES
+--------------
+
+Target specification:
+
+    @dataclass(frozen=True)
+    class TargetSpec:
+        vendor: str
+        kind: str
+        architecture: str | None = None
+        model: str | None = None
+        ordinal: int | None = None
+        remote: bool = False
+
+Detected hardware:
+
+    @dataclass(frozen=True)
+    class DeviceInfo:
+        target: TargetSpec
+        name: str
+        total_memory_bytes: int | None
+        capabilities: Mapping[str, Any]
+
+Compilation request:
+
+    @dataclass(frozen=True)
+    class CompileRequest:
+        model: torch.nn.Module
+        target: TargetSpec
+        mode: str
+        transfers: str
+        fallback: str
+        options: Mapping[str, Any]
+
+Backend support result:
+
+    @dataclass(frozen=True)
+    class Support:
+        supported: bool
+        reason: str
+        priority: int = 0
+
+Compiled result:
+
+    @dataclass
+    class Artifact:
+        backend: str
+        target: TargetSpec
+        callable: Callable | None
+        path: Path | None
+        metadata: Mapping[str, Any]
+
+These exact names may change if a cleaner implementation emerges, but preserve
+the conceptual separation.
+
+
+11. BACKEND CONTRACT
+--------------------
+
+The first contract should be intentionally small:
+
+    class Backend(Protocol):
+        name: str
+
+        def probe(self) -> BackendInfo:
+            ...
+
+        def supports(self, request: CompileRequest) -> Support:
+            ...
+
+        def compile(
+            self,
+            request: CompileRequest,
+            example_args: tuple[Any, ...],
+            example_kwargs: Mapping[str, Any],
+        ) -> Artifact:
+            ...
+
+        def load(self, artifact: Artifact) -> Callable:
+            ...
+
+The registry:
+
+    registry.register(EagerBackend())
+    registry.register(InductorBackend())
+
+Third-party packages should eventually be able to register through Python entry
+points, for example:
+
+    [project.entry-points."lm7.backends"]
+    my_backend = "my_package.backend:create_backend"
+
+Do not require entry-point support in the first commit unless it remains simple.
+
+
+12. LAZY MODULE BEHAVIOR
+------------------------
+
+lm7.compile() should immediately return a wrapper around the original model.
+
+Before first invocation:
+
+    wrapper.state == "uncompiled"
+
+On first invocation:
+
+1. Derive an input signature.
+2. Resolve the target if it was deferred.
+3. Ask the planner for a backend.
+4. Compile.
+5. Cache the resulting callable/artifact.
+6. Execute.
+
+Later calls:
+
+1. Derive input signature.
+2. Reuse a compatible compiled variant.
+3. If incompatible, compile a new variant or fail according to configuration.
+
+Thread safety:
+
+- Compilation for the same signature must happen once.
+- Other callers should wait for the result.
+- Failed compilation should not leave the wrapper permanently corrupt.
+- Keep the first implementation simple; a lock per wrapper is acceptable.
+
+Preserve important nn.Module behavior:
+
+- eval()/train() should delegate or be explicitly constrained to inference.
+- state_dict() should remain accessible.
+- parameters() should remain accessible.
+- attributes not owned by the wrapper should delegate to the wrapped module
+  where safe.
+
+The project is inference-first. If model.training is True, warn or reject in
+strict mode.
+
+
+13. DEVICE DETECTION
+--------------------
+
+Detection must be best-effort and never crash merely because an optional
+backend is not installed.
+
+Possible checks:
+
+1. CPU is always present.
+2. NVIDIA:
+       torch.cuda.is_available()
+       torch.cuda.get_device_properties()
+3. AMD:
+       torch.cuda.is_available() may also be true on ROCm builds.
+       Inspect torch.version.hip and device properties.
+4. Intel XPU:
+       Check torch.xpu only if the attribute exists.
+5. Apple MPS:
+       Check torch.backends.mps only if present.
+6. TPU/XLA:
+       Probe only when the optional integration is installed.
+
+Never import heavyweight optional packages at module import time.
+
+Auto-selection v1:
+
+1. Explicit target, if provided.
+2. Environment target, if provided.
+3. Supported local GPU with the highest planner priority.
+4. CPU.
+
+Do not claim cost-based or global cloud selection in v1.
+
+Return rich diagnostics:
+
+    lm7.detect_targets()
+
+could produce:
+
+    [
+        DeviceInfo(target=TargetSpec("nvidia", "gpu", "sm90"), ...),
+        DeviceInfo(target=TargetSpec("cpu", "cpu", "x86_64"), ...),
+    ]
+
+
+14. BACKEND PLANNER
+-------------------
+
+Planner inputs:
+
+- Target
+- Installed backend capabilities
+- User backend override
+- Requested mode
+- Model/export compatibility when known
+- Precision/quantization options later
+
+Planner output:
+
+- Selected backend
+- Ranked alternatives
+- Human-readable reasons
+
+Example explanation:
+
+    Selected aot_inductor for nvidia:sm90
+
+    Reasons:
+    - Target is an NVIDIA CUDA GPU.
+    - AOTInductor is installed and supports this mode.
+    - TensorRT adapter is not installed.
+
+    Alternatives:
+    - eager: supported, lower priority
+    - iree: unavailable because iree-turbine is not installed
+
+Selection must be deterministic.
+
+
+15. EAGER BACKEND
+-----------------
+
+The eager backend is required as:
+
+- A correctness reference
+- A fallback
+- A way to test the full architecture without optional compilers
+
+It should:
+
+- Report support for local PyTorch devices.
+- Move the model to the selected device when transfers are automatic.
+- Move tensor inputs recursively.
+- Run under torch.inference_mode() unless deliberately configured otherwise.
+- Return normal torch.Tensor/nested outputs.
+- Emit a warning when chosen as fallback after compilation failed.
+
+Avoid silently catching arbitrary model execution errors. Only compilation or
+backend-availability failures should trigger configured fallback.
+
+
+16. INDUCTOR BACKEND
+--------------------
+
+Initial behavior may use:
+
+    torch.compile(model, backend="inductor")
+
+The adapter must:
+
+- Check that torch.compile exists.
+- Avoid compiling during backend probing.
+- Preserve options such as dynamic and mode if provided.
+- Return useful exceptions with backend context.
+- Avoid depending directly on unstable torch._inductor APIs in the first
+  milestone unless required.
+
+Later, add an AOTInductor adapter based on torch.export and
+aoti_compile_and_package. Keep JIT Inductor and AOTInductor as distinct backend
+names because their artifact/runtime behavior differs.
+
+
+17. INPUT AND OUTPUT TRANSFERS
+------------------------------
+
+For the one-line experience:
+
+    transfers="automatic"
+
+The wrapper should recursively map tensors through:
+
+- positional arguments
+- keyword arguments
+- tuple/list
+- dict
+- simple dataclass/namedtuple structures if easy
+
+Avoid modifying user-owned input structures in place.
+
+Explicit transfer mode:
+
+    transfers="explicit"
+
+must validate that tensor inputs are already on the expected device and produce
+a clear error otherwise.
+
+Returning outputs:
+
+- In the initial local PyTorch implementation, return tensors on the selected
+  device.
+- Do not automatically move potentially large outputs back to CPU.
+- Later runtimes may use DLPack for zero-copy interchange.
+
+
+18. CACHE DESIGN
+----------------
+
+The first milestone can cache compiled callables in memory.
+
+Add filesystem cache scaffolding without pretending arbitrary compiler objects
+are serializable.
+
+Cache key inputs should eventually include:
+
+- Model structure hash
+- Weights hash or stable identity
+- Input shapes, dtypes, strides, and relevant values
+- Dynamic-shape profile
+- Target specification
+- Backend name and version
+- PyTorch version
+- Compiler configuration
+- Precision/quantization configuration
+- LM7 version
+
+Do not hash all large weights on every invocation. The first implementation may
+use an in-process model identity and clearly document that persistent artifact
+hashing is future work.
+
+Default cache location:
+
+    ~/.cache/lm7
+
+Allow override with LM7_CACHE_DIR.
+
+
+19. ERROR MODEL
+---------------
+
+Define specific exceptions:
+
+    LM7Error
+    TargetNotFoundError
+    BackendUnavailableError
+    UnsupportedModelError
+    CompilationError
+    ArtifactLoadError
+    InputDeviceError
+
+Messages should always include:
+
+- Requested target
+- Selected backend, if any
+- Failing stage
+- Original exception summary
+- Suggested next action
+
+Do not leak giant compiler traces by default. Preserve them under debug logging
+or as chained exceptions.
+
+
+20. LOGGING AND OBSERVABILITY
+-----------------------------
+
+Use standard Python logging.
+
+Useful INFO events:
+
+- Detected target
+- Selected backend
+- Cache hit/miss
+- Compilation start/finish
+- Fallback
+
+Useful DEBUG events:
+
+- Backend support reports
+- Parsed target details
+- Input signature
+- Full chained compiler error
+
+No output should be printed unconditionally to stdout from the library.
+
+
+21. TESTING STRATEGY
+--------------------
+
+Tests must run on a CPU-only CI machine.
+
+Unit tests:
+
+1. Target parsing:
+       auto
+       cpu
+       nvidia
+       nvidia:h100
+       nvidia:sm90
+       amd:gfx942
+       invalid forms
+
+2. Detector:
+       CPU-only
+       mocked CUDA NVIDIA
+       mocked ROCm AMD
+       mocked XPU
+       missing optional attributes
+
+3. Registry:
+       registration
+       duplicate name
+       lazy optional imports
+
+4. Planner:
+       explicit backend
+       auto selection
+       unavailable backend
+       deterministic priorities
+       eager fallback
+       strict error
+
+5. Wrapper:
+       lazy compilation occurs once
+       different signatures create variants
+       model exceptions are not swallowed
+       nested tensor inputs
+       inference output matches eager reference
+
+6. Cache:
+       stable keys for equivalent signatures
+       different dtype/shape/target changes key
+
+Integration test:
+
+- Small MLP
+- CPU
+- Eager backend
+- Inductor backend when torch.compile is present
+- Compare output to eager with torch.testing.assert_close
+
+Mark compiler- or GPU-specific tests so normal CI skips them cleanly.
+
+
+22. PACKAGING AND TOOLING
+-------------------------
+
+Use pyproject.toml.
+
+Recommended:
+
+- Python >= 3.10
+- hatchling or setuptools
+- pytest
+- ruff
+- mypy or pyright only if configured pragmatically
+
+PyTorch should be declared carefully:
+
+- It may be a normal dependency for the initial project.
+- Do not pin it to an exact patch release.
+- Keep accelerator-specific libraries optional.
+
+Suggested optional dependency groups later:
+
+    lm7[iree]
+    lm7[openvino]
+    lm7[tensorrt]
+    lm7[xla]
+    lm7[neuron]
+    lm7[dev]
+
+Suggested commands:
+
+    python -m pip install -e ".[dev]"
+    pytest
+    ruff check .
+    ruff format --check .
+
+
+23. README CONTENT
+------------------
+
+README should include:
+
+1. One-sentence product description.
+2. Current status: early prototype.
+3. Installation.
+4. Five-line quickstart.
+5. Explicit target examples.
+6. Supported backend table.
+7. Explanation of fallback behavior.
+8. Current limitations.
+9. Architecture summary.
+10. Development commands.
+
+Do not claim:
+
+- Peak performance on every accelerator
+- Full PyTorch compatibility
+- Production readiness
+- Remote hardware selection
+- Quantized LLM support before it exists
+
+
+24. FIRST COMMIT ACCEPTANCE CRITERIA
+------------------------------------
+
+The first implementation is complete when:
+
+1. The package installs in editable mode.
+2. This works on CPU:
+
+       model = lm7.compile(model, target="auto")
+       output = model(input)
+
+3. "auto" selects CPU on a CPU-only machine.
+4. The eager backend produces the same result as the original model.
+5. The Inductor backend is used when explicitly requested and supported.
+6. Missing optional backends do not break import.
+7. fallback="warn" and fallback="error" behave differently and are tested.
+8. lm7.detect_targets() returns structured information.
+9. lm7.explain(target="auto") explains selection.
+10. Tests pass without GPU hardware.
+11. README does not overpromise.
+
+
+25. SECOND MILESTONE
+--------------------
+
+Add a real AOT workflow:
+
+1. Accept an nn.Module plus example inputs or an ExportedProgram.
+2. Use torch.export.
+3. Add an AOTInductor backend.
+4. Produce/load a .pt2 artifact.
+5. Add persistent artifact metadata.
+6. Add shape-profile configuration.
+7. Validate compiled output against eager PyTorch.
+
+Possible API:
+
+    artifact = lm7.export(
+        model,
+        args=(example_input,),
+        target="nvidia:h100",
+        output="model.lm7",
+    )
+
+The main one-line lazy API should internally reuse the same backend and artifact
+abstractions.
+
+
+26. THIRD MILESTONE
+-------------------
+
+Add the first non-Inductor compiler adapter.
+
+Choose based on available test hardware:
+
+- IREE/Turbine for CPU plus CUDA or ROCm
+- OpenVINO for Intel CPU/GPU
+- Torch-TensorRT for NVIDIA
+
+Requirements:
+
+- Optional dependency
+- Backend probe
+- Support report
+- Compilation
+- Execution
+- Numerical validation
+- Target-specific tests
+- Planner comparison with existing backend
+
+
+27. LLM-SPECIFIC ROADMAP
+------------------------
+
+Do not start here, but design the package so these become possible:
+
+- Hugging Face model adapters
+- Tokenizer packaging
+- prefill()
+- decode()
+- KV-cache allocation and mutation
+- Continuous batching
+- Quantization profiles
+- Tensor parallelism
+- Backend-specific attention kernels
+- Multi-target model bundles
+
+Potential future API:
+
+    engine = lm7.llm(
+        "Qwen/Qwen3-8B",
+        target="auto",
+        dtype="bfloat16",
+        quantization="auto",
+    )
+
+    output = engine.generate("Hello")
+
+
+28. MULTI-TARGET ARTIFACT ROADMAP
+---------------------------------
+
+Future bundle:
+
+    model.lm7/
+    |-- manifest.json
+    |-- exported_program.pt2
+    |-- weights.safetensors
+    |-- tokenizer.json
+    `-- targets/
+        |-- nvidia-sm90/
+        |   `-- model.pt2
+        |-- amd-gfx942/
+        |   `-- model.pt2-or-vmfb
+        |-- intel-xpu/
+        |   `-- model.blob
+        `-- cpu-x86_64/
+            `-- model.pt2
+
+Manifest should record:
+
+- LM7 format version
+- Model identity
+- Entry points
+- Target architecture
+- Backend and compiler versions
+- Runtime requirements
+- Supported shape profiles
+- Dtypes and quantization
+- Numerical tolerances
+- Benchmark metadata
+
+Do not design the full stable binary format in the first milestone.
+
+
+29. NON-GOALS FOR V1
+--------------------
+
+- Remote cloud provisioning
+- Distributed inference
+- Training or backward compilation
+- A new tensor library
+- A new programming language
+- New fusion/tiling/vectorization passes
+- Custom CUDA/Triton kernels
+- Universal quantization
+- Full Hugging Face coverage
+- Stable cross-version binary ABI
+- Replacing every vendor runtime
+
+
+30. TECHNICAL CONTEXT AND RATIONALE
+-----------------------------------
+
+ZML uses approximately:
+
+    Zig model definitions
+        -> symbolic ZML tensors
+        -> MLIR/MHLO
+        -> OpenXLA
+        -> PJRT
+        -> hardware
+
+LM7 deliberately differs:
+
+    PyTorch ExportedProgram
+        -> target planner
+        -> best existing compiler for each target
+        -> unified LM7 module/artifact interface
+
+For NVIDIA, a native path may use AOTInductor or Torch-TensorRT. Inductor may
+select Triton, CUTLASS, CuTeDSL, cuBLAS, or other implementations internally.
+
+For AMD, Inductor/Triton and IREE ROCm should eventually be compared rather than
+assuming one is universally better.
+
+For Intel, OpenVINO and Inductor XPU are natural candidates.
+
+IREE remains valuable for portable AOT compilation, compact runtimes, Vulkan,
+Metal, CPU, CUDA, and ROCm, but LM7 should not force all targets through IREE.
+
+Triton is a kernel compiler, not a complete PyTorch graph compiler. LM7 should
+reuse TorchInductor rather than attempting to lower PyTorch graphs directly to
+Triton.
+
+
+31. USEFUL REFERENCES
+---------------------
+
+PyTorch export:
+https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/export.html
+
+PyTorch custom compiler backends:
+https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/torch.compiler_custom_backends.html
+
+AOTInductor:
+https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/torch.compiler_aot_inductor.html
+
+IREE PyTorch frontend:
+https://iree.dev/guides/ml-frameworks/pytorch/
+
+IREE deployment targets:
+https://iree.dev/guides/deployment-configurations/
+
+OpenXLA/PJRT terminology:
+https://openxla.org/xla/terminology
+
+XLA GPU architecture and Triton emitters:
+https://openxla.org/xla/gpu_architecture
+
+Torch-TensorRT with AOTInductor deployment:
+https://docs.pytorch.org/TensorRT/user_guide/runtime_performance/aot_inductor.html
+
+
+32. INSTRUCTIONS TO CODEX
+-------------------------
+
+1. Inspect the repository before editing.
+2. Preserve user changes and existing project conventions.
+3. If the repository is empty, implement the first milestone described above.
+4. Keep the change focused. Do not implement speculative backend placeholders.
+5. Use a src/ package layout unless the repository already chose another
+   conventional structure.
+6. Add tests with each behavior.
+7. Run all available tests and static checks.
+8. Report what is genuinely working versus scaffolded.
+9. Do not claim a backend is supported unless there is executable code and a
+   test or documented manual validation.
+10. Do not push, publish, release, or open a pull request unless explicitly
+    requested.
+
+The immediate implementation target is a clean CPU-capable vertical slice with
+auto target detection, eager execution, optional Inductor compilation, backend
+selection diagnostics, caching scaffolding, tests, and documentation.
