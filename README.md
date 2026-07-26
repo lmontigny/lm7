@@ -258,6 +258,28 @@ artifact continues to validate its exported and compiled payloads. LM7
 currently produces packaged AOT artifacts only for CPU; NVIDIA execution uses
 lazy TorchInductor until packaged GPU AOT support is implemented.
 
+### 9. Benchmark local GPU inference
+
+The benchmark harness compares first-call cost and steady-state eager versus
+TorchInductor execution. It reports median and p95 latency, throughput, peak
+allocated GPU memory, and environment metadata:
+
+```bash
+python benchmarks/gpu.py \
+  --model mlp \
+  --dtype float16 \
+  --batch-size 8 \
+  --warmup 5 \
+  --repeats 30 \
+  --output artifacts/benchmarks/mlp-fp16-b8.json
+```
+
+With the optional Hugging Face dependencies installed, use `--model smollm2`
+or `--model lfm25`. Use `--compile-mode reduce-overhead` or
+`--compile-mode max-autotune` to evaluate Inductor tuning tradeoffs. Results are
+descriptive measurements for the current machine; LM7 does not enforce
+hardware-specific timing thresholds in portable CI.
+
 ## Targets and diagnostics
 
 Hardware targets and compiler backends are separate:
