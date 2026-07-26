@@ -8,6 +8,9 @@ icpu support
 add quantization
 use nvidia rtx 4070 
 jit compile
+support for scale-up distribution
+p/d dissag support
+4D parallel ep,tp,dp,pp support
 add tests with liquidAi SLM
 add MLperf ai inference test
 validate on cpu first
