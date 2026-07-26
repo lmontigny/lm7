@@ -5,6 +5,7 @@ simlpify the readme
 how to use for ppl/customer? 
 cross-compilation
 icpu support
+add support at model level HF not in the source code
 add quantization
 use nvidia rtx 4070 
 jit compile
