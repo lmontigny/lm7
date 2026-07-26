@@ -152,26 +152,64 @@ model = lm7.compile(model, fallback="error")
 
 ## 5. System context
 
+The following is the primary end-to-end LM7 design. It corresponds to the
+single-line user experience and shows the complete path from the original
+PyTorch module to the callable wrapper returned to the application.
+
 ```mermaid
 flowchart TD
-    A["PyTorch nn.Module"] --> B["LM7 public API"]
-    B --> C["Target resolver"]
-    C --> D["Capture and profile"]
-    D --> E["Backend planner"]
+    A["PyTorch nn.Module"]
+    B["lm7.compile(target='auto')"]
+    C["Hardware detection and target resolution"]
+    D["torch.export capture on first invocation"]
+    E["Compiler planner"]
 
-    E --> F["NVIDIA adapters"]
-    E --> G["AMD adapters"]
-    E --> H["Intel and CPU adapters"]
-    E --> I["Portable and cloud adapters"]
+    A --> B
+    B --> C
+    C --> D
+    D --> E
 
-    F --> J["Artifact cache"]
+    E --> F["NVIDIA: Torch-TensorRT and AOTInductor"]
+    E --> G["AMD: Inductor/Triton and IREE"]
+    E --> H["Intel/CPU: OpenVINO and Inductor"]
+    E --> I["Other: IREE, XLA/PJRT, and Neuron"]
+
+    F --> J["Compiled-artifact cache"]
     G --> J
     H --> J
     I --> J
 
-    J --> K["LM7 module wrapper"]
-    K --> L["PyTorch-compatible outputs"]
+    J --> K["Uniform PyTorch Module wrapper"]
+
+    classDef user fill:#f8fafc,stroke:#475569,color:#0f172a
+    classDef core fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
+    classDef backend fill:#fef3c7,stroke:#b45309,color:#78350f
+    classDef runtime fill:#dcfce7,stroke:#15803d,color:#14532d
+
+    class A,B user
+    class C,D,E core
+    class F,G,H,I backend
+    class J,K runtime
 ```
+
+The graph represents a lazy flow:
+
+1. `lm7.compile()` wraps the module but does not require representative inputs.
+2. Local hardware can be detected immediately, although final resolution may
+   remain deferred until the first invocation.
+3. The first input set provides the concrete argument tree, tensor metadata,
+   and shape information needed for capture and compilation.
+4. `torch.export` is created only when the selected backend requires it. The
+   diagram shows the preferred AOT path; a JIT backend may consume the original
+   module directly.
+5. The compiler planner selects a native backend for the resolved hardware.
+6. The compiled result is cached by model, target, backend, and input profile.
+7. The returned wrapper preserves the normal PyTorch module calling interface.
+
+The compiler branches are implementation adapters, not user-visible execution
+APIs. A user choosing `target="nvidia:h100"` should not need to know whether
+the selected artifact was produced by TensorRT, AOTInductor, Triton, CUTLASS,
+or another implementation underneath those compilers.
 
 The architecture is divided into:
 
