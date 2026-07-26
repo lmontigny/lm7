@@ -28,6 +28,7 @@ def test_aot_export_and_load_with_package_api(tmp_path, monkeypatch):
     expected = source(example)
 
     def fake_compile(exported_program, *, package_path, inductor_configs):
+        assert isinstance(package_path, str)
         Path(package_path).write_bytes(b"fake compiled package")
         debug_dir = Path(inductor_configs["trace.debug_dir"])
         trace_dir = debug_dir / "model__0"
@@ -39,6 +40,7 @@ def test_aot_export_and_load_with_package_api(tmp_path, monkeypatch):
         return str(package_path)
 
     def fake_load(package_path):
+        assert isinstance(package_path, str)
         assert Path(package_path).read_bytes() == b"fake compiled package"
         return source
 

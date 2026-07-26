@@ -34,19 +34,29 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-### Windows PowerShell
+### Windows through WSL 2
 
-```powershell
+LM7 does not currently target native Windows compilation. Install Ubuntu under
+WSL 2, then use the Linux workflow:
+
+```bash
+# Run these commands inside Ubuntu/WSL.
+sudo apt-get update
+sudo apt-get install --yes g++ git python3-venv
 git clone https://github.com/lmontigny/lm7.git
-Set-Location lm7
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+cd lm7
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-If PowerShell blocks virtual-environment activation, either adjust the execution
-policy for the current process or call `.venv\Scripts\python.exe` directly.
+Confirm the environment before running the AOT test:
+
+```bash
+uname -a
+c++ --version
+```
 
 ## Test locally
 
@@ -133,18 +143,16 @@ python examples/aot_mlp.py --output artifacts/model.lm7
 python examples/aot_mlp.py --load artifacts/model.lm7
 ```
 
-On Windows, install Visual Studio or standalone Visual Studio Build Tools with
-the **Desktop development with C++** workload. Run the test from a Developer
-PowerShell or Developer Command Prompt so `cl.exe` and the Windows SDK are on
-`PATH`:
+On Windows, run the same commands inside Ubuntu/WSL 2:
 
-```powershell
-cl
-python examples\aot_mlp.py
+```bash
+sudo apt-get update
+sudo apt-get install --yes g++
+c++ --version
+python examples/aot_mlp.py
 ```
 
-If `cl` is not recognized, the shell is not configured for MSVC or the C++
-workload is missing. The smoke test should exit nonzero, explain that the
+If `c++` is unavailable, the smoke test should exit nonzero, explain that the
 compiler is unavailable, and leave no partial artifact behind.
 
 `tests/test_aot_inductor.py` verifies LM7's orchestration with mocked compiler

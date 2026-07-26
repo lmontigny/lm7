@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
 import sys
 import tempfile
 from contextlib import nullcontext
@@ -48,12 +46,7 @@ def _compile(output: Path) -> None:
         )
     except CompilationError as error:
         print(f"AOTInductor compilation failed: {error}", file=sys.stderr)
-        if os.name == "nt" and shutil.which("cl") is None:
-            print(
-                "Open a Visual Studio Developer PowerShell with the "
-                "'Desktop development with C++' workload installed.",
-                file=sys.stderr,
-            )
+        print("Run this test in Linux or WSL with a working g++ toolchain.", file=sys.stderr)
         raise SystemExit(2) from None
     loaded = lm7.load_artifact(output)
     actual = loaded(example_input)

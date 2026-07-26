@@ -99,7 +99,7 @@ class AOTInductorBackend:
         try:
             result = torch._inductor.aoti_compile_and_package(
                 exported_program,
-                package_path=package_path,
+                package_path=str(package_path),
                 inductor_configs=configs or None,
             )
         except Exception as exc:
@@ -114,7 +114,7 @@ class AOTInductorBackend:
         if not probe.available:
             raise ArtifactLoadError(probe.reason)
         try:
-            return torch._inductor.aoti_load_package(package_path)
+            return torch._inductor.aoti_load_package(str(package_path))
         except Exception as exc:
             raise ArtifactLoadError(
                 f"AOTInductor package load failed for {package_path}: {exc}. "
