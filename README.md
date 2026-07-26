@@ -226,6 +226,38 @@ deterministic generation smoke test. SmolLM2 is Apache-2.0; LFM2.5 uses the LFM
 Open License 1.0. Hugging Face stores downloaded files in its normal external
 cache; LM7 does not add model weights to the repository.
 
+### 8. Package per-target artifacts
+
+Compiled artifacts are target-specific. Build each artifact on compatible
+hardware, collect the artifact directories, and package them into one immutable
+bundle:
+
+```python
+bundle = lm7.create_bundle(
+    [
+        "build/cpu-x86_64.lm7",
+        "build/nvidia-sm89.lm7",
+    ],
+    output="model.bundle.lm7",
+)
+
+print(bundle.available_targets())
+```
+
+At deployment, LM7 detects the current machine and loads the best compatible
+entry:
+
+```python
+bundle = lm7.load_bundle("model.bundle.lm7")
+model = bundle.load(target="auto")
+output = model(example_input)
+```
+
+The bundle records a checksum for every nested artifact manifest and each
+artifact continues to validate its exported and compiled payloads. LM7
+currently produces packaged AOT artifacts only for CPU; NVIDIA execution uses
+lazy TorchInductor until packaged GPU AOT support is implemented.
+
 ## Targets and diagnostics
 
 Hardware targets and compiler backends are separate:
