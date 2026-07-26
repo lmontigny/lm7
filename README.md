@@ -206,6 +206,23 @@ TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
 find artifacts/cuda-debug -type f | sort
 ```
 
+### 7. Test a Hugging Face language model
+
+Hugging Face integration tests are opt-in because they download model weights
+and require a CUDA GPU. Install the optional dependencies and run the compact,
+ungated SmolLM2 model:
+
+```bash
+python -m pip install -e ".[dev,hf]"
+python examples/hf_smollm2.py \
+  --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
+LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
+```
+
+The example compares compiled logits with eager CUDA and performs a short,
+deterministic generation smoke test. Hugging Face stores downloaded files in
+its normal external cache; LM7 does not add model weights to the repository.
+
 ## Targets and diagnostics
 
 Hardware targets and compiler backends are separate:
