@@ -8,8 +8,15 @@ input signature, and executes it through a common artifact interface.
 Backends implement the small protocol in `lm7.backends.base`. A backend probes
 availability without compiling, reports target support and priority, compiles a
 request, and loads its artifact. LM7 0.1 includes executable eager and JIT
-TorchInductor adapters. Persistent compiler artifact serialization and third-party
-entry-point discovery are intentionally deferred.
+TorchInductor adapters plus an optional NVIDIA Torch-TensorRT adapter.
+Persistent compiler artifact serialization and third-party entry-point
+discovery are intentionally deferred.
+
+The TensorRT adapter lazily imports Torch-TensorRT, which registers the public
+`tensorrt` `torch.compile` backend. It is deliberately lower priority than
+Inductor in automatic planning while model and dynamic-shape coverage remain
+experimental. TensorRT engine construction happens on the first call and the
+resulting callable is process-local.
 
 ## Source artifacts
 

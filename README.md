@@ -34,6 +34,17 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
+For the optional NVIDIA TensorRT backend, use a separate environment because
+Torch-TensorRT releases require a matching PyTorch/CUDA release:
+
+```bash
+python -m pip install -e ".[dev,tensorrt]"
+```
+
+The current extra installs Torch-TensorRT 2.12.1 and its compatible PyTorch
+2.12/CUDA 13 packages. Check the installed pair before mixing this extra into
+an existing PyTorch environment.
+
 Confirm the environment before running the AOT test:
 
 ```bash
@@ -260,13 +271,14 @@ lazy TorchInductor until packaged GPU AOT support is implemented.
 
 ### 9. Benchmark local GPU inference
 
-The benchmark harness compares first-call cost and steady-state eager versus
-TorchInductor execution. It reports median and p95 latency, throughput, peak
-allocated GPU memory, and environment metadata:
+The benchmark harness compares first-call cost and steady-state eager,
+TorchInductor, and optional TensorRT execution. It reports median and p95
+latency, throughput, peak allocated GPU memory, and environment metadata:
 
 ```bash
 python benchmarks/gpu.py \
   --model mlp \
+  --backend eager inductor tensorrt \
   --dtype float16 \
   --batch-size 8 \
   --warmup 5 \
@@ -279,6 +291,23 @@ or `--model lfm25`. Use `--compile-mode reduce-overhead` or
 `--compile-mode max-autotune` to evaluate Inductor tuning tradeoffs. Results are
 descriptive measurements for the current machine; LM7 does not enforce
 hardware-specific timing thresholds in portable CI.
+
+TensorRT is an optional, NVIDIA-only JIT backend. Select it explicitly:
+
+```python
+compiled = lm7.compile(
+    model,
+    target="nvidia",
+    backend="tensorrt",
+    fallback="error",
+)
+output = compiled(example_input)
+```
+
+The first call builds the TensorRT engine and can take tens of seconds. LM7
+keeps Inductor ahead of TensorRT in automatic planning until broader model and
+shape coverage is established. TensorRT engines are currently process-local;
+portable packaged engines are not implemented.
 
 ## Targets and diagnostics
 
@@ -304,10 +333,12 @@ Explicit function arguments override `LM7_TARGET`, `LM7_BACKEND`,
 | `eager` | Supported | Reference and fallback execution on detected PyTorch devices |
 | `inductor` | When `torch.compile` exists | JIT compilation through public `torch.compile` |
 | `aot_inductor` | CPU prototype | Ahead-of-time `.pt2` package; requires PyTorch package APIs and C++ toolchain |
+| `tensorrt` | Optional NVIDIA prototype | JIT engine through Torch-TensorRT; install `.[tensorrt]` and select explicitly |
 
-Auto planning prefers Inductor when it reports support. If compilation fails,
-`fallback="warn"` warns and uses eager execution. Set `fallback="error"` for
-strict behavior.
+Auto planning prefers Inductor when it reports support. TensorRT currently has
+a lower planner priority and must be selected explicitly for deterministic
+testing. If compilation fails, `fallback="warn"` warns and uses eager
+execution. Set `fallback="error"` for strict behavior.
 
 ## Current limitations
 
@@ -315,6 +346,7 @@ strict behavior.
 - Only local PyTorch devices are detected.
 - JIT compiled callables are cached only in memory.
 - AOTInductor is validated only for CPU.
+- TensorRT requires a version-matched NVIDIA CUDA, PyTorch, and Torch-TensorRT stack.
 - PyTorch's AOTInductor package APIs are Beta.
 - Compiled artifacts require compatible PyTorch, target architecture, and
   platform runtime versions.

@@ -14,6 +14,7 @@ dependencies = ["torch>=2.0"]
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
 hf = ["transformers>=4.46", "safetensors>=0.4"]
+tensorrt = ["torch-tensorrt==2.12.1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -24,6 +25,7 @@ testpaths = ["tests"]
 markers = [
     "cuda: requires a CUDA-capable NVIDIA GPU",
     "hf: requires Hugging Face model downloads and a CUDA GPU",
+    "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
 ]
 
 [tool.ruff]
