@@ -20,6 +20,7 @@ packages = ["src/lm7"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = ["cuda: requires a CUDA-capable NVIDIA GPU"]
 
 [tool.ruff]
 line-length = 100

@@ -183,6 +183,29 @@ Every indexed file has a SHA-256 checksum in `manifest.json`. CPU compilation
 normally emits C++ rather than PTX. Debug output can expose model structure and
 generated code, so treat it as sensitive development data.
 
+### 6. Test NVIDIA TorchInductor
+
+On a Linux machine with a CUDA-enabled PyTorch installation, run the real GPU
+integration test:
+
+```bash
+nvidia-smi
+python -m pytest tests/test_nvidia_integration.py -q
+python examples/cuda_mlp.py --target nvidia
+```
+
+LM7 detects the GPU architecture, moves the model and CPU inputs when
+`transfers="automatic"`, compiles through TorchInductor, and validates the
+result against eager CUDA. To retain the FX graphs, Inductor IR, and generated
+Triton or CUDA source:
+
+```bash
+TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
+  --target nvidia \
+  --debug-dir artifacts/cuda-debug
+find artifacts/cuda-debug -type f | sort
+```
+
 ## Targets and diagnostics
 
 Hardware targets and compiler backends are separate:
