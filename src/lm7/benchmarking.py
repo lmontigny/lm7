@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import statistics
 import time
@@ -57,7 +58,7 @@ def benchmark(
         cache=False,
         options=options,
     )
-    if torch.cuda.is_available():
+    if _uses_cuda_runtime(target) and torch.cuda.is_available():
         torch.cuda.init()
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
@@ -114,7 +115,18 @@ def _environment(target: TargetSpec) -> Mapping[str, Any]:
         "platform": platform.platform(),
         "torch": torch.__version__,
     }
-    if target.vendor in {"nvidia", "amd"}:
+    if target.vendor == "cpu":
+        cpu_backend = getattr(getattr(torch, "backends", None), "cpu", None)
+        get_capability = getattr(cpu_backend, "get_cpu_capability", None)
+        value.update(
+            {
+                "device_name": platform.processor() or platform.machine() or "CPU",
+                "logical_cpu_count": os.cpu_count(),
+                "torch_threads": torch.get_num_threads(),
+                "cpu_capability": get_capability() if callable(get_capability) else None,
+            }
+        )
+    elif target.vendor in {"nvidia", "amd"}:
         ordinal = target.ordinal or 0
         value.update(
             {
@@ -125,6 +137,11 @@ def _environment(target: TargetSpec) -> Mapping[str, Any]:
             }
         )
     return value
+
+
+def _uses_cuda_runtime(target: str | TargetSpec) -> bool:
+    vendor = target.vendor if isinstance(target, TargetSpec) else target.split(":", 1)[0].lower()
+    return vendor in {"auto", "nvidia", "amd"}
 
 
 def _batch_size(value: Any) -> int:

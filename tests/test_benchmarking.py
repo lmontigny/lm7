@@ -26,7 +26,30 @@ def test_cpu_eager_benchmark_reports_stable_schema():
     assert result.peak_memory_bytes is None
     assert result.batch_size == 2
     assert result.environment["torch"] == torch.__version__
+    assert result.environment["device_name"]
+    assert result.environment["logical_cpu_count"]
+    assert result.environment["torch_threads"] > 0
     assert result.to_dict()["repeats"] == 3
+
+
+def test_explicit_cpu_benchmark_does_not_initialize_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    def unexpected_cuda_init():
+        raise AssertionError("CPU benchmark initialized CUDA")
+
+    monkeypatch.setattr(torch.cuda, "init", unexpected_cuda_init)
+
+    result = lm7.benchmark(
+        torch.nn.Identity().eval(),
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        backend="eager",
+        warmup=0,
+        repeats=1,
+    )
+
+    assert result.target.startswith("cpu")
 
 
 def test_benchmark_rejects_invalid_iteration_counts():

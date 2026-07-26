@@ -24,6 +24,7 @@ packages = ["src/lm7"]
 addopts = "-ra"
 testpaths = ["tests"]
 markers = [
+    "cpu: exercises a real CPU compiler backend",
     "cuda: requires a CUDA-capable NVIDIA GPU",
     "rocm: requires a ROCm-capable AMD GPU",
     "hf: requires Hugging Face model downloads and a CUDA GPU",
