@@ -1,4 +1,6 @@
 amd graphx
+codex to check the codex biref for next PR
+vllm/llm-d/sglang to clarify for this repo
 amd gpu support
 google tpu support via openxla?
 simlpify the readme
