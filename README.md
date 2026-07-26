@@ -42,12 +42,20 @@ python -m pip install -e ".[dev]"
 LM7 does not install GPU drivers, CUDA/ROCm toolchains, or platform C++
 compilers.
 
+Hardware setup details:
+
+- [CPU inference](docs/cpu.md)
+- [NVIDIA and development testing](docs/development.md#nvidia-cuda)
+- [AMD GPUs with ROCm](docs/amd-rocm.md)
+- [Google TPUs with PyTorch/XLA and OpenXLA](docs/google-tpu.md)
+
 ## Use LM7
 
 ### Let LM7 choose
 
-`target="auto"` prefers a detected GPU and otherwise uses the CPU. Compilation
-is lazy: the first call selects a backend and compiles the input shape.
+`target="auto"` prefers a detected GPU or accelerator and otherwise uses the
+CPU. Compilation is lazy: the first call selects a backend and compiles the
+input shape.
 
 ```python
 compiled = lm7.compile(
@@ -74,9 +82,11 @@ lm7.compile(model, target="cpu")
 lm7.compile(model, target="nvidia")
 lm7.compile(model, target="nvidia:sm89")
 lm7.compile(model, target="amd:gfx942")
+lm7.compile(model, target="tpu")
 
 lm7.compile(model, target="nvidia", backend="inductor")
 lm7.compile(model, target="nvidia", backend="tensorrt")
+lm7.compile(model, target="tpu", backend="openxla")
 ```
 
 | Backend | Availability | Purpose |
@@ -85,6 +95,7 @@ lm7.compile(model, target="nvidia", backend="tensorrt")
 | `inductor` | PyTorch with `torch.compile` | Default JIT compiler |
 | `aot_inductor` | CPU prototype | Persistent ahead-of-time `.pt2` package |
 | `tensorrt` | Optional NVIDIA prototype | Torch-TensorRT JIT engine |
+| `openxla` | Optional Google TPU prototype | PyTorch/XLA and OpenXLA JIT compiler |
 
 TensorRT must be installed in a version-matched environment and selected
 explicitly:
@@ -95,6 +106,12 @@ python -m pip install -e ".[tensorrt]"
 
 The current extra installs Torch-TensorRT 2.12.1 and its compatible PyTorch
 2.12/CUDA 13 stack.
+
+On a Google TPU VM, install the version-matched PyTorch/XLA runtime:
+
+```bash
+python -m pip install -e ".[openxla]"
+```
 
 ### Inspect the decision
 
@@ -159,13 +176,36 @@ python examples/hf_causal_lm.py \
 Model weights stay in the normal Hugging Face cache and are not added to this
 repository.
 
+## Test local CPU and NVIDIA
+
+Validate identical model weights and inputs on CPU TorchInductor and the local
+NVIDIA GPU:
+
+```bash
+python examples/local_targets.py --require-nvidia
+```
+
+Compare first-call cost and steady-state latency:
+
+```bash
+python benchmarks/local.py \
+  --target cpu nvidia \
+  --backend eager inductor
+```
+
+OpenVINO is not required for CPU execution. LM7 already uses eager PyTorch,
+TorchInductor, and the AOTInductor CPU prototype. OpenVINO remains a possible
+future optional backend for Intel-specific CPU, GPU, or NPU deployment.
+
 ## Examples
 
 ```bash
 python examples/basic_mlp.py
 python examples/aot_mlp.py
 python examples/cuda_mlp.py --target nvidia
-python benchmarks/gpu.py --model mlp --backend eager inductor
+python examples/rocm_mlp.py
+python examples/tpu_mlp.py
+python benchmarks/gpu.py --target auto --model mlp --backend eager inductor
 ```
 
 See [development and testing](docs/development.md) for environment checks, GPU
@@ -178,6 +218,8 @@ integration tests, compiler IR output, and benchmarks. See
 - Only local PyTorch devices are detected.
 - JIT compiled callables and TensorRT engines are process-local.
 - AOTInductor is validated only for CPU and uses Beta PyTorch APIs.
+- AMD ROCm and OpenXLA TPU support are initial single-process integrations
+  without physical-hardware CI.
 - Quantization, distributed inference, remote hardware, and a stable compiled
   artifact ABI are future work.
 
