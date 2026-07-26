@@ -1,4 +1,5 @@
 amd graphx
+use nvidia rtx 4070 
 jit compile
 add tests with liquidAi SLM
 add MLperf ai inference test
