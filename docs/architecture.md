@@ -25,6 +25,17 @@ LM7 version. It intentionally does not hash full parameter contents yet. This
 format is an early source-artifact contract, not a stable cross-version binary
 ABI or a compiled AOT package.
 
+## AOTInductor packages
+
+The `aot_inductor` backend consumes the same `ExportedProgram` and uses
+PyTorch's Beta `aoti_compile_and_package` API to create `compiled_model.pt2`.
+LM7 records the backend and PyTorch versions, runtime target, and compiled
+payload checksum in the manifest. `load_artifact()` validates both source and
+compiled payloads before using `aoti_load_package`.
+
+LM7 0.1 validates this path only for CPU. Packages require a compatible PyTorch
+runtime and target architecture and do not provide a stable cross-version ABI.
+
 The eager backend is both the reference implementation and the fallback. Only
 backend compilation failures trigger fallback; exceptions from model execution
 are returned to the caller unchanged.
