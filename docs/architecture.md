@@ -11,6 +11,20 @@ request, and loads its artifact. LM7 0.1 includes executable eager and JIT
 TorchInductor adapters. Persistent compiler artifact serialization and third-party
 entry-point discovery are intentionally deferred.
 
+## Source artifacts
+
+`lm7.export()` captures an `nn.Module` through `torch.export` or accepts an
+existing `ExportedProgram`. It writes an `.lm7` directory atomically with a
+versioned JSON manifest and the public PyTorch `.pt2` serialization. Load-time
+validation checks the manifest schema version and program checksum before calling
+`torch.export.load`.
+
+The manifest cache key covers the exported graph structure, parameter names,
+shapes and dtypes, representative input signature, target, PyTorch version, and
+LM7 version. It intentionally does not hash full parameter contents yet. This
+format is an early source-artifact contract, not a stable cross-version binary
+ABI or a compiled AOT package.
+
 The eager backend is both the reference implementation and the fallback. Only
 backend compilation failures trigger fallback; exceptions from model execution
 are returned to the caller unchanged.

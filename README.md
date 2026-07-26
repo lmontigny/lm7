@@ -12,6 +12,27 @@ model = lm7.compile(model, target="auto")
 output = model(torch.randn(2, 16))
 ```
 
+## Exported artifacts
+
+LM7 can capture a model with the public `torch.export` API and save a versioned
+source artifact:
+
+```python
+artifact = lm7.export(
+    model,
+    args=(torch.randn(2, 16),),
+    target="cpu",
+    output="model.lm7",
+)
+
+loaded = lm7.load_artifact("model.lm7")
+output = loaded.module()(torch.randn(2, 16))
+```
+
+An artifact is a directory containing `manifest.json` and
+`exported_program.pt2`. Loading validates the format version and SHA-256 payload
+checksum. Existing output paths are never overwritten implicitly.
+
 ## Installation
 
 ```bash
@@ -52,10 +73,12 @@ Auto planning prefers Inductor when it reports support. If compilation fails,
 ## Current limitations
 
 LM7 is not production-ready and does not promise full PyTorch model coverage.
-Only local PyTorch devices are detected. The filesystem cache is location and
-cleanup scaffolding; compiled callables are cached only in memory. Persistent
-artifacts, AOTInductor, remote hardware, vendor compiler adapters, dynamic shape
-profiles, quantization, training, and distributed inference are future work.
+Only local PyTorch devices are detected. Compiled callables are cached only in
+memory. Exported source artifacts are persistent, but compiled AOT artifacts are
+not yet implemented. Cache identity deliberately hashes graph and state metadata
+rather than all weight contents. AOTInductor, remote hardware, vendor compiler
+adapters, production dynamic-shape profiles, quantization, training, and
+distributed inference are future work.
 
 See [the architecture notes](docs/architecture.md) for extension points.
 
