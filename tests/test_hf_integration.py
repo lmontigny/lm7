@@ -7,7 +7,13 @@ import torch
 
 import lm7
 from lm7.detection import resolve_target
-from lm7.huggingface import INT8_WEIGHT_ONLY, _apply_quantization, run_hf_model
+from lm7.huggingface import (
+    FP8_WEIGHT_ONLY,
+    INT8_WEIGHT_ONLY,
+    _apply_quantization,
+    _model_storage_bytes,
+    run_hf_model,
+)
 
 MODEL_IDS = (
     "HuggingFaceTB/SmolLM2-135M-Instruct",
@@ -74,12 +80,26 @@ def test_hf_model_runner_on_cuda():
     assert result.backend == "inductor"
     assert result.dtype == "float16"
     assert result.parameter_count > 100_000_000
+    assert result.baseline_model_storage_bytes == result.model_storage_bytes
+    assert result.model_storage_bytes > 0
     assert result.input_tokens > 0
     assert result.first_call_ms > 0
     assert result.next_token
 
 
-def test_int8_weight_only_matches_bfloat16_logits():
+@pytest.mark.parametrize(
+    ("quantization", "minimum_cosine", "maximum_p99_error", "maximum_storage_ratio"),
+    [
+        (INT8_WEIGHT_ONLY, 0.99, 1.0, 0.7),
+        (FP8_WEIGHT_ONLY, 0.995, 2.0, 0.75),
+    ],
+)
+def test_weight_only_quantization_matches_bfloat16_logits(
+    quantization,
+    minimum_cosine,
+    maximum_p99_error,
+    maximum_storage_ratio,
+):
     model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
     transformers = pytest.importorskip("transformers")
     pytest.importorskip("torchao")
@@ -96,7 +116,9 @@ def test_int8_weight_only_matches_bfloat16_logits():
     with torch.inference_mode():
         expected = model(**cuda_inputs, use_cache=False).logits
 
-    _apply_quantization(model, target, INT8_WEIGHT_ONLY)
+    baseline_storage = _model_storage_bytes(model)
+    _apply_quantization(model, target, quantization)
+    quantized_storage = _model_storage_bytes(model)
     compiled = lm7.compile(
         model,
         target=target,
@@ -115,8 +137,9 @@ def test_int8_weight_only_matches_bfloat16_logits():
     )
     p99_absolute_error = torch.quantile((actual_float - expected_float).abs(), 0.99)
 
-    assert cosine_similarity.item() >= 0.99
+    assert cosine_similarity.item() >= minimum_cosine
     # Weight-only quantization can move low-probability logits while preserving
     # the output distribution and selected token.
-    assert p99_absolute_error.item() <= 1.0
+    assert p99_absolute_error.item() <= maximum_p99_error
     assert actual[:, -1].argmax().equal(expected[:, -1].argmax())
+    assert quantized_storage < baseline_storage * maximum_storage_ratio

@@ -196,8 +196,8 @@ output. The current
 JIT result is process-local; this command does not yet package weights,
 tokenizers, or a persistent GPU executable.
 
-For experimental NVIDIA INT8 weight-only inference, install TorchAO and select
-quantization explicitly:
+For experimental NVIDIA INT8 or FP8 weight-only inference, install TorchAO and
+select quantization explicitly:
 
 ```bash
 python -m pip install -e ".[hf,torchao]"
@@ -208,11 +208,28 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --quantization int8-weight-only
 ```
 
-LM7 uses TorchAO's version 2 `Int8WeightOnlyConfig` and reports quantization
-time, steady-call latency, and peak GPU memory. This path is initially
-NVIDIA-only and validated for SmolLM2-135M. LM7 leaves `lm_head` in BF16 and
-rejects unvalidated model IDs; LiquidAI LFM2.5 remains supported without
-quantization. INT8 remains opt-in because it is slower on this small model.
+Use `--quantization fp8-weight-only` instead on NVIDIA Ada (`sm89`), Hopper
+(`sm90`), or newer GPUs. LM7 uses TorchAO's version 2 weight-only
+configurations and reports model storage before and after quantization,
+quantization time, steady-call latency, and peak GPU memory. Model storage
+measures weights and buffers; peak GPU memory also includes compiler
+workspaces, kernels, activations, and temporary allocations, so it will not
+fall by the same percentage.
+
+These paths are initially NVIDIA-only and validated for SmolLM2-135M. LM7
+leaves `lm_head` in BF16. The FP8 policy quantizes MLP linear weights only:
+local validation reduced stored model bytes by about 29% while preserving the
+next token. The same local RTX 4070 SUPER run measured about 195 MiB peak
+allocated GPU memory, versus about 279 MiB for BF16. Exact latency and memory
+depend on the model, prompt shape, compiler cache, and GPU. Quantizing every
+linear reduced storage further but changed the output, so LM7 does not use that
+policy. LM7 rejects unvalidated model IDs, and LiquidAI LFM2.5 remains
+supported without quantization. Low-bit inference remains opt-in because small
+models may still be slower on other shapes and hardware.
+
+NVFP4 is not exposed yet: TorchAO's execution kernels require NVIDIA Blackwell
+(`sm100+`), while an RTX 4070 is Ada (`sm89`). FP8 is the supported low-bit
+floating-point path on that GPU.
 
 The Python example additionally validates logits and deterministic generation:
 

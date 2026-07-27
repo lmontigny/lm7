@@ -74,6 +74,8 @@ def test_run_hf_model_uses_lm7_and_reports_next_token(monkeypatch):
     assert result.dtype == "float32"
     assert result.quantization == "none"
     assert result.parameter_count == 0
+    assert result.baseline_model_storage_bytes == 0
+    assert result.model_storage_bytes == 0
     assert result.input_tokens == 3
     assert result.output_shape == (1, 3, 8)
     assert result.first_call_ms >= 0
@@ -90,7 +92,11 @@ def test_run_hf_model_rejects_invalid_uri(value):
         huggingface.run_hf_model(value, prompt="Hello")
 
 
-def test_auto_dtype_depends_on_target():
+@pytest.mark.parametrize(
+    "quantization",
+    [huggingface.INT8_WEIGHT_ONLY, huggingface.FP8_WEIGHT_ONLY],
+)
+def test_auto_dtype_depends_on_target(quantization):
     assert huggingface._resolve_dtype("auto", TargetSpec("cpu", "cpu")) == torch.float32
     assert huggingface._resolve_dtype("auto", TargetSpec("nvidia", "gpu")) == torch.float16
     assert huggingface._resolve_dtype("auto", TargetSpec("tpu", "accelerator")) == torch.bfloat16
@@ -98,7 +104,7 @@ def test_auto_dtype_depends_on_target():
         huggingface._resolve_dtype(
             "auto",
             TargetSpec("nvidia", "gpu"),
-            huggingface.INT8_WEIGHT_ONLY,
+            quantization,
         )
         == torch.bfloat16
     )
@@ -137,11 +143,54 @@ def test_int8_weight_only_uses_torchao_version_two(monkeypatch):
     assert elapsed >= 0
 
 
+def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
+    calls = {}
+
+    class Config:
+        def __init__(self, *, version):
+            calls["version"] = version
+
+    def quantize(model, config, *, filter_fn, device):
+        calls["model"] = model
+        calls["config"] = config
+        calls["filter_fn"] = filter_fn
+        calls["device"] = device
+
+    fake_torchao = SimpleNamespace(
+        Float8WeightOnlyConfig=Config,
+        quantize_=quantize,
+    )
+    monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
+
+    model = FakeCausalLM()
+    elapsed = huggingface._apply_quantization(
+        model,
+        TargetSpec("nvidia", "gpu"),
+        huggingface.FP8_WEIGHT_ONLY,
+    )
+
+    assert calls["version"] == 2
+    assert calls["model"] is model
+    assert calls["filter_fn"] is huggingface._is_fp8_quantizable_linear
+    assert calls["device"] == torch.device("cuda", 0)
+    assert elapsed >= 0
+
+
 def test_int8_weight_only_excludes_lm_head():
     assert huggingface._is_quantizable_linear(torch.nn.Linear(4, 4), "model.q_proj")
     assert not huggingface._is_quantizable_linear(torch.nn.Linear(4, 4), "lm_head")
     assert not huggingface._is_quantizable_linear(torch.nn.Linear(4, 4), "decoder.lm_head")
     assert not huggingface._is_quantizable_linear(torch.nn.ReLU(), "model.activation")
+
+
+def test_fp8_weight_only_selects_mlp_linears():
+    assert huggingface._is_fp8_quantizable_linear(
+        torch.nn.Linear(4, 4), "model.layers.0.mlp.up_proj"
+    )
+    assert not huggingface._is_fp8_quantizable_linear(
+        torch.nn.Linear(4, 4), "model.layers.0.self_attn.q_proj"
+    )
+    assert not huggingface._is_fp8_quantizable_linear(torch.nn.Linear(4, 4), "lm_head")
 
 
 @pytest.mark.parametrize(
@@ -171,6 +220,23 @@ def test_int8_weight_only_rejects_unvalidated_model():
             "bfloat16",
             "LiquidAI/LFM2.5-230M",
         )
+
+
+def test_fp8_weight_only_rejects_ampere():
+    with pytest.raises(UnsupportedModelError, match="Ada"):
+        huggingface._validate_quantization(
+            huggingface.FP8_WEIGHT_ONLY,
+            TargetSpec("nvidia", "gpu", architecture="sm80"),
+            "inductor",
+            "bfloat16",
+        )
+
+
+def test_model_storage_bytes_counts_parameters_and_buffers_once():
+    model = torch.nn.Linear(4, 2, bias=False)
+    model.register_buffer("scale", torch.ones(2, dtype=torch.float16))
+
+    assert huggingface._model_storage_bytes(model) == 4 * 2 * 4 + 2 * 2
 
 
 def test_missing_transformers_has_install_hint(monkeypatch):
