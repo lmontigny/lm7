@@ -9,9 +9,13 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import resolve_target
+from .detection import resolve_target, torch_device
 from .errors import UnsupportedModelError
 from .targets import TargetSpec
+
+INT8_WEIGHT_ONLY = "int8-weight-only"
+INT8_WEIGHT_ONLY_MODEL_IDS = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
+NO_QUANTIZATION = "none"
 
 
 @dataclass(frozen=True)
@@ -22,10 +26,14 @@ class HuggingFaceRunResult:
     target: str
     backend: str
     dtype: str
+    quantization: str
     parameter_count: int
     input_tokens: int
     output_shape: tuple[int, ...]
+    quantization_ms: float
     first_call_ms: float
+    latency_ms: float
+    peak_memory_bytes: int | None
     next_token_id: int
     next_token: str
 
@@ -40,11 +48,13 @@ def run_hf_model(
     target: str | TargetSpec = "auto",
     backend: str = "auto",
     dtype: str = "auto",
+    quantization: str = NO_QUANTIZATION,
 ) -> HuggingFaceRunResult:
     """Load and run one compiled causal-LM forward pass from Hugging Face."""
     model_id = _model_id(model_uri)
     resolved_target = resolve_target(target)
-    torch_dtype = _resolve_dtype(dtype, resolved_target)
+    _validate_quantization(quantization, resolved_target, backend, dtype, model_id)
+    torch_dtype = _resolve_dtype(dtype, resolved_target, quantization)
     transformers = _load_transformers()
 
     try:
@@ -65,6 +75,9 @@ def run_hf_model(
             f"Hugging Face tokenization stage failed for {model_uri}: "
             "the tokenizer did not return batched input_ids."
         )
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    _reset_peak_memory(resolved_target)
+    quantization_ms = _apply_quantization(model, resolved_target, quantization)
     wrapped = compile(
         model,
         target=resolved_target,
@@ -78,6 +91,10 @@ def run_hf_model(
     output = wrapped(**inputs, use_cache=False)
     _synchronize(wrapped.target)
     first_call_ms = (time.perf_counter() - started) * 1000
+    started = time.perf_counter()
+    output = wrapped(**inputs, use_cache=False)
+    _synchronize(wrapped.target)
+    latency_ms = (time.perf_counter() - started) * 1000
 
     logits = getattr(output, "logits", None)
     if not isinstance(logits, torch.Tensor) or logits.ndim < 2:
@@ -97,10 +114,14 @@ def run_hf_model(
         target=str(wrapped.target),
         backend=wrapped.selected_backend,
         dtype=str(torch_dtype).removeprefix("torch."),
-        parameter_count=sum(parameter.numel() for parameter in model.parameters()),
+        quantization=quantization,
+        parameter_count=parameter_count,
         input_tokens=int(input_ids.shape[-1]),
         output_shape=tuple(logits.shape),
+        quantization_ms=quantization_ms,
         first_call_ms=first_call_ms,
+        latency_ms=latency_ms,
+        peak_memory_bytes=_peak_memory(wrapped.target),
         next_token_id=next_token_id,
         next_token=next_token,
     )
@@ -120,13 +141,17 @@ def _model_id(model_uri: str) -> str:
     return model_id
 
 
-def _resolve_dtype(value: str, target: TargetSpec) -> torch.dtype:
+def _resolve_dtype(
+    value: str, target: TargetSpec, quantization: str = NO_QUANTIZATION
+) -> torch.dtype:
     values = {
         "float32": torch.float32,
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
     }
     if value == "auto":
+        if quantization == INT8_WEIGHT_ONLY:
+            return torch.bfloat16
         if target.vendor == "cpu":
             return torch.float32
         if target.vendor == "tpu":
@@ -139,6 +164,64 @@ def _resolve_dtype(value: str, target: TargetSpec) -> torch.dtype:
     return values[value]
 
 
+def _validate_quantization(
+    quantization: str,
+    target: TargetSpec,
+    backend: str,
+    dtype: str,
+    model_id: str | None = None,
+) -> None:
+    if quantization == NO_QUANTIZATION:
+        return
+    if quantization != INT8_WEIGHT_ONLY:
+        raise UnsupportedModelError(
+            f"Unsupported quantization {quantization!r}; expected none or int8-weight-only."
+        )
+    if target.vendor != "nvidia":
+        raise UnsupportedModelError(
+            "INT8 weight-only quantization is initially supported only on detected NVIDIA GPUs."
+        )
+    if backend not in {"auto", "inductor"}:
+        raise UnsupportedModelError(
+            "INT8 weight-only quantization requires backend='auto' or backend='inductor'."
+        )
+    if dtype not in {"auto", "bfloat16"}:
+        raise UnsupportedModelError(
+            "INT8 weight-only quantization requires dtype='auto' or dtype='bfloat16'."
+        )
+    if model_id is not None and model_id not in INT8_WEIGHT_ONLY_MODEL_IDS:
+        supported = ", ".join(sorted(INT8_WEIGHT_ONLY_MODEL_IDS))
+        raise UnsupportedModelError(
+            f"INT8 weight-only quantization is not validated for {model_id!r}. "
+            f"Currently validated: {supported}. Use quantization='none' for this model."
+        )
+
+
+def _apply_quantization(
+    model: torch.nn.Module,
+    target: TargetSpec,
+    quantization: str,
+) -> float:
+    if quantization == NO_QUANTIZATION:
+        return 0.0
+    torchao_quantization = _load_torchao_quantization()
+    started = time.perf_counter()
+    torchao_quantization.quantize_(
+        model,
+        torchao_quantization.Int8WeightOnlyConfig(version=2),
+        filter_fn=_is_quantizable_linear,
+        device=torch_device(target),
+    )
+    _synchronize(target)
+    return (time.perf_counter() - started) * 1000
+
+
+def _is_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
+    return isinstance(module, torch.nn.Linear) and not (
+        fqn == "lm_head" or fqn.endswith(".lm_head")
+    )
+
+
 def _load_transformers() -> ModuleType:
     try:
         return importlib.import_module("transformers")
@@ -146,6 +229,26 @@ def _load_transformers() -> ModuleType:
         raise UnsupportedModelError(
             'Hugging Face support is not installed. Install it with: pip install "lm7[hf]".'
         ) from exc
+
+
+def _load_torchao_quantization() -> ModuleType:
+    try:
+        return importlib.import_module("torchao.quantization")
+    except ImportError as exc:
+        raise UnsupportedModelError(
+            'TorchAO quantization is not installed. Install it with: pip install "lm7[hf,torchao]".'
+        ) from exc
+
+
+def _reset_peak_memory(target: TargetSpec) -> None:
+    if target.vendor in {"nvidia", "amd"}:
+        torch.cuda.reset_peak_memory_stats(target.ordinal or 0)
+
+
+def _peak_memory(target: TargetSpec) -> int | None:
+    if target.vendor not in {"nvidia", "amd"}:
+        return None
+    return torch.cuda.max_memory_allocated(target.ordinal or 0)
 
 
 def _synchronize(target: TargetSpec | None) -> None:

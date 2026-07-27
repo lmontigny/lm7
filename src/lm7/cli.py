@@ -158,9 +158,15 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Target: {result.target}")
     print(f"Backend: {result.backend}")
     print(f"Dtype: {result.dtype}")
+    print(f"Quantization: {result.quantization}")
     print(f"Parameters: {result.parameter_count:,}")
     print(f"Input tokens: {result.input_tokens}")
+    if result.quantization_ms:
+        print(f"Quantization: {result.quantization_ms:.2f} ms")
     print(f"First call: {result.first_call_ms:.2f} ms")
+    print(f"Steady call: {result.latency_ms:.2f} ms")
+    if result.peak_memory_bytes is not None:
+        print(f"Peak GPU memory: {result.peak_memory_bytes / 1024**2:.1f} MiB")
     print(f"Next token: {result.next_token_id} ({result.next_token!r})")
 
 
@@ -200,9 +206,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     model_parser = subparsers.add_parser("model", help="run models through LM7")
     model_subparsers = model_parser.add_subparsers(dest="model_command", required=True)
-    run_parser = model_subparsers.add_parser(
-        "run", help="compile and run one causal-LM forward pass"
-    )
+    run_parser = model_subparsers.add_parser("run", help="compile and run a causal-LM forward pass")
     run_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
     run_parser.add_argument("--prompt", default="The capital of France is", help="input prompt")
     run_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
@@ -212,6 +216,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("auto", "float32", "float16", "bfloat16"),
         default="auto",
         help="model dtype (default: auto)",
+    )
+    run_parser.add_argument(
+        "--quantization",
+        choices=("none", "int8-weight-only"),
+        default="none",
+        help="experimental model quantization (default: none)",
     )
     _add_json_argument(run_parser)
     return parser
@@ -242,6 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=args.target,
                 backend=args.backend,
                 dtype=args.dtype,
+                quantization=args.quantization,
             )
             _emit_json(result.to_dict()) if args.json else _print_model_run(result)
     except LM7Error as exc:

@@ -6,7 +6,8 @@ import pytest
 import torch
 
 import lm7
-from lm7.huggingface import run_hf_model
+from lm7.detection import resolve_target
+from lm7.huggingface import INT8_WEIGHT_ONLY, _apply_quantization, run_hf_model
 
 MODEL_IDS = (
     "HuggingFaceTB/SmolLM2-135M-Instruct",
@@ -76,3 +77,46 @@ def test_hf_model_runner_on_cuda():
     assert result.input_tokens > 0
     assert result.first_call_ms > 0
     assert result.next_token
+
+
+def test_int8_weight_only_matches_bfloat16_logits():
+    model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    transformers = pytest.importorskip("transformers")
+    pytest.importorskip("torchao")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_id,
+        dtype=torch.bfloat16,
+    ).eval()
+    inputs = tokenizer("The capital of France is", return_tensors="pt")
+    target = resolve_target("nvidia")
+    model.cuda()
+    cuda_inputs = {name: value.cuda() for name, value in inputs.items()}
+
+    with torch.inference_mode():
+        expected = model(**cuda_inputs, use_cache=False).logits
+
+    _apply_quantization(model, target, INT8_WEIGHT_ONLY)
+    compiled = lm7.compile(
+        model,
+        target=target,
+        backend="inductor",
+        transfers="automatic",
+        fallback="error",
+    )
+    actual = compiled(**inputs, use_cache=False).logits
+
+    expected_float = expected.float()
+    actual_float = actual.float()
+    cosine_similarity = torch.nn.functional.cosine_similarity(
+        actual_float.flatten(),
+        expected_float.flatten(),
+        dim=0,
+    )
+    p99_absolute_error = torch.quantile((actual_float - expected_float).abs(), 0.99)
+
+    assert cosine_similarity.item() >= 0.99
+    # Weight-only quantization can move low-probability logits while preserving
+    # the output distribution and selected token.
+    assert p99_absolute_error.item() <= 1.0
+    assert actual[:, -1].argmax().equal(expected[:, -1].argmax())
