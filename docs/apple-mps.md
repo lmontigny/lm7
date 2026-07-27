@@ -28,6 +28,7 @@ PY
 ```bash
 python examples/mac_mlp.py
 python -m pytest tests/test_mac_integration.py -q
+python examples/local_targets.py --require-apple
 ```
 
 The equivalent API is:
