@@ -198,6 +198,11 @@ output. The current
 JIT result is process-local; this command does not yet package weights,
 tokenizers, or a persistent GPU executable.
 
+`target="auto"` also compiles both models on a local Apple Silicon GPU (see
+[Apple Silicon GPUs](docs/apple-mps.md)). Compiled float16 logits diverge
+slightly more from eager on MPS than on CUDA; validated on SmolLM2-135M and
+LFM2.5-230M with the wider tolerance in `tests/test_hf_integration.py`.
+
 For experimental NVIDIA INT8 or FP8 weight-only inference, install TorchAO and
 select quantization explicitly:
 

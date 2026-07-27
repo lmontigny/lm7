@@ -83,7 +83,9 @@ Engine construction occurs on the first call and can take tens of seconds.
 
 ## Hugging Face integration
 
-These tests are opt-in because they download weights and require a CUDA GPU:
+These tests are opt-in because they download weights and require a CUDA or
+MPS GPU (`resolve_target("auto")` picks whichever is local); TorchAO
+quantization tests additionally require CUDA specifically:
 
 ```bash
 python -m pip install -e ".[dev,hf]"
