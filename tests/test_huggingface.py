@@ -161,6 +161,7 @@ def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
         quantize_=quantize,
     )
     monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
+    monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
 
     model = FakeCausalLM()
     elapsed = huggingface._apply_quantization(
