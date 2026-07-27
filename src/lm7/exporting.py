@@ -18,13 +18,26 @@ import torch
 from .backends import registry
 from .backends.aot_inductor import AOTInductorBackend
 from .cache import input_signature
-from .detection import resolve_target
+from .detection import resolve_target, torch_device
 from .errors import (
     ArtifactLoadError,
     BackendUnavailableError,
     UnsupportedModelError,
 )
 from .targets import TargetSpec, parse_target
+
+
+def _map_tensors(value: Any, fn: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return fn(value)
+    if isinstance(value, tuple):
+        return tuple(_map_tensors(item, fn) for item in value)
+    if isinstance(value, list):
+        return [_map_tensors(item, fn) for item in value]
+    if isinstance(value, dict):
+        return {key: _map_tensors(item, fn) for key, item in value.items()}
+    return value
+
 
 FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
@@ -146,6 +159,12 @@ def export(
         raise BackendUnavailableError(
             f"Export backend {backend!r} is not supported; choose 'export' or 'aot_inductor'."
         )
+    resolved_target = _artifact_target(target)
+    if backend == "aot_inductor" and resolved_target.vendor not in {"cpu", "apple"}:
+        raise BackendUnavailableError(
+            "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU and "
+            "Apple Silicon targets."
+        )
     if isinstance(model, torch.export.ExportedProgram):
         if args is not None or kwargs:
             raise ValueError("args and kwargs cannot be supplied with an ExportedProgram.")
@@ -154,6 +173,11 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
+        if resolved_target.vendor != "cpu":
+            device = torch_device(resolved_target)
+            model = model.to(device)
+            args = _map_tensors(args, lambda tensor: tensor.to(device))
+            kwargs = _map_tensors(kwargs, lambda tensor: tensor.to(device))
         profile_metadata = (
             _shape_profile_metadata(model, args, kwargs, shape_profile)
             if shape_profile is not None
@@ -183,11 +207,6 @@ def export(
     if isinstance(model, torch.export.ExportedProgram):
         profile_metadata = None
 
-    resolved_target = _artifact_target(target)
-    if backend == "aot_inductor" and resolved_target.vendor != "cpu":
-        raise BackendUnavailableError(
-            "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU targets."
-        )
     destination = Path(output).expanduser().resolve()
     if destination.exists():
         raise FileExistsError(

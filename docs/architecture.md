@@ -47,8 +47,9 @@ LM7 records the backend and PyTorch versions, runtime target, and compiled
 payload checksum in the manifest. `load_artifact()` validates both source and
 compiled payloads before using `aoti_load_package`.
 
-LM7 0.1 validates this path only for CPU. Packages require a compatible PyTorch
-runtime and target architecture and do not provide a stable cross-version ABI.
+LM7 0.1 validates this path for CPU and Apple Silicon (MPS). Packages require a
+compatible PyTorch runtime and target architecture and do not provide a stable
+cross-version ABI.
 
 ### Compiler debug artifacts
 

@@ -107,7 +107,7 @@ lm7.compile(model, target="tpu", backend="openxla")
 | --- | --- | --- |
 | `eager` | Any detected PyTorch device | Reference execution and fallback |
 | `inductor` | PyTorch with `torch.compile` | Default JIT compiler |
-| `aot_inductor` | CPU prototype | Persistent ahead-of-time `.pt2` package |
+| `aot_inductor` | CPU/Apple prototype | Persistent ahead-of-time `.pt2` package |
 | `tensorrt` | Optional NVIDIA prototype | Torch-TensorRT JIT engine |
 | `openxla` | Optional Google TPU prototype | PyTorch/XLA and OpenXLA JIT compiler |
 
@@ -292,7 +292,8 @@ integration tests, compiler IR output, and benchmarks. See
 - Inference only; training and backward compilation are unsupported.
 - Only local PyTorch devices are detected.
 - JIT compiled callables and TensorRT engines are process-local.
-- AOTInductor is validated only for CPU and uses Beta PyTorch APIs.
+- AOTInductor is validated only for CPU and Apple Silicon (MPS) and uses Beta
+  PyTorch APIs.
 - AMD ROCm, Apple Silicon (MPS), and OpenXLA TPU support are initial
   single-process integrations without physical-hardware CI.
 - Quantization, distributed inference, remote hardware, and a stable compiled

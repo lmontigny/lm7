@@ -9,8 +9,21 @@ from typing import Any
 import torch
 
 from ..cache import cache_dir
+from ..detection import torch_device
 from ..errors import ArtifactLoadError, CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
+
+
+def _map_tensors(value: Any, fn: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return fn(value)
+    if isinstance(value, tuple):
+        return tuple(_map_tensors(item, fn) for item in value)
+    if isinstance(value, list):
+        return [_map_tensors(item, fn) for item in value]
+    if isinstance(value, dict):
+        return {key: _map_tensors(item, fn) for key, item in value.items()}
+    return value
 
 
 class AOTInductorBackend:
@@ -31,14 +44,15 @@ class AOTInductorBackend:
         probe = self.probe()
         if not probe.available:
             return Support(False, probe.reason)
-        if request.target.vendor != "cpu":
+        if request.target.vendor not in {"cpu", "apple"}:
             return Support(
                 False,
-                "LM7 v0.1 only validates packaged AOTInductor execution for CPU targets.",
+                "LM7 v0.1 only validates packaged AOTInductor execution for CPU and "
+                "Apple Silicon targets.",
             )
         return Support(
             True,
-            "AOTInductor can package an ExportedProgram for CPU execution.",
+            "AOTInductor can package an ExportedProgram for CPU or Apple execution.",
             priority=90,
         )
 
@@ -49,10 +63,15 @@ class AOTInductorBackend:
         example_kwargs: Mapping[str, Any],
     ) -> Artifact:
         try:
+            device = torch_device(request.target)
+            if request.transfers == "automatic":
+                request.model.to(device)
+            export_args = _map_tensors(example_args, lambda tensor: tensor.to(device))
+            export_kwargs = _map_tensors(dict(example_kwargs), lambda tensor: tensor.to(device))
             exported_program = torch.export.export(
                 request.model,
-                example_args,
-                dict(example_kwargs),
+                export_args,
+                export_kwargs,
                 strict=False,
             )
             artifact_root = cache_dir() / "aot_inductor"

@@ -163,7 +163,7 @@ def test_compiled_checksum_is_validated(tmp_path, monkeypatch):
 
 
 def test_aot_export_rejects_unvalidated_target(tmp_path):
-    with pytest.raises(BackendUnavailableError, match="CPU targets"):
+    with pytest.raises(BackendUnavailableError, match="CPU and Apple Silicon targets"):
         lm7.export(
             model(),
             args=(torch.randn(1, 4),),
