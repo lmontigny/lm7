@@ -308,5 +308,9 @@ def _peak_memory(target: TargetSpec) -> int | None:
 
 
 def _synchronize(target: TargetSpec | None) -> None:
-    if target is not None and target.vendor in {"nvidia", "amd"}:
+    if target is None:
+        return
+    if target.vendor in {"nvidia", "amd"}:
         torch.cuda.synchronize(target.ordinal or 0)
+    elif target.vendor == "apple":
+        torch.mps.synchronize()

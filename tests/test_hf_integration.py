@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import lm7
-from lm7.detection import resolve_target
+from lm7.detection import resolve_target, torch_device
 from lm7.huggingface import (
     FP8_WEIGHT_ONLY,
     INT8_WEIGHT_ONLY,
@@ -20,14 +20,15 @@ MODEL_IDS = (
     "LiquidAI/LFM2.5-230M",
 )
 RUN_HF_TESTS = os.environ.get("LM7_RUN_HF_TESTS") == "1"
+HAS_ACCELERATOR = torch.cuda.is_available() or torch.backends.mps.is_available()
 
 pytestmark = [
     pytest.mark.hf,
     pytest.mark.skipif(not RUN_HF_TESTS, reason="set LM7_RUN_HF_TESTS=1"),
-    pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable"),
 ]
 
 
+@pytest.mark.skipif(not HAS_ACCELERATOR, reason="CUDA or MPS GPU is unavailable")
 @pytest.mark.parametrize("model_id", MODEL_IDS)
 def test_causal_lm_inductor_logits_and_generation(model_id):
     transformers = pytest.importorskip("transformers")
@@ -38,14 +39,16 @@ def test_causal_lm_inductor_logits_and_generation(model_id):
     ).eval()
     inputs = tokenizer("The capital of France is", return_tensors="pt")
 
-    model.cuda()
-    cuda_inputs = {name: value.cuda() for name, value in inputs.items()}
+    target = resolve_target("auto")
+    device = torch_device(target)
+    model.to(device)
+    device_inputs = {name: value.to(device) for name, value in inputs.items()}
     with torch.inference_mode():
-        expected = model(**cuda_inputs, use_cache=False).logits
+        expected = model(**device_inputs, use_cache=False).logits
 
     compiled = lm7.compile(
         model,
-        target="nvidia",
+        target=target,
         backend="inductor",
         transfers="automatic",
         fallback="error",
@@ -54,13 +57,16 @@ def test_causal_lm_inductor_logits_and_generation(model_id):
 
     assert compiled.selected_backend == "inductor"
     assert compiled.target is not None
-    assert compiled.target.vendor == "nvidia"
-    torch.testing.assert_close(actual, expected, rtol=0.02, atol=0.075)
+    assert compiled.target.vendor == target.vendor
+    # MPS float16 reductions accumulate in a different order than CUDA and land a
+    # wider tail of outlier logits; measured max abs diff was 0.195 on SmolLM2.
+    atol = 0.25 if target.vendor == "apple" else 0.075
+    torch.testing.assert_close(actual, expected, rtol=0.02, atol=atol)
     assert actual[:, -1].argmax().equal(expected[:, -1].argmax())
 
     with torch.inference_mode():
         generated = model.generate(
-            **cuda_inputs,
+            **device_inputs,
             do_sample=False,
             max_new_tokens=4,
         )
@@ -68,15 +74,16 @@ def test_causal_lm_inductor_logits_and_generation(model_id):
     assert prompt_length < generated.shape[1] <= prompt_length + 4
 
 
-def test_hf_model_runner_on_cuda():
+@pytest.mark.skipif(not HAS_ACCELERATOR, reason="CUDA or MPS GPU is unavailable")
+def test_hf_model_runner_on_accelerator():
     result = run_hf_model(
         "hf://HuggingFaceTB/SmolLM2-135M-Instruct",
         prompt="The capital of France is",
-        target="nvidia",
+        target="auto",
         backend="inductor",
     )
 
-    assert result.target.startswith("nvidia:")
+    assert result.target.split(":", 1)[0] in {"nvidia", "amd", "apple"}
     assert result.backend == "inductor"
     assert result.dtype == "float16"
     assert result.parameter_count > 100_000_000
@@ -87,6 +94,7 @@ def test_hf_model_runner_on_cuda():
     assert result.next_token
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
 @pytest.mark.parametrize(
     ("quantization", "minimum_cosine", "maximum_p99_error", "maximum_storage_ratio"),
     [
