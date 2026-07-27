@@ -90,6 +90,10 @@ python -m pip install -e ".[dev,hf]"
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
+The initial INT8 path is validated only for SmolLM2-135M. The LFM2.5 hybrid
+architecture remains available in BF16/FP16, but LM7 rejects INT8 for it after
+local full-logit validation showed unacceptable divergence.
+
 The examples use `HuggingFaceTB/SmolLM2-135M-Instruct` and
 `LiquidAI/LFM2.5-230M`.
 
@@ -99,6 +103,18 @@ Exercise the user-facing compiled model command on the local GPU:
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia \
   --backend inductor
+```
+
+Validate the optional TorchAO INT8 weight-only path:
+
+```bash
+python -m pip install -e ".[dev,hf,torchao]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia \
+  --backend inductor \
+  --dtype bfloat16 \
+  --quantization int8-weight-only
+LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
 ## Compiler IR and generated code

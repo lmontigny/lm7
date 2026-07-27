@@ -189,11 +189,30 @@ lm7 model run hf://LiquidAI/LFM2.5-230M \
   --backend inductor
 ```
 
-The command downloads through the normal Hugging Face cache, compiles one
+The command downloads through the normal Hugging Face cache, compiles a
 causal-LM forward pass, and reports the selected target and backend, first-call
-time, and predicted next token. Add `--json` for structured output. The current
+and steady-call time, and predicted next token. Add `--json` for structured
+output. The current
 JIT result is process-local; this command does not yet package weights,
 tokenizers, or a persistent GPU executable.
+
+For experimental NVIDIA INT8 weight-only inference, install TorchAO and select
+quantization explicitly:
+
+```bash
+python -m pip install -e ".[hf,torchao]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia \
+  --backend inductor \
+  --dtype bfloat16 \
+  --quantization int8-weight-only
+```
+
+LM7 uses TorchAO's version 2 `Int8WeightOnlyConfig` and reports quantization
+time, steady-call latency, and peak GPU memory. This path is initially
+NVIDIA-only and validated for SmolLM2-135M. LM7 leaves `lm_head` in BF16 and
+rejects unvalidated model IDs; LiquidAI LFM2.5 remains supported without
+quantization. INT8 remains opt-in because it is slower on this small model.
 
 The Python example additionally validates logits and deterministic generation:
 
