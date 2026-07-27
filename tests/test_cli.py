@@ -104,9 +104,11 @@ def test_model_run_json(monkeypatch, capsys):
         prompt="Hello",
         target="nvidia:sm89",
         backend="inductor",
-        dtype="float16",
-        quantization="none",
+        dtype="bfloat16",
+        quantization="fp8-weight-only",
         parameter_count=10,
+        baseline_model_storage_bytes=100,
+        model_storage_bytes=75,
         input_tokens=2,
         output_shape=(1, 2, 8),
         quantization_ms=0,
@@ -137,9 +139,9 @@ def test_model_run_json(monkeypatch, capsys):
                 "--backend",
                 "inductor",
                 "--dtype",
-                "float16",
+                "bfloat16",
                 "--quantization",
-                "none",
+                "fp8-weight-only",
                 "--json",
             ]
         )
@@ -151,12 +153,13 @@ def test_model_run_json(monkeypatch, capsys):
         "prompt": "Hello",
         "target": "nvidia",
         "backend": "inductor",
-        "dtype": "float16",
-        "quantization": "none",
+        "dtype": "bfloat16",
+        "quantization": "fp8-weight-only",
     }
     output = json.loads(capsys.readouterr().out)
     assert output["model_uri"] == "hf://example/tiny"
     assert output["target"] == "nvidia:sm89"
     assert output["latency_ms"] == 1.5
+    assert output["model_storage_bytes"] == 75
     assert output["peak_memory_bytes"] == 1024
     assert output["next_token"] == " world"

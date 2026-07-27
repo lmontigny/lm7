@@ -160,9 +160,19 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Dtype: {result.dtype}")
     print(f"Quantization: {result.quantization}")
     print(f"Parameters: {result.parameter_count:,}")
+    baseline_mib = result.baseline_model_storage_bytes / 1024**2
+    storage_mib = result.model_storage_bytes / 1024**2
+    if result.quantization == "none":
+        print(f"Model storage: {storage_mib:.1f} MiB")
+    else:
+        reduction = 1 - result.model_storage_bytes / result.baseline_model_storage_bytes
+        print(
+            f"Model storage: {baseline_mib:.1f} -> {storage_mib:.1f} MiB "
+            f"({reduction:.1%} reduction)"
+        )
     print(f"Input tokens: {result.input_tokens}")
     if result.quantization_ms:
-        print(f"Quantization: {result.quantization_ms:.2f} ms")
+        print(f"Quantization time: {result.quantization_ms:.2f} ms")
     print(f"First call: {result.first_call_ms:.2f} ms")
     print(f"Steady call: {result.latency_ms:.2f} ms")
     if result.peak_memory_bytes is not None:
@@ -219,7 +229,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--quantization",
-        choices=("none", "int8-weight-only"),
+        choices=("none", "int8-weight-only", "fp8-weight-only"),
         default="none",
         help="experimental model quantization (default: none)",
     )

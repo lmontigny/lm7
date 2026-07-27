@@ -14,7 +14,9 @@ from .errors import UnsupportedModelError
 from .targets import TargetSpec
 
 INT8_WEIGHT_ONLY = "int8-weight-only"
-INT8_WEIGHT_ONLY_MODEL_IDS = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
+FP8_WEIGHT_ONLY = "fp8-weight-only"
+WEIGHT_ONLY_MODEL_IDS = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
+WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY})
 NO_QUANTIZATION = "none"
 
 
@@ -28,6 +30,8 @@ class HuggingFaceRunResult:
     dtype: str
     quantization: str
     parameter_count: int
+    baseline_model_storage_bytes: int
+    model_storage_bytes: int
     input_tokens: int
     output_shape: tuple[int, ...]
     quantization_ms: float
@@ -76,8 +80,10 @@ def run_hf_model(
             "the tokenizer did not return batched input_ids."
         )
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    baseline_model_storage_bytes = _model_storage_bytes(model)
     _reset_peak_memory(resolved_target)
     quantization_ms = _apply_quantization(model, resolved_target, quantization)
+    model_storage_bytes = _model_storage_bytes(model)
     wrapped = compile(
         model,
         target=resolved_target,
@@ -116,6 +122,8 @@ def run_hf_model(
         dtype=str(torch_dtype).removeprefix("torch."),
         quantization=quantization,
         parameter_count=parameter_count,
+        baseline_model_storage_bytes=baseline_model_storage_bytes,
+        model_storage_bytes=model_storage_bytes,
         input_tokens=int(input_ids.shape[-1]),
         output_shape=tuple(logits.shape),
         quantization_ms=quantization_ms,
@@ -150,7 +158,7 @@ def _resolve_dtype(
         "bfloat16": torch.bfloat16,
     }
     if value == "auto":
-        if quantization == INT8_WEIGHT_ONLY:
+        if quantization in WEIGHT_ONLY_QUANTIZATIONS:
             return torch.bfloat16
         if target.vendor == "cpu":
             return torch.float32
@@ -173,26 +181,33 @@ def _validate_quantization(
 ) -> None:
     if quantization == NO_QUANTIZATION:
         return
-    if quantization != INT8_WEIGHT_ONLY:
+    if quantization not in WEIGHT_ONLY_QUANTIZATIONS:
+        choices = ", ".join([NO_QUANTIZATION, *sorted(WEIGHT_ONLY_QUANTIZATIONS)])
         raise UnsupportedModelError(
-            f"Unsupported quantization {quantization!r}; expected none or int8-weight-only."
+            f"Unsupported quantization {quantization!r}; expected one of: {choices}."
         )
+    label = "FP8" if quantization == FP8_WEIGHT_ONLY else "INT8"
     if target.vendor != "nvidia":
         raise UnsupportedModelError(
-            "INT8 weight-only quantization is initially supported only on detected NVIDIA GPUs."
+            f"{label} weight-only quantization is supported only on detected NVIDIA GPUs."
         )
     if backend not in {"auto", "inductor"}:
         raise UnsupportedModelError(
-            "INT8 weight-only quantization requires backend='auto' or backend='inductor'."
+            f"{label} weight-only quantization requires backend='auto' or backend='inductor'."
         )
     if dtype not in {"auto", "bfloat16"}:
         raise UnsupportedModelError(
-            "INT8 weight-only quantization requires dtype='auto' or dtype='bfloat16'."
+            f"{label} weight-only quantization requires dtype='auto' or dtype='bfloat16'."
         )
-    if model_id is not None and model_id not in INT8_WEIGHT_ONLY_MODEL_IDS:
-        supported = ", ".join(sorted(INT8_WEIGHT_ONLY_MODEL_IDS))
+    if quantization == FP8_WEIGHT_ONLY and not _supports_fp8(target):
         raise UnsupportedModelError(
-            f"INT8 weight-only quantization is not validated for {model_id!r}. "
+            "FP8 weight-only quantization requires NVIDIA Ada (sm89), Hopper (sm90), "
+            "or newer hardware."
+        )
+    if model_id is not None and model_id not in WEIGHT_ONLY_MODEL_IDS:
+        supported = ", ".join(sorted(WEIGHT_ONLY_MODEL_IDS))
+        raise UnsupportedModelError(
+            f"{label} weight-only quantization is not validated for {model_id!r}. "
             f"Currently validated: {supported}. Use quantization='none' for this model."
         )
 
@@ -206,10 +221,18 @@ def _apply_quantization(
         return 0.0
     torchao_quantization = _load_torchao_quantization()
     started = time.perf_counter()
+    config = (
+        torchao_quantization.Float8WeightOnlyConfig(version=2)
+        if quantization == FP8_WEIGHT_ONLY
+        else torchao_quantization.Int8WeightOnlyConfig(version=2)
+    )
+    filter_fn = (
+        _is_fp8_quantizable_linear if quantization == FP8_WEIGHT_ONLY else _is_quantizable_linear
+    )
     torchao_quantization.quantize_(
         model,
-        torchao_quantization.Int8WeightOnlyConfig(version=2),
-        filter_fn=_is_quantizable_linear,
+        config,
+        filter_fn=filter_fn,
         device=torch_device(target),
     )
     _synchronize(target)
@@ -220,6 +243,39 @@ def _is_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
     return isinstance(module, torch.nn.Linear) and not (
         fqn == "lm_head" or fqn.endswith(".lm_head")
     )
+
+
+def _is_fp8_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
+    return isinstance(module, torch.nn.Linear) and ".mlp." in fqn
+
+
+def _supports_fp8(target: TargetSpec) -> bool:
+    architecture = target.architecture
+    if not architecture or not architecture.startswith("sm"):
+        return True
+    try:
+        capability = int(architecture.removeprefix("sm"))
+    except ValueError:
+        return True
+    return capability >= 89
+
+
+def _model_storage_bytes(model: torch.nn.Module) -> int:
+    seen: set[int] = set()
+
+    def tensor_bytes(tensor: torch.Tensor) -> int:
+        identity = id(tensor)
+        if identity in seen:
+            return 0
+        seen.add(identity)
+        flatten = getattr(tensor, "__tensor_flatten__", None)
+        if flatten is not None:
+            names, _ = flatten()
+            return sum(tensor_bytes(getattr(tensor, name)) for name in names)
+        return tensor.numel() * tensor.element_size()
+
+    tensors = (*model.parameters(), *model.buffers())
+    return sum(tensor_bytes(tensor) for tensor in tensors)
 
 
 def _load_transformers() -> ModuleType:

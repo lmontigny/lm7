@@ -105,7 +105,7 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --backend inductor
 ```
 
-Validate the optional TorchAO INT8 weight-only path:
+Validate the optional TorchAO INT8 and FP8 weight-only paths:
 
 ```bash
 python -m pip install -e ".[dev,hf,torchao]"
@@ -114,8 +114,19 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --backend inductor \
   --dtype bfloat16 \
   --quantization int8-weight-only
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia \
+  --backend inductor \
+  --dtype bfloat16 \
+  --quantization fp8-weight-only
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
+
+FP8 requires NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer. NVFP4 requires
+Blackwell (`sm100+`) in the current TorchAO execution path and is therefore not
+available on the local RTX 4070. LM7 quantizes only MLP linear weights in the
+validated FP8 path because applying FP8 to every linear changed the predicted
+next token.
 
 ## Compiler IR and generated code
 
