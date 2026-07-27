@@ -99,8 +99,12 @@ def benchmark(
 
 
 def _synchronize(target: TargetSpec | None) -> None:
-    if target is not None and target.vendor in {"nvidia", "amd"}:
+    if target is None:
+        return
+    if target.vendor in {"nvidia", "amd"}:
         torch.cuda.synchronize(target.ordinal or 0)
+    elif target.vendor == "apple":
+        torch.mps.synchronize()
 
 
 def _peak_memory(target: TargetSpec) -> int | None:
@@ -136,6 +140,8 @@ def _environment(target: TargetSpec) -> Mapping[str, Any]:
                 "compute_capability": list(torch.cuda.get_device_capability(ordinal)),
             }
         )
+    elif target.vendor == "apple":
+        value.update({"device_name": "Apple Metal GPU", "mps_built": torch.backends.mps.is_built()})
     return value
 
 

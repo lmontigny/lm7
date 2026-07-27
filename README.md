@@ -59,6 +59,7 @@ Hardware setup details:
 - [CPU inference](docs/cpu.md)
 - [NVIDIA and development testing](docs/development.md#nvidia-cuda)
 - [AMD GPUs with ROCm](docs/amd-rocm.md)
+- [Apple Silicon GPUs with Metal (MPS)](docs/apple-mps.md)
 - [Google TPUs with PyTorch/XLA and OpenXLA](docs/google-tpu.md)
 
 ## Use LM7
@@ -94,6 +95,7 @@ lm7.compile(model, target="cpu")
 lm7.compile(model, target="nvidia")
 lm7.compile(model, target="nvidia:sm89")
 lm7.compile(model, target="amd:gfx942")
+lm7.compile(model, target="apple")
 lm7.compile(model, target="tpu")
 
 lm7.compile(model, target="nvidia", backend="inductor")
@@ -271,6 +273,7 @@ python examples/basic_mlp.py
 python examples/aot_mlp.py
 python examples/cuda_mlp.py --target nvidia
 python examples/rocm_mlp.py
+python examples/mac_mlp.py
 python examples/tpu_mlp.py
 python benchmarks/gpu.py --target auto --model mlp --backend eager inductor
 ```
@@ -285,8 +288,8 @@ integration tests, compiler IR output, and benchmarks. See
 - Only local PyTorch devices are detected.
 - JIT compiled callables and TensorRT engines are process-local.
 - AOTInductor is validated only for CPU and uses Beta PyTorch APIs.
-- AMD ROCm and OpenXLA TPU support are initial single-process integrations
-  without physical-hardware CI.
+- AMD ROCm, Apple Silicon (MPS), and OpenXLA TPU support are initial
+  single-process integrations without physical-hardware CI.
 - Quantization, distributed inference, remote hardware, and a stable compiled
   artifact ABI are future work.
 

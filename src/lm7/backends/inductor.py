@@ -26,7 +26,7 @@ class InductorBackend:
         probe = self.probe()
         if not probe.available:
             return Support(False, probe.reason)
-        if request.target.vendor not in {"cpu", "nvidia", "amd", "intel"}:
+        if request.target.vendor not in {"cpu", "nvidia", "amd", "intel", "apple"}:
             return Support(False, f"Inductor does not support target {request.target} in LM7 v0.1.")
         return Support(
             True, f"torch.compile supports {request.target.kind} execution.", priority=100
