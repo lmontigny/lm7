@@ -47,6 +47,31 @@ output = compiled(cpu_input)
 `target="auto"` also selects the local Apple GPU (reported as `apple:metal`)
 when no other accelerator is detected.
 
+## Persistent AOT packages
+
+`aot_inductor` also supports the `apple` vendor, producing a persistent
+`.pt2` package that reloads in a fresh process without recompiling:
+
+```python
+artifact = lm7.export(
+    model.eval(),
+    args=(example_input,),
+    target="apple",
+    backend="aot_inductor",
+    output="model.lm7",
+)
+loaded = lm7.load_artifact("model.lm7")
+output = loaded(example_input.to("mps"))
+```
+
+`lm7.compile(model, target="apple", backend="aot_inductor")` works the same
+way through the lazy runtime API. Both paths move the model and example
+inputs to the resolved device before `torch.export.export()` — the same
+device placement `eager`/`inductor` already perform — since AOTInductor's
+generated code is captured against whatever device the traced tensors sit
+on. See `tests/test_mac_integration.py` for a same-process and
+cross-process reload example.
+
 ## Benchmark
 
 ```bash
@@ -96,6 +121,6 @@ vendor to account for this. TorchAO INT8/FP8 weight-only quantization
 remains NVIDIA-only.
 
 The initial integration covers local single-GPU inference. It does not yet
-provide Apple-specific AOT packages, quantization, or CI on physical Apple
-hardware; TorchInductor coverage for MPS is newer and less mature than CUDA,
-so validate compiled output against eager for your own models.
+provide TorchAO quantization or CI on physical Apple hardware; TorchInductor
+coverage for MPS is newer and less mature than CUDA, so validate compiled
+output against eager for your own models.
