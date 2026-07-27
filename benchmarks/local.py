@@ -22,17 +22,19 @@ def _model_and_input(batch_size: int) -> tuple[torch.nn.Module, torch.Tensor]:
 def _target_available(target: str) -> bool:
     if target == "cpu":
         return True
+    if target == "apple":
+        return torch.backends.mps.is_available()
     return torch.cuda.is_available() and not getattr(torch.version, "hip", None)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark the same LM7 workload on local CPU and NVIDIA GPU."
+        description="Benchmark the same LM7 workload on local CPU, NVIDIA, and Apple GPUs."
     )
     parser.add_argument(
         "--target",
         nargs="+",
-        choices=("cpu", "nvidia"),
+        choices=("cpu", "nvidia", "apple"),
         default=["cpu", "nvidia"],
     )
     parser.add_argument(
@@ -88,6 +90,8 @@ def main() -> None:
             del model
             if target == "nvidia":
                 torch.cuda.empty_cache()
+            elif target == "apple":
+                torch.mps.empty_cache()
 
     report = {
         "schema_version": 1,

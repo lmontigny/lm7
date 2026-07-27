@@ -31,6 +31,7 @@ markers = [
     "cpu: exercises a real CPU compiler backend",
     "cuda: requires a CUDA-capable NVIDIA GPU",
     "rocm: requires a ROCm-capable AMD GPU",
+    "mps: requires an Apple Silicon GPU with Metal (MPS)",
     "hf: requires Hugging Face model downloads and a CUDA GPU",
     "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
     "tpu: requires PyTorch/XLA on a Google TPU VM",
