@@ -52,6 +52,26 @@ when no other accelerator is detected.
 python benchmarks/local.py \
   --target cpu apple \
   --backend eager inductor
+python benchmarks/gpu.py \
+  --target apple \
+  --model mlp \
+  --backend eager inductor \
+  --dtype float16
+```
+
+`benchmarks/gpu.py` also accepts `--model smollm2`/`--model lfm25` with the
+`hf` extra installed, and `--compile-mode reduce-overhead`/`max-autotune` for
+the Inductor backend; `max-autotune` prints an informational
+`Not enough SMs to use max_autotune_gemm mode` warning from Inductor's CUDA
+heuristics but still compiles and runs correctly on MPS. `peak_memory_bytes`
+is always `null` for the `apple` vendor: PyTorch's `torch.mps` module has no
+CUDA-equivalent peak-tracking API, only current allocation.
+
+Representative local run (`mlp`, batch size 8, float16, M4):
+
+```text
+     eager  first=  577 ms  median=1.68 ms  p95=1.91 ms  throughput= 4769 samples/s
+  inductor  first=  678 ms  median=0.78 ms  p95=0.96 ms  throughput=10313 samples/s
 ```
 
 ## Hugging Face models

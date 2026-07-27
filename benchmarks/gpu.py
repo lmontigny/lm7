@@ -48,6 +48,14 @@ def _workload(
     return model, (), {**inputs, "use_cache": False}
 
 
+def _target_available(target: str) -> bool:
+    if target == "apple":
+        return torch.backends.mps.is_available()
+    if target == "auto":
+        return torch.cuda.is_available() or torch.backends.mps.is_available()
+    return torch.cuda.is_available()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark LM7 inference on a local GPU.")
     parser.add_argument(
@@ -59,7 +67,7 @@ def main() -> None:
     parser.add_argument("--backend", nargs="+", default=["eager", "inductor"])
     parser.add_argument(
         "--target",
-        choices=("auto", "nvidia", "amd"),
+        choices=("auto", "nvidia", "amd", "apple"),
         default="auto",
         help="GPU vendor to benchmark; auto uses the locally detected GPU.",
     )
@@ -76,8 +84,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Write machine-readable results as JSON.")
     arguments = parser.parse_args()
 
-    if not torch.cuda.is_available():
-        raise SystemExit("CUDA/ROCm is unavailable in this PyTorch environment.")
+    if not _target_available(arguments.target):
+        raise SystemExit(f"Target {arguments.target!r} is unavailable in this PyTorch environment.")
     if arguments.batch_size < 1:
         parser.error("--batch-size must be at least 1")
 
@@ -104,15 +112,24 @@ def main() -> None:
             ),
         )
         results.append(result.to_dict())
+        peak = (
+            f"{result.peak_memory_bytes / 1024**2:8.1f} MiB"
+            if result.peak_memory_bytes is not None
+            else "n/a"
+        )
         print(
             f"{backend:>10}  first={result.first_call_ms:9.2f} ms  "
             f"median={result.latency_median_ms:8.3f} ms  "
             f"p95={result.latency_p95_ms:8.3f} ms  "
             f"throughput={result.samples_per_second:10.2f} samples/s  "
-            f"peak={result.peak_memory_bytes / 1024**2:8.1f} MiB"
+            f"peak={peak}"
         )
+        resolved_vendor = result.target.split(":", 1)[0]
         del model
-        torch.cuda.empty_cache()
+        if resolved_vendor == "apple":
+            torch.mps.empty_cache()
+        elif resolved_vendor in {"nvidia", "amd"}:
+            torch.cuda.empty_cache()
 
     report = {
         "schema_version": 1,
