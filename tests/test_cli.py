@@ -5,6 +5,7 @@ import json
 import pytest
 
 from lm7 import cli
+from lm7.huggingface import HuggingFaceRunResult
 from lm7.targets import DeviceInfo, TargetSpec
 
 
@@ -93,3 +94,60 @@ def test_explain_invalid_target_returns_structured_error(capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["error"]["type"] == "TargetNotFoundError"
     assert "Invalid target" in output["error"]["message"]
+
+
+def test_model_run_json(monkeypatch, capsys):
+    calls = {}
+    result = HuggingFaceRunResult(
+        model_uri="hf://example/tiny",
+        model_id="example/tiny",
+        prompt="Hello",
+        target="nvidia:sm89",
+        backend="inductor",
+        dtype="float16",
+        parameter_count=10,
+        input_tokens=2,
+        output_shape=(1, 2, 8),
+        first_call_ms=12.5,
+        next_token_id=5,
+        next_token=" world",
+    )
+
+    def run_model(model_uri, **kwargs):
+        calls["model_uri"] = model_uri
+        calls.update(kwargs)
+        return result
+
+    monkeypatch.setattr(cli, "run_hf_model", run_model)
+
+    assert (
+        cli.main(
+            [
+                "model",
+                "run",
+                "hf://example/tiny",
+                "--prompt",
+                "Hello",
+                "--target",
+                "nvidia",
+                "--backend",
+                "inductor",
+                "--dtype",
+                "float16",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    assert calls == {
+        "model_uri": "hf://example/tiny",
+        "prompt": "Hello",
+        "target": "nvidia",
+        "backend": "inductor",
+        "dtype": "float16",
+    }
+    output = json.loads(capsys.readouterr().out)
+    assert output["model_uri"] == "hf://example/tiny"
+    assert output["target"] == "nvidia:sm89"
+    assert output["next_token"] == " world"

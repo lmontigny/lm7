@@ -179,6 +179,25 @@ python -m pip install -e ".[hf]"
 Then try either compact, ungated test model:
 
 ```bash
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompt "The capital of France is" \
+  --target auto \
+  --backend auto
+lm7 model run hf://LiquidAI/LFM2.5-230M \
+  --prompt "The capital of France is" \
+  --target nvidia \
+  --backend inductor
+```
+
+The command downloads through the normal Hugging Face cache, compiles one
+causal-LM forward pass, and reports the selected target and backend, first-call
+time, and predicted next token. Add `--json` for structured output. The current
+JIT result is process-local; this command does not yet package weights,
+tokenizers, or a persistent GPU executable.
+
+The Python example additionally validates logits and deterministic generation:
+
+```bash
 python examples/hf_causal_lm.py \
   --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
 python examples/hf_causal_lm.py \

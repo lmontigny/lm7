@@ -93,6 +93,14 @@ LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 The examples use `HuggingFaceTB/SmolLM2-135M-Instruct` and
 `LiquidAI/LFM2.5-230M`.
 
+Exercise the user-facing compiled model command on the local GPU:
+
+```bash
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia \
+  --backend inductor
+```
+
 ## Compiler IR and generated code
 
 The AOT export API can retain indexed compiler debug files:

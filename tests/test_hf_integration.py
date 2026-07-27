@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import lm7
+from lm7.huggingface import run_hf_model
 
 MODEL_IDS = (
     "HuggingFaceTB/SmolLM2-135M-Instruct",
@@ -58,3 +59,20 @@ def test_causal_lm_inductor_logits_and_generation(model_id):
         )
     prompt_length = inputs["input_ids"].shape[1]
     assert prompt_length < generated.shape[1] <= prompt_length + 4
+
+
+def test_hf_model_runner_on_cuda():
+    result = run_hf_model(
+        "hf://HuggingFaceTB/SmolLM2-135M-Instruct",
+        prompt="The capital of France is",
+        target="nvidia",
+        backend="inductor",
+    )
+
+    assert result.target.startswith("nvidia:")
+    assert result.backend == "inductor"
+    assert result.dtype == "float16"
+    assert result.parameter_count > 100_000_000
+    assert result.input_tokens > 0
+    assert result.first_call_ms > 0
+    assert result.next_token

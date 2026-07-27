@@ -16,6 +16,7 @@ from .backends.base import CompileRequest
 from .cache import cache_dir
 from .detection import detect_targets, resolve_target
 from .errors import LM7Error
+from .huggingface import HuggingFaceRunResult, run_hf_model
 from .planner import Plan, plan
 from .targets import DeviceInfo, TargetSpec
 
@@ -152,6 +153,17 @@ def _print_doctor(data: dict[str, Any]) -> None:
     _print_backends(data["backends"])
 
 
+def _print_model_run(result: HuggingFaceRunResult) -> None:
+    print(f"Model: {result.model_uri}")
+    print(f"Target: {result.target}")
+    print(f"Backend: {result.backend}")
+    print(f"Dtype: {result.dtype}")
+    print(f"Parameters: {result.parameter_count:,}")
+    print(f"Input tokens: {result.input_tokens}")
+    print(f"First call: {result.first_call_ms:.2f} ms")
+    print(f"Next token: {result.next_token_id} ({result.next_token!r})")
+
+
 def _emit_json(data: Any) -> None:
     print(json.dumps(data, indent=2, sort_keys=True, default=str))
 
@@ -163,7 +175,7 @@ def _add_json_argument(parser: argparse.ArgumentParser) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lm7",
-        description="Inspect LM7 hardware targets and compiler backends.",
+        description="Run models and inspect LM7 hardware targets and compiler backends.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {version()}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -185,6 +197,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--backend", default="auto", help="backend selector (default: auto)"
     )
     _add_json_argument(explain_parser)
+
+    model_parser = subparsers.add_parser("model", help="run models through LM7")
+    model_subparsers = model_parser.add_subparsers(dest="model_command", required=True)
+    run_parser = model_subparsers.add_parser(
+        "run", help="compile and run one causal-LM forward pass"
+    )
+    run_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    run_parser.add_argument("--prompt", default="The capital of France is", help="input prompt")
+    run_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    run_parser.add_argument("--backend", default="auto", help="backend selector (default: auto)")
+    run_parser.add_argument(
+        "--dtype",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        default="auto",
+        help="model dtype (default: auto)",
+    )
+    _add_json_argument(run_parser)
     return parser
 
 
@@ -206,6 +235,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "explain":
             data = _explain_data(args.target, args.backend)
             _emit_json(data) if args.json else _print_explanation(data)
+        elif args.command == "model" and args.model_command == "run":
+            result = run_hf_model(
+                args.model_uri,
+                prompt=args.prompt,
+                target=args.target,
+                backend=args.backend,
+                dtype=args.dtype,
+            )
+            _emit_json(result.to_dict()) if args.json else _print_model_run(result)
     except LM7Error as exc:
         if args.json:
             _emit_json({"error": {"type": type(exc).__name__, "message": str(exc)}})
