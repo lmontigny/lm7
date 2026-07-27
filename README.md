@@ -42,6 +42,18 @@ python -m pip install -e ".[dev]"
 LM7 does not install GPU drivers, CUDA/ROCm toolchains, or platform C++
 compilers.
 
+Check the installation and see what LM7 can use locally:
+
+```bash
+lm7 doctor
+lm7 targets
+lm7 backends
+lm7 explain --target auto
+```
+
+Add `--json` to any command for machine-readable output, for example
+`lm7 doctor --json`. The same CLI is available as `python -m lm7`.
+
 Hardware setup details:
 
 - [CPU inference](docs/cpu.md)

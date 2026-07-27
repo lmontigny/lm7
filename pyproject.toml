@@ -11,6 +11,9 @@ requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
 dependencies = ["torch>=2.0"]
 
+[project.scripts]
+lm7 = "lm7.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
 hf = ["transformers>=4.46", "safetensors>=0.4"]
