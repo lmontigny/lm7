@@ -16,14 +16,15 @@ python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e ".[dev]"
 ```
 
-## Validate CPU and NVIDIA locally
+## Validate CPU and GPU locally
 
 The correctness example runs identical weights and inputs through CPU
-TorchInductor and, when available, NVIDIA TorchInductor:
+TorchInductor and, when available, NVIDIA or Apple Silicon TorchInductor:
 
 ```bash
 python examples/local_targets.py
 python examples/local_targets.py --require-nvidia
+python examples/local_targets.py --require-apple
 ```
 
 Run the real CPU integration test directly:

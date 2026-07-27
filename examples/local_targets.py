@@ -41,13 +41,18 @@ def _validate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Validate the same LM7 model on local CPU and NVIDIA GPU."
+        description="Validate the same LM7 model on local CPU, NVIDIA, and Apple GPUs."
     )
     parser.add_argument("--backend", default="inductor")
     parser.add_argument(
         "--require-nvidia",
         action="store_true",
         help="Fail instead of skipping when an NVIDIA CUDA GPU is unavailable.",
+    )
+    parser.add_argument(
+        "--require-apple",
+        action="store_true",
+        help="Fail instead of skipping when an Apple Silicon GPU is unavailable.",
     )
     arguments = parser.parse_args()
 
@@ -65,18 +70,32 @@ def main() -> None:
     )
 
     nvidia_available = torch.cuda.is_available() and not getattr(torch.version, "hip", None)
-    if not nvidia_available:
-        if arguments.require_nvidia:
-            raise SystemExit("An NVIDIA CUDA GPU is required but unavailable.")
+    if nvidia_available:
+        _validate(
+            source,
+            example_input,
+            expected,
+            target="nvidia",
+            backend=arguments.backend,
+        )
+    elif arguments.require_nvidia:
+        raise SystemExit("An NVIDIA CUDA GPU is required but unavailable.")
+    else:
         print(" nvidia: skipped (NVIDIA CUDA GPU unavailable)")
-        return
-    _validate(
-        source,
-        example_input,
-        expected,
-        target="nvidia",
-        backend=arguments.backend,
-    )
+
+    apple_available = torch.backends.mps.is_available()
+    if apple_available:
+        _validate(
+            source,
+            example_input,
+            expected,
+            target="apple",
+            backend=arguments.backend,
+        )
+    elif arguments.require_apple:
+        raise SystemExit("An Apple Silicon GPU is required but unavailable.")
+    else:
+        print("  apple: skipped (Apple Silicon GPU unavailable)")
 
 
 if __name__ == "__main__":
