@@ -32,12 +32,17 @@ ROCm version, GPU architecture, dtype, batch size, and prompt shape.
 ## First implementation slice
 
 Do not add a registered backend until the local evaluation shows a clear use
-case. The first PR should add a benchmark/evaluation script that can run
-TorchInductor and a manually installed Torch-MIGraphX path side by side. A
+case. `benchmarks/migraphx.py` is that first slice: it runs a model through
+eager (the correctness reference), TorchInductor, and a manually installed
+Torch-MIGraphX `torch.compile` path under one measurement harness, reporting
+first-call cost, median and p95 latency, throughput, peak GPU memory, and the
+maximum absolute difference from eager. It does not register an LM7 backend. A
 later backend PR can wrap the winning path behind `backend="migraphx"` with
 lower automatic priority than `inductor` until model coverage is proven.
 
 ## Validation commands
+
+Baseline the existing eager and Inductor AMD paths through LM7:
 
 ```bash
 python -m pip install -e ".[dev,hf]"
@@ -45,9 +50,22 @@ python benchmarks/gpu.py --target amd --model mlp --backend eager inductor
 python benchmarks/gpu.py --target amd --model smollm2 --backend eager inductor
 ```
 
-After installing Torch-MIGraphX in a matching ROCm environment, add equivalent
-MIGraphX runs and record the exact ROCm, PyTorch, Torch-MIGraphX, GPU, and
-driver versions beside the results.
+Then run the side-by-side evaluation. Without Torch-MIGraphX installed it still
+reports the eager and Inductor paths and marks `migraphx` unavailable:
+
+```bash
+python benchmarks/migraphx.py \
+  --path eager inductor migraphx \
+  --dtype float16 \
+  --batch-size 8 \
+  --output artifacts/benchmarks/migraphx-mlp-fp16-b8.json
+```
+
+After installing Torch-MIGraphX in a matching ROCm environment, record the
+exact ROCm, PyTorch, Torch-MIGraphX, GPU, and driver versions beside the
+results. The script currently covers the `mlp` workload; extending it to the
+SmolLM2, LFM2.5, Llama 3.2 1B, and Qwen3.5 0.8B causal-LM shapes from the
+acceptance criteria is the natural next step.
 
 ## References
 
