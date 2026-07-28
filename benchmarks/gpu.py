@@ -13,6 +13,7 @@ HF_MODELS = {
     "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "lfm25": "LiquidAI/LFM2.5-230M",
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
+    "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
 }
 
 
