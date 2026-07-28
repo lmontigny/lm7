@@ -85,9 +85,10 @@ python benchmarks/gpu.py \
   --dtype float16
 ```
 
-`benchmarks/gpu.py` also accepts `--model smollm2`/`--model lfm25` with the
-`hf` extra installed, and `--compile-mode reduce-overhead`/`max-autotune` for
-the Inductor backend; `max-autotune` prints an informational
+`benchmarks/gpu.py` also accepts `--model smollm2`, `--model lfm25`,
+`--model llama32-1b`, and `--model qwen35-0.8b` with the `hf` extra installed,
+plus `--compile-mode reduce-overhead`/`max-autotune` for the Inductor backend;
+`max-autotune` prints an informational
 `Not enough SMs to use max_autotune_gemm mode` warning from Inductor's CUDA
 heuristics but still compiles and runs correctly on MPS. `peak_memory_bytes`
 is always `null` for the `apple` vendor: PyTorch's `torch.mps` module has no
