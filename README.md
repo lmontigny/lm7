@@ -71,15 +71,15 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
 | any | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `eager` | Supported |
-| AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
-| AMD | GPU via MIGraphX | — | none yet | [Under evaluation](docs/amd-migraphx.md) |
-| Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
-| AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
-| Google | TPU | `tpu` | `openxla`, `eager` | Supported |
-| Intel | GPU | `intel` | `inductor`, `eager` | Supported |
-| Intel | CPU, GPU, NPU via OpenVINO | — | none yet | [Under evaluation](docs/openvino-evaluation.md) |
 | NVIDIA | GPU | `nvidia` | `inductor`, `tensorrt`, `eager` | Supported |
+| AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
+| Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
+| Intel | GPU | `intel` | `inductor`, `eager` | Supported |
+| Google | TPU | `tpu` | `openxla`, `eager` | Supported |
+| Intel | CPU, GPU, NPU via OpenVINO | — | none yet | [Under evaluation](docs/openvino-evaluation.md) |
+| AMD | GPU via MIGraphX | — | none yet | [Under evaluation](docs/amd-migraphx.md) |
 | Qualcomm | Hexagon NPU | — | none yet | [Under evaluation](docs/qualcomm-hexagon.md) |
+| AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
