@@ -5,7 +5,8 @@
 LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
 Use it when an application already has a PyTorch `nn.Module` and needs a
 repeatable way to choose the best local CPU, GPU, or accelerator backend
-without rewriting model code.
+without rewriting model code. You keep writing ordinary PyTorch; LM7 decides
+*where* and *how* it runs.
 
 ```python
 import torch
@@ -16,9 +17,32 @@ model = lm7.compile(model, target="auto")
 output = model(torch.randn(2, 16))
 ```
 
+`lm7.compile` returns a normal callable module, so the rest of your code does
+not change.
+
 > [!WARNING]
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
 > compatibility are not yet stable.
+
+## How it works
+
+A few ideas explain most of the API:
+
+- **Hardware target vs. backend are separate.** A *target* is where the model
+  runs (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used
+  to get there (`eager`, `inductor`, `tensorrt`, …). Pin either one, or let LM7
+  choose.
+- **Detection is automatic.** `target="auto"` probes the machine, prefers a
+  detected GPU or accelerator, and otherwise uses the CPU. `lm7 targets` shows
+  what LM7 found.
+- **Compilation is lazy and per-input-shape.** Nothing compiles until the first
+  call; each new input signature compiles its own variant and is reused after
+  that. Expect the first call to be slow and later calls to be fast.
+- **Fallback is safe by default.** If a backend fails to compile, LM7 falls
+  back to plain PyTorch eager and warns, so a compiler problem does not stop
+  inference. Use `fallback="error"` when you would rather it stop.
+- **Nothing is hidden.** `lm7 explain --target auto` (or `lm7.explain(model)`)
+  prints which backend LM7 would pick and why.
 
 ## Quick start
 
