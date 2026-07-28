@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -163,3 +164,74 @@ def test_model_run_json(monkeypatch, capsys):
     assert output["model_storage_bytes"] == 75
     assert output["peak_memory_bytes"] == 1024
     assert output["next_token"] == " world"
+
+
+def _fake_bundle(path):
+    return SimpleNamespace(
+        path=path,
+        manifest=SimpleNamespace(
+            model_graph_hash="graph123",
+            entries=(
+                {
+                    "key": "cpu-x86_64--aot_inductor",
+                    "target": {
+                        "vendor": "cpu",
+                        "kind": "cpu",
+                        "architecture": "x86_64",
+                        "model": None,
+                        "ordinal": None,
+                        "remote": False,
+                    },
+                    "backend": "aot_inductor",
+                    "path": "targets/cpu-x86_64--aot_inductor",
+                },
+            ),
+        ),
+    )
+
+
+def test_bundle_inspect_json(monkeypatch, capsys, tmp_path):
+    bundle_path = tmp_path / "model.bundle.lm7"
+    monkeypatch.setattr(cli, "load_bundle", lambda path: _fake_bundle(bundle_path))
+
+    assert cli.main(["bundle", "inspect", str(bundle_path), "--json"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["path"] == str(bundle_path)
+    assert output["model_graph_hash"] == "graph123"
+    assert output["entries"][0]["target"]["target"] == "cpu:x86_64"
+    assert output["entries"][0]["backend"] == "aot_inductor"
+
+
+def test_bundle_create_text(monkeypatch, capsys, tmp_path):
+    calls = {}
+    bundle_path = tmp_path / "model.bundle.lm7"
+
+    def create_bundle(artifacts, *, output):
+        calls["artifacts"] = artifacts
+        calls["output"] = output
+        return _fake_bundle(bundle_path)
+
+    monkeypatch.setattr(cli, "create_bundle", create_bundle)
+    monkeypatch.setattr(cli, "load_bundle", lambda path: _fake_bundle(bundle_path))
+
+    assert (
+        cli.main(
+            [
+                "bundle",
+                "create",
+                str(bundle_path),
+                "build/cpu.lm7",
+                "build/apple.lm7",
+            ]
+        )
+        == 0
+    )
+
+    assert calls == {
+        "artifacts": ["build/cpu.lm7", "build/apple.lm7"],
+        "output": str(bundle_path),
+    }
+    output = capsys.readouterr().out
+    assert "Bundle:" in output
+    assert "cpu-x86_64--aot_inductor: cpu:x86_64 / aot_inductor" in output

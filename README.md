@@ -193,6 +193,14 @@ bundle = lm7.create_bundle(
 deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 ```
 
+The same packaging flow is available from the CLI:
+
+```bash
+lm7 bundle create model.bundle.lm7 build/cpu.lm7 build/nvidia.lm7
+lm7 bundle inspect model.bundle.lm7
+lm7 bundle inspect model.bundle.lm7 --json
+```
+
 ### Run a Hugging Face causal LM from the CLI
 
 Install the optional dependencies:
