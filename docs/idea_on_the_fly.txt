@@ -1,4 +1,4 @@
-amd graphx
+amd graphx to test on mi300x
 codex to check the codex biref for next PR
 vllm/llm-d/sglang to clarify for this repo
 amd gpu support
@@ -23,3 +23,5 @@ add example like https://github.com/zml/zml/tree/master/examples/llm, Llama 3.1Q
 add cmd to select hf model and complie it (so not pytorch code level)
 
 for edge device if OOS
+extend pytorchAO for quantization as single param at --quantize bf16/fp4/fp8
+explore very low precision binary, int2,int4 etc for weight (and activation?)
