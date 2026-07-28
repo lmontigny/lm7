@@ -96,8 +96,10 @@ The initial INT8 path is validated only for SmolLM2-135M. The LFM2.5 hybrid
 architecture remains available in BF16/FP16, but LM7 rejects INT8 for it after
 local full-logit validation showed unacceptable divergence.
 
-The examples use `HuggingFaceTB/SmolLM2-135M-Instruct` and
-`LiquidAI/LFM2.5-230M`.
+The examples use `HuggingFaceTB/SmolLM2-135M-Instruct`, `LiquidAI/LFM2.5-230M`,
+and `unsloth/Llama-3.2-1B-Instruct` (an ungated mirror of Meta's
+Llama-3.2-1B-Instruct, which itself requires accepting a license and an
+authenticated token).
 
 Exercise the user-facing compiled model command on the local GPU:
 
