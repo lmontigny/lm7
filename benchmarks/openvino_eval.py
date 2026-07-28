@@ -19,14 +19,32 @@ The module is named ``openvino_eval`` and not ``openvino`` on purpose: running
 ``python benchmarks/openvino.py`` would put ``benchmarks/`` first on
 ``sys.path`` and shadow the real ``openvino`` package with this script.
 
-Four OpenVINO behaviours make a naive comparison misleading, so the harness
+Several OpenVINO behaviours make a naive comparison misleading, so the harness
 works around each of them explicitly:
 
+* OpenVINO's CPU plugin needs tens of calls to reach steady state, far more than
+  eager or Inductor. With a 5-call warmup its median came out 4-5x too high on
+  this harness, which is enough to invert the ranking against Inductor.
+  ``--warmup`` therefore defaults to 30, and every result carries
+  ``latency_drift_ratio`` and ``steady_state`` comparing the first half of the
+  timed samples against the second half so an under-warmed run is visible.
+* Inductor and the OpenVINO dynamo backend compile lazily inside the first
+  call, while the IR path converts and compiles up front. ``first_call_ms``
+  alone is therefore not comparable across paths, so each result also reports
+  ``build_ms`` and ``time_to_first_inference_ms``.
 * The CPU plugin's ``INFERENCE_PRECISION_HINT`` does not default to FP32. It is
   FP16 on ARM hosts and BF16 on x86 hosts with AMX, so OpenVINO runs an FP32
   model in reduced precision and looks both faster and less accurate than eager
   for the same nominal dtype. ``--inference-precision`` defaults to ``f32`` so
   the comparison is like-for-like, and the effective value is recorded per path.
+* The dynamo backend's default (non-AOT) path fails outright on TorchVision
+  CNNs under recent PyTorch with ``AssertionError: sources must not be empty for
+  symbol sN``. ``aot_autograd`` avoids it, so ``--aot-autograd`` is on by
+  default; ``--no-aot-autograd`` reproduces the failure.
+* ``torch.export`` leaves batch and spatial dimensions symbolic, so
+  ``convert_model`` yields IR like ``[?,3,?,?]`` while the dynamo path pins
+  static shapes. ``--static-ir`` (default) reshapes to the example shapes so the
+  two are comparable; ``--no-static-ir`` keeps the deployable dynamic artifact.
 * The ``openvino`` dynamo backend catches every compilation exception and
   silently returns ``torch._inductor.compile_fx``, and each partition
   independently falls back to eager PyTorch on a runtime exception. A path
@@ -71,6 +89,23 @@ _DEFAULT_ATOL = {"float32": 1e-4, "float16": 2e-2}
 
 _ALL_PATHS = ("eager", "inductor", "openvino", "openvino_ir")
 
+# Ratio of early-half to late-half median latency above which a run is treated as
+# not yet in steady state.
+_DRIFT_LIMIT = 1.2
+
+# Kept in sync with benchmarks/gpu.py so the OpenVINO evaluation covers the same
+# causal-LM shapes as the GPU benchmarks.
+_HF_MODELS = {
+    "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "lfm25": "LiquidAI/LFM2.5-230M",
+    "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
+    "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
+}
+
+_TORCHVISION_MODELS = ("resnet18", "resnet50", "mobilenet_v3_small")
+
+_ALL_MODELS = ("mlp", *_TORCHVISION_MODELS, *_HF_MODELS)
+
 
 def _openvino_available() -> bool:
     # find_spec avoids importing openvino.torch as a side effect of probing:
@@ -78,14 +113,74 @@ def _openvino_available() -> bool:
     return importlib.util.find_spec("openvino") is not None
 
 
-def _mlp(batch_size: int, dtype: torch.dtype) -> tuple[torch.nn.Module, tuple[torch.Tensor, ...]]:
-    model = torch.nn.Sequential(
-        torch.nn.Linear(1024, 4096),
-        torch.nn.GELU(),
-        torch.nn.Linear(4096, 1024),
-    ).eval()
-    inputs = (torch.randn(batch_size, 1024, dtype=dtype),)
-    return model.to(dtype=dtype), inputs
+class _LogitsOnly(torch.nn.Module):
+    """Adapt a causal LM to the harness's tensors-in, one-tensor-out contract.
+
+    Every path here needs positional tensor arguments and a single tensor
+    result: ``torch.export`` and ``convert_model`` want flat example inputs, and
+    the OpenVINO executor round-trips through NumPy, which cannot represent a
+    ``CausalLMOutputWithPast``. ``use_cache=False`` keeps it a single prefill
+    forward pass rather than a stateful decode loop, which is the shape the
+    evaluation plan asks about.
+    """
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+        ).logits
+
+
+def _workload(
+    name: str,
+    batch_size: int,
+    dtype: torch.dtype,
+    prompt: str,
+) -> tuple[torch.nn.Module, tuple[torch.Tensor, ...], dict[str, Any]]:
+    """Build a model and its example inputs; metadata describes what was built."""
+    if name == "mlp":
+        model = torch.nn.Sequential(
+            torch.nn.Linear(1024, 4096),
+            torch.nn.GELU(),
+            torch.nn.Linear(4096, 1024),
+        ).eval()
+        inputs = (torch.randn(batch_size, 1024, dtype=dtype),)
+        return model.to(dtype=dtype), inputs, {"model_id": None}
+
+    if name in _TORCHVISION_MODELS:
+        try:
+            import torchvision
+        except ImportError:
+            raise SystemExit(
+                f"Workload {name!r} needs torchvision: pip install torchvision"
+            ) from None
+        # weights=None keeps the run offline and deterministic under a fixed
+        # seed. The comparison is against this process's own eager output, so
+        # trained weights would not make it more meaningful.
+        model = torchvision.models.get_model(name, weights=None).eval()
+        inputs = (torch.randn(batch_size, 3, 224, 224, dtype=dtype),)
+        return model.to(dtype=dtype), inputs, {"model_id": None, "weights": None}
+
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError:
+        raise SystemExit('Install Hugging Face support with: pip install -e ".[hf]"') from None
+    model_id = _HF_MODELS[name]
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype).eval()
+    encoded = tokenizer([prompt] * batch_size, return_tensors="pt")
+    inputs = (encoded["input_ids"], encoded["attention_mask"])
+    metadata = {
+        "model_id": model_id,
+        "prompt": prompt,
+        "sequence_length": int(encoded["input_ids"].shape[1]),
+    }
+    return _LogitsOnly(model).eval(), inputs, metadata
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -166,6 +261,8 @@ def _build_openvino_ir(
     ir_directory: Path,
     compress_to_fp16: bool,
     config: dict[str, str],
+    output_dtype: torch.dtype,
+    static_shapes: bool,
 ) -> tuple[Any, dict[str, Any]]:
     """Export to an OpenVINO IR file, then load it back through the runtime.
 
@@ -183,6 +280,15 @@ def _build_openvino_ir(
     ov_model = ov.convert_model(exported, example_input=list(inputs))
     convert_ms = (time.perf_counter() - started) * 1000
 
+    # torch.export leaves batch and spatial dims symbolic, so convert_model
+    # produces IR like [?,3,?,?]. OpenVINO compiles that as a dynamic model and
+    # loses a large amount of performance. The torch.compile path does not have
+    # this problem because it pins every input to a static PartialShape before
+    # compiling, so pin them here too or the two paths are not comparable.
+    dynamic_before = ov_model.is_dynamic()
+    if static_shapes and dynamic_before:
+        ov_model.reshape({index: ov.PartialShape(list(t.shape)) for index, t in enumerate(inputs)})
+
     ir_directory.mkdir(parents=True, exist_ok=True)
     xml_path = ir_directory / "model.xml"
     started = time.perf_counter()
@@ -195,8 +301,8 @@ def _build_openvino_ir(
     compile_ms = (time.perf_counter() - started) * 1000
     request = compiled.create_infer_request()
 
-    output_dtype = inputs[0].dtype
-
+    # output_dtype comes from the eager reference, not from the inputs: a causal
+    # LM takes int64 token ids and returns float logits.
     def _call(*args: torch.Tensor) -> torch.Tensor:
         # share_outputs is left at its default: the returned buffer would
         # otherwise alias OpenVINO's output tensor and be overwritten by the
@@ -210,6 +316,8 @@ def _build_openvino_ir(
         "ir_save_ms": save_ms,
         "ir_compile_ms": compile_ms,
         "ir_compress_to_fp16": compress_to_fp16,
+        "ir_dynamic_from_export": dynamic_before,
+        "ir_dynamic": ov_model.is_dynamic(),
         "ov_config": dict(config),
         "ir_bytes": sum(f.stat().st_size for f in (xml_path, xml_path.with_suffix(".bin"))),
         "ir_path": str(xml_path),
@@ -222,6 +330,7 @@ def _build(
     model: torch.nn.Module,
     inputs: tuple[torch.Tensor, ...],
     arguments: argparse.Namespace,
+    output_dtype: torch.dtype,
 ) -> tuple[Any, dict[str, Any]]:
     if path == "eager":
         return model, {}
@@ -231,9 +340,14 @@ def _build(
         import openvino.torch  # noqa: F401  (registers the "openvino" dynamo backend)
 
         _reset_ov_caches()
-        options = {"device": arguments.device, "config": _ov_config(arguments)}
+        options: dict[str, Any] = {
+            "device": arguments.device,
+            "config": _ov_config(arguments),
+            "aot_autograd": arguments.aot_autograd,
+        }
         return torch.compile(model, backend="openvino", options=options), {
             "ov_config": dict(options["config"]),
+            "ov_aot_autograd": arguments.aot_autograd,
         }
     if path == "openvino_ir":
         directory = arguments.ir_dir or Path(".lm7-openvino-ir")
@@ -244,6 +358,8 @@ def _build(
             directory,
             arguments.compress_to_fp16,
             _ov_config(arguments),
+            output_dtype,
+            arguments.static_ir,
         )
     raise ValueError(f"Unknown path {path!r}")
 
@@ -273,12 +389,27 @@ def _measure(
 
     median_ms = statistics.median(latencies_ms)
     batch_size = args[0].shape[0] if args and args[0].ndim else 1
+
+    # OpenVINO's CPU plugin can take tens of calls to reach steady state, far
+    # more than eager or Inductor. If the first half of the timed samples is
+    # much slower than the second half, the run never got there and the median
+    # is inflated, so report the drift instead of silently publishing it.
+    half = len(latencies_ms) // 2
+    drift_ratio = None
+    if half:
+        early = statistics.median(latencies_ms[:half])
+        late = statistics.median(latencies_ms[half:])
+        drift_ratio = early / late if late else None
+
     return {
         "output": first_output,
         "first_call_ms": first_call_ms,
         "latency_median_ms": median_ms,
         "latency_p95_ms": _percentile(latencies_ms, 0.95),
+        "latency_min_ms": min(latencies_ms),
         "samples_per_second": batch_size * 1000 / median_ms if median_ms else float("inf"),
+        "latency_drift_ratio": drift_ratio,
+        "steady_state": drift_ratio is None or drift_ratio <= _DRIFT_LIMIT,
     }
 
 
@@ -306,9 +437,29 @@ def main() -> None:
         default=list(_ALL_PATHS),
         help="Execution paths to evaluate; 'eager' is always the correctness reference.",
     )
+    parser.add_argument(
+        "--model",
+        choices=_ALL_MODELS,
+        default="mlp",
+        help="Workload to evaluate. TorchVision models use random weights.",
+    )
+    parser.add_argument(
+        "--prompt",
+        default="The capital of France is",
+        help="Prompt used to build the input shape for causal-LM workloads.",
+    )
     parser.add_argument("--dtype", choices=tuple(_DTYPES), default="float32")
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=30,
+        help=(
+            "Untimed calls before measuring. Higher than the other benchmarks "
+            "on purpose: OpenVINO's CPU plugin needs tens of calls to reach "
+            "steady state, and 5 leaves its median several times too high."
+        ),
+    )
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument(
         "--device",
@@ -322,6 +473,27 @@ def main() -> None:
         help=(
             "OpenVINO INFERENCE_PRECISION_HINT. The plugin default is not FP32 "
             "(FP16 on ARM, BF16 on x86 with AMX); 'default' leaves it unset."
+        ),
+    )
+    parser.add_argument(
+        "--aot-autograd",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Pass aot_autograd to the OpenVINO dynamo backend. On by default: "
+            "the backend's non-AOT path fails on TorchVision CNNs under recent "
+            "PyTorch. Use --no-aot-autograd to reproduce that failure."
+        ),
+    )
+    parser.add_argument(
+        "--static-ir",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Pin the converted IR to the example input shapes. On by default so "
+            "it matches the torch.compile path; --no-static-ir keeps the dynamic "
+            "shapes torch.export produces, which is the deployable artifact but "
+            "measurably slower."
         ),
     )
     parser.add_argument(
@@ -354,9 +526,15 @@ def main() -> None:
     # Build the model and inputs once so every path runs identical weights and
     # inputs; only then is the accuracy comparison against eager meaningful.
     torch.manual_seed(0)
-    base_model, inputs = _mlp(arguments.batch_size, dtype)
+    base_model, inputs, workload_metadata = _workload(
+        arguments.model,
+        arguments.batch_size,
+        dtype,
+        arguments.prompt,
+    )
     with torch.inference_mode():
         reference_output = base_model(*inputs).clone()
+    output_dtype = reference_output.dtype
 
     paths = _order_paths(arguments.path)
     openvino_ready = _openvino_available()
@@ -384,7 +562,13 @@ def main() -> None:
 
         model = copy.deepcopy(base_model)
         try:
-            callable_under_test, metadata = _build(path, model, inputs, arguments)
+            # Time _build as well as the first call: Inductor and the OpenVINO
+            # dynamo backend compile lazily inside the first call, while the IR
+            # path does all its work up front. Only build + first call is
+            # comparable across paths.
+            build_started = time.perf_counter()
+            callable_under_test, metadata = _build(path, model, inputs, arguments, output_dtype)
+            build_ms = (time.perf_counter() - build_started) * 1000
             measured = _measure(
                 callable_under_test,
                 inputs,
@@ -406,6 +590,8 @@ def main() -> None:
             {
                 "path": path,
                 "available": True,
+                "build_ms": build_ms,
+                "time_to_first_inference_ms": build_ms + measured["first_call_ms"],
                 "max_abs_diff_vs_eager": max_abs_diff,
                 "within_tolerance": max_abs_diff <= atol,
             }
@@ -422,8 +608,13 @@ def main() -> None:
                 note = "  WARNING: no OpenVINO partitions ran (silent fallback)"
             elif measured["ov_runtime_fallbacks"]:
                 note = f"  WARNING: {measured['ov_runtime_fallbacks']} partition(s) fell back"
+        if not measured["steady_state"]:
+            note += (
+                f"  WARNING: still warming up (early/late median "
+                f"{measured['latency_drift_ratio']:.2f}x); raise --warmup"
+            )
         print(
-            f"{path:>12}  first={measured['first_call_ms']:9.2f} ms  "
+            f"{path:>12}  ready={measured['time_to_first_inference_ms']:9.2f} ms  "
             f"median={measured['latency_median_ms']:8.3f} ms  "
             f"p95={measured['latency_p95_ms']:8.3f} ms  "
             f"throughput={measured['samples_per_second']:10.2f} samples/s  "
@@ -435,7 +626,9 @@ def main() -> None:
         "schema_version": 1,
         "environment": environment,
         "workload": {
-            "model": "mlp",
+            "model": arguments.model,
+            **workload_metadata,
+            "input_shapes": [list(t.shape) for t in inputs],
             "dtype": arguments.dtype,
             "batch_size": arguments.batch_size,
             "target": "cpu",
