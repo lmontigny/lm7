@@ -3,38 +3,43 @@
 [![CI](https://github.com/lmontigny/lm7/actions/workflows/ci.yml/badge.svg)](https://github.com/lmontigny/lm7/actions/workflows/ci.yml)
 
 LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
-Give it a PyTorch `nn.Module` and LM7 picks the best local CPU, GPU, or
-accelerator backend for the machine it runs on — you keep writing ordinary
-PyTorch and LM7 decides *where* and *how* it runs.
+Hand it a model you already run in PyTorch — a full pretrained network, a
+Hugging Face causal LM, a vision model, or a single layer — and it gives you back
+a normal callable. **You decide how much to decide:** name the hardware
+yourself, or let LM7 detect what the machine has.
 
 ```python
-import torch
 import lm7
+from transformers import AutoModelForCausalLM
 
-model = torch.nn.Linear(16, 4).eval()
-model = lm7.compile(model, target="auto")
-output = model(torch.randn(2, 16))
+model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct").eval()
+
+model = lm7.compile(model, target="auto")  # LM7 detects the best local device
+model = lm7.compile(model, target="nvidia:sm89")  # or pin it exactly
 ```
 
-`lm7.compile` returns a normal callable module, so the rest of your code does
-not change.
+Either way, `lm7.compile` returns a normal callable module, so the rest of your
+code does not change — no device juggling, no per-vendor branches, no manual
+compile cache. LM7 resolves the target, picks a compatible compiler, moves the
+inputs, compiles once per input shape, and falls back to plain PyTorch if a
+backend cannot handle the model.
 
 **LM7 does not write kernels or a compiler of its own.** Each vendor already
-ships a good one, and LM7 drives it: TorchInductor for CPU and GPU, TensorRT on
-NVIDIA, PyTorch/XLA and OpenXLA on TPU, AOTInductor for persistent packages.
-What LM7 adds is one surface over all of them, so moving the same module to
-different hardware is a one-string change instead of a rewrite:
+ships a good one, and LM7 drives it — so the same call site reaches a different
+vendor toolchain depending only on the target you ask for:
 
 ```python
 lm7.compile(model, target="cpu")  # TorchInductor CPU kernels
-lm7.compile(model, target="apple")  # same module, Metal via MPS
-lm7.compile(model, target="nvidia", backend="tensorrt")  # same module, TensorRT
+lm7.compile(model, target="apple")  # Metal, via MPS
+lm7.compile(model, target="tpu")  # PyTorch/XLA and OpenXLA
+lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT
 ```
 
-The corollary is that LM7's reach is bounded by what those vendor toolchains
-already support — adding hardware means wiring up its compiler, not writing one,
-which is what the evaluation plans under
-[supported hardware](#supported-hardware) work through.
+You do not install or learn five toolchains to try a second device; you change a
+string, and `lm7 doctor` tells you what is missing if anything is. The corollary
+is that LM7's reach is bounded by what those vendor toolchains already support —
+adding hardware means wiring up its compiler, not writing one, which is what the
+evaluation plans under [supported hardware](#supported-hardware) work through.
 
 > [!WARNING]
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
