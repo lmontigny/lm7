@@ -41,6 +41,48 @@ is that LM7's reach is bounded by what those vendor toolchains already support â
 adding hardware means wiring up its compiler, not writing one, which is what the
 evaluation plans under [supported hardware](#supported-hardware) work through.
 
+### What this replaces
+
+Retargeting by hand means a branch per vendor, because the probe, the device
+string, and the compiler call are all different:
+
+```python
+if torch.cuda.is_available():
+    # True for NVIDIA *and* AMD ROCm; torch.version.hip is what tells them apart
+    device = torch.device("cuda", 0)
+    compiled = torch.compile(model.to(device))
+    # ...unless you want TensorRT, which is a different import and backend:
+    #   import torch_tensorrt; torch.compile(model, backend="tensorrt")
+elif getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
+    device = torch.device("xpu", 0)
+    compiled = torch.compile(model.to(device))
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")  # note: no ordinal, unlike the others
+    compiled = torch.compile(model.to(device))
+elif tpu_runtime_is_really_a_tpu():  # importable torch_xla is not enough
+    import torch_xla
+
+    device = torch_xla.device(0)
+    compiled = torch.compile(model.to(device), backend="openxla")
+else:
+    compiled = model  # eager fallback
+
+inputs = move_every_tensor(inputs, device)  # yours to write
+```
+
+And the branch is the easy part. You also own the traps: `torch.compile` is lazy,
+so a compile failure surfaces on the *first call* and a fallback has to wrap that
+call rather than the compile; TPU needs `torch.no_grad()` rather than
+`torch.inference_mode()`, because XLA tracing depends on the tensor version
+counters `inference_mode` removes; and each new input shape recompiles, so
+caching is on you.
+
+LM7 is that ladder, written once and tested:
+
+```python
+compiled = lm7.compile(model, target="auto")  # or target="apple", "tpu", ...
+```
+
 > [!WARNING]
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
 > compatibility are not yet stable.
@@ -253,21 +295,7 @@ The Python example additionally validates logits and deterministic generation:
 python examples/hf_causal_lm.py --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
 ```
 
-**Experimental low-bit inference (NVIDIA only).** Install TorchAO and select
-quantization explicitly:
-
-```bash
-python -m pip install -e ".[hf,torchao]"
-lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --target nvidia --backend inductor --dtype bfloat16 \
-  --quantization int8-weight-only
-```
-
-Use `--quantization fp8-weight-only` on NVIDIA Ada (`sm89`), Hopper (`sm90`), or
-newer GPUs. LM7 quantizes MLP linear weights only, leaves `lm_head` in BF16, and
-reports model storage, quantization time, latency, and peak GPU memory. This
-path is validated for SmolLM2-135M and rejects unvalidated model IDs; it stays
-opt-in because small models may be slower on other shapes and hardware.
+Quantization is opt-in and covered in its own section below.
 
 ## 5. Export an artifact
 
@@ -297,6 +325,73 @@ deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 lm7 bundle create model.bundle.lm7 build/cpu.lm7 build/nvidia.lm7
 lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 ```
+
+## Quantization
+
+Quantization stores or computes a tensor in fewer bits than the model was
+trained in. There are two halves to it, and **LM7 currently implements only the
+first**:
+
+- **Weight quantization** shrinks the stored parameters. Weights are converted
+  once, up front, and dequantized on the fly during the matmul, which keeps
+  arithmetic in a higher precision. The win is memory footprint and bandwidth,
+  and it needs no calibration data.
+- **Activation quantization** also narrows the tensors flowing between layers, so
+  the matmul itself runs in low precision. That is where the larger speedups
+  come from, but it needs calibration or a quantization-aware recipe to pick
+  per-tensor scales, and it costs accuracy more readily. **LM7 does not do
+  this today.**
+
+Everything below is therefore *weight-only*: activations, and the accumulation
+inside each matmul, stay in BF16.
+
+### Supported data types
+
+| `--quantization` | Weight storage | Compute dtype | Requires |
+| --- | --- | --- | --- |
+| `none` (default) | as loaded | FP32 / FP16 / BF16 | nothing |
+| `int8-weight-only` | INT8 | BF16 | NVIDIA GPU |
+| `fp8-weight-only` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer |
+
+Both modes force BF16 compute: `--dtype` must be `auto` or `bfloat16`, and
+`auto` resolves to BF16 whenever quantization is on. `--backend` must be `auto`
+or `inductor`. Anything else raises `UnsupportedModelError` rather than silently
+degrading.
+
+Which layers get converted differs between the two, which matters for the
+memory saving you should expect:
+
+- `int8-weight-only` converts **every `nn.Linear` except `lm_head`**, including
+  the attention projections.
+- `fp8-weight-only` converts **only the MLP linears** (`.mlp.` in the module
+  path), leaving attention and `lm_head` in BF16.
+
+### TorchAO
+
+The conversion itself is [TorchAO](https://github.com/pytorch/ao)'s, not LM7's.
+LM7 pins `torchao==0.17.0` and calls `torchao.quantization.quantize_()` with
+`Int8WeightOnlyConfig` or `Float8WeightOnlyConfig`, passing a filter that selects
+the modules above. The quantized model is then compiled and run through the
+normal `inductor` path, so quantization composes with the rest of LM7 rather than
+being a separate execution path.
+
+```bash
+python -m pip install -e ".[hf,torchao]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia --backend inductor --dtype bfloat16 \
+  --quantization int8-weight-only
+```
+
+The run reports model storage bytes, quantization time, first-call and
+steady-state latency, and peak GPU memory, so the footprint/latency trade is
+visible rather than assumed.
+
+> [!NOTE]
+> This path is validated for exactly one model,
+> `HuggingFaceTB/SmolLM2-135M-Instruct`, and rejects every other model id. It is
+> NVIDIA-only and stays opt-in because weight-only quantization can be *slower*
+> at small batch sizes, where dequantization overhead outweighs the bandwidth
+> saved. Treat it as a measurement tool, not a default.
 
 ## Examples and more
 
