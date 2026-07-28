@@ -4,9 +4,9 @@
 
 LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
 Hand it a model you already run in PyTorch — a full pretrained network, a
-Hugging Face causal LM, a vision model, or a single layer — and it gives you back
-a normal callable. **You decide how much to decide:** name the hardware
-yourself, or let LM7 detect what the machine has.
+Hugging Face causal LM, a vision model, or a single layer — and you get back a
+normal callable. Name the hardware yourself, or let LM7 detect what the machine
+has.
 
 ```python
 import lm7
