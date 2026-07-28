@@ -183,10 +183,13 @@ python benchmarks/gpu.py \
   --output artifacts/benchmarks/mlp-fp16-b8.json
 ```
 
-With Hugging Face dependencies installed, use `--model smollm2` or
-`--model lfm25`. Add `tensorrt` to `--backend` in a Torch-TensorRT environment.
-Use `--compile-mode reduce-overhead` or `--compile-mode max-autotune` for
-Inductor.
+With Hugging Face dependencies installed, use `--model smollm2`,
+`--model lfm25`, `--model llama32-1b`, or `--model qwen35-0.8b`. Llama and
+Qwen use the same causal-LM benchmark path as the smaller validation models;
+Qwen's hybrid architecture can make first-call Inductor compilation much
+slower than the steady-state latency. Add `tensorrt` to `--backend` in a
+Torch-TensorRT environment. Use `--compile-mode reduce-overhead` or
+`--compile-mode max-autotune` for Inductor.
 
 Benchmark results are descriptive for the current machine. Portable CI does
 not enforce hardware-specific timing thresholds.
