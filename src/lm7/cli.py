@@ -13,6 +13,7 @@ from .api import backends as inspect_backends
 from .api import version
 from .backends import registry
 from .backends.base import CompileRequest
+from .bundles import create_bundle, load_bundle
 from .cache import cache_dir
 from .detection import detect_targets, resolve_target
 from .errors import LM7Error
@@ -88,6 +89,34 @@ def _doctor_data() -> dict[str, Any]:
     }
 
 
+def _target_spec_from_data(value: dict[str, Any]) -> TargetSpec:
+    return TargetSpec(
+        value["vendor"],
+        value["kind"],
+        value.get("architecture"),
+        value.get("model"),
+        value.get("ordinal"),
+        value.get("remote", False),
+    )
+
+
+def _bundle_data(path: str) -> dict[str, Any]:
+    bundle = load_bundle(path)
+    return {
+        "path": str(bundle.path),
+        "model_graph_hash": bundle.manifest.model_graph_hash,
+        "entries": [
+            {
+                "key": entry["key"],
+                "target": _target_spec_data(_target_spec_from_data(entry["target"])),
+                "backend": entry["backend"],
+                "path": entry["path"],
+            }
+            for entry in bundle.manifest.entries
+        ],
+    }
+
+
 def _format_memory(total_bytes: int | None) -> str:
     if total_bytes is None:
         return ""
@@ -151,6 +180,14 @@ def _print_doctor(data: dict[str, Any]) -> None:
     )
     print()
     _print_backends(data["backends"])
+
+
+def _print_bundle(data: dict[str, Any]) -> None:
+    print(f"Bundle: {data['path']}")
+    print(f"Model graph: {data['model_graph_hash']}")
+    print(f"Entries ({len(data['entries'])}):")
+    for entry in data["entries"]:
+        print(f"  {entry['key']}: {entry['target']['target']} / {entry['backend']}")
 
 
 def _print_model_run(result: HuggingFaceRunResult) -> None:
@@ -234,6 +271,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="experimental model quantization (default: none)",
     )
     _add_json_argument(run_parser)
+
+    bundle_parser = subparsers.add_parser("bundle", help="create and inspect LM7 bundles")
+    bundle_subparsers = bundle_parser.add_subparsers(dest="bundle_command", required=True)
+    bundle_create_parser = bundle_subparsers.add_parser(
+        "create", help="package target artifacts into a bundle"
+    )
+    bundle_create_parser.add_argument("output", help="output bundle directory")
+    bundle_create_parser.add_argument(
+        "artifacts", nargs="+", help="artifact directories to include"
+    )
+    _add_json_argument(bundle_create_parser)
+    bundle_inspect_parser = bundle_subparsers.add_parser(
+        "inspect", help="list bundle targets and backends"
+    )
+    bundle_inspect_parser.add_argument("bundle", help="bundle directory")
+    _add_json_argument(bundle_inspect_parser)
     return parser
 
 
@@ -265,6 +318,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 quantization=args.quantization,
             )
             _emit_json(result.to_dict()) if args.json else _print_model_run(result)
+        elif args.command == "bundle" and args.bundle_command == "create":
+            bundle = create_bundle(args.artifacts, output=args.output)
+            data = _bundle_data(str(bundle.path))
+            _emit_json(data) if args.json else _print_bundle(data)
+        elif args.command == "bundle" and args.bundle_command == "inspect":
+            data = _bundle_data(args.bundle)
+            _emit_json(data) if args.json else _print_bundle(data)
     except LM7Error as exc:
         if args.json:
             _emit_json({"error": {"type": type(exc).__name__, "message": str(exc)}})
