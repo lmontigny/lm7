@@ -3,8 +3,9 @@
 [![CI](https://github.com/lmontigny/lm7/actions/workflows/ci.yml/badge.svg)](https://github.com/lmontigny/lm7/actions/workflows/ci.yml)
 
 LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
-Give it an `nn.Module`; LM7 detects the machine, selects a compatible backend,
-moves inputs when requested, and returns a normal callable module.
+Use it when an application already has a PyTorch `nn.Module` and needs a
+repeatable way to choose the best local CPU, GPU, or accelerator backend
+without rewriting model code.
 
 ```python
 import torch
@@ -19,10 +20,11 @@ output = model(torch.randn(2, 16))
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
 > compatibility are not yet stable.
 
-## Install
+## Quick start
 
-LM7 currently targets Linux with Python 3.10 or newer and PyTorch 2.x. Start
-with an environment containing the PyTorch build appropriate for your hardware:
+Start with Python 3.10 or newer and a PyTorch build that matches the target
+machine. LM7 does not install GPU drivers, CUDA/ROCm toolchains, Xcode,
+PyTorch/XLA, or platform C++ compilers.
 
 ```bash
 git clone https://github.com/lmontigny/lm7.git
@@ -39,10 +41,7 @@ For development tools:
 python -m pip install -e ".[dev]"
 ```
 
-LM7 does not install GPU drivers, CUDA/ROCm toolchains, or platform C++
-compilers.
-
-Check the installation and see what LM7 can use locally:
+Then inspect the machine before compiling anything:
 
 ```bash
 lm7 doctor
@@ -62,13 +61,13 @@ Hardware setup details:
 - [Apple Silicon GPUs with Metal (MPS)](docs/apple-mps.md)
 - [Google TPUs with PyTorch/XLA and OpenXLA](docs/google-tpu.md)
 
-## Use LM7
+## Common workflows
 
-### Let LM7 choose
+### Compile an application model
 
 `target="auto"` prefers a detected GPU or accelerator and otherwise uses the
-CPU. Compilation is lazy: the first call selects a backend and compiles the
-input shape.
+CPU. Compilation is lazy: construct the wrapper during setup, then the first
+real request selects a backend and compiles that input signature.
 
 ```python
 compiled = lm7.compile(
@@ -86,7 +85,7 @@ print(compiled.selected_backend)
 `fallback="warn"` falls back to eager PyTorch if compilation fails. Use
 `fallback="error"` when a compiler failure must stop execution.
 
-### Choose hardware or a backend
+### Pin deployment hardware or backend
 
 Hardware targets and compiler backends are separate:
 
@@ -127,7 +126,7 @@ On a Google TPU VM, install the version-matched PyTorch/XLA runtime:
 python -m pip install -e ".[openxla]"
 ```
 
-### Inspect the decision
+### Explain a deployment decision
 
 ```python
 print(lm7.detect_targets())
@@ -138,7 +137,7 @@ print(lm7.explain(model, target="auto"))
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 `LM7_CACHE_DIR` provide defaults. Explicit function arguments take precedence.
 
-## Export and deploy
+### Export for another process or machine
 
 Create a source artifact with `torch.export`:
 
@@ -170,7 +169,7 @@ bundle = lm7.create_bundle(
 deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 ```
 
-## Hugging Face models
+### Run a Hugging Face causal LM from the CLI
 
 Install the optional dependencies:
 
