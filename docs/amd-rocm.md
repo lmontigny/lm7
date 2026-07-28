@@ -69,3 +69,6 @@ python benchmarks/gpu.py \
 The initial integration covers local single-GPU inference. It does not yet
 provide AMD-specific AOT packages, multi-GPU execution, quantization, or CI on
 physical AMD hardware.
+
+For a possible AMD-specific compiler path beyond TorchInductor, see the
+[MIGraphX evaluation plan](amd-migraphx.md).
