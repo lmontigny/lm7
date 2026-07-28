@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import platform
 import statistics
@@ -105,6 +106,9 @@ def _synchronize(target: TargetSpec | None) -> None:
         torch.cuda.synchronize(target.ordinal or 0)
     elif target.vendor == "apple":
         torch.mps.synchronize()
+    elif target.vendor == "tpu":
+        torch_xla = importlib.import_module("torch_xla")
+        torch_xla.sync(wait=True)
 
 
 def _peak_memory(target: TargetSpec) -> int | None:
@@ -142,6 +146,18 @@ def _environment(target: TargetSpec) -> Mapping[str, Any]:
         )
     elif target.vendor == "apple":
         value.update({"device_name": "Apple Metal GPU", "mps_built": torch.backends.mps.is_built()})
+    elif target.vendor == "tpu":
+        try:
+            xr = importlib.import_module("torch_xla.runtime")
+            value.update(
+                {
+                    "device_name": "Google TPU",
+                    "pjrt_device": xr.device_type(),
+                    "addressable_device_count": xr.addressable_device_count(),
+                }
+            )
+        except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as exc:
+            value.update({"device_name": "Google TPU", "pjrt_error": str(exc)})
     return value
 
 
