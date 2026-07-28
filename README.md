@@ -19,6 +19,23 @@ output = model(torch.randn(2, 16))
 `lm7.compile` returns a normal callable module, so the rest of your code does
 not change.
 
+**LM7 does not write kernels or a compiler of its own.** Each vendor already
+ships a good one, and LM7 drives it: TorchInductor for CPU and GPU, TensorRT on
+NVIDIA, PyTorch/XLA and OpenXLA on TPU, AOTInductor for persistent packages.
+What LM7 adds is one surface over all of them, so moving the same module to
+different hardware is a one-string change instead of a rewrite:
+
+```python
+lm7.compile(model, target="cpu")  # TorchInductor CPU kernels
+lm7.compile(model, target="apple")  # same module, Metal via MPS
+lm7.compile(model, target="nvidia", backend="tensorrt")  # same module, TensorRT
+```
+
+The corollary is that LM7's reach is bounded by what those vendor toolchains
+already support — adding hardware means wiring up its compiler, not writing one,
+which is what the evaluation plans under
+[supported hardware](#supported-hardware) work through.
+
 > [!WARNING]
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
 > compatibility are not yet stable.
@@ -26,14 +43,59 @@ not change.
 ## How it works
 
 - **Target vs. backend are separate.** A *target* is where the model runs
-  (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used to get
-  there (`eager`, `inductor`, `tensorrt`, …). Pin either, or let LM7 choose.
+  (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the vendor compiler used
+  to get there (`eager`, `inductor`, `tensorrt`, …). Pin either, or let LM7
+  choose. This split is what makes hardware swappable: the same module and the
+  same call site work on any target that has a compatible backend.
 - **Detection is automatic.** `target="auto"` prefers a detected GPU or
   accelerator and otherwise uses the CPU.
-- **Compilation is lazy and per-input-shape.** Nothing compiles until the first
-  call; the first call is slow, later calls are fast.
+- **JIT compilation is lazy and per-input-shape.** With a JIT backend nothing
+  compiles until the first call; that call is slow and later calls are fast. AOT
+  backends move that cost out of the process entirely — see
+  [JIT vs. AOT](#jit-vs-aot).
 - **Fallback is safe by default.** If a backend fails to compile, LM7 falls
   back to PyTorch eager and warns. Use `fallback="error"` to stop instead.
+
+## Supported hardware
+
+`lm7 targets` reports what is actually present on the current machine. LM7
+detects local PyTorch devices only — it does not install drivers or vendor
+toolchains, and it never reaches remote hardware.
+
+| Target | Detected via | Default backend | Status |
+| --- | --- | --- | --- |
+| `cpu`, `cpu:arm64` | always present, listed last | `inductor` | Supported, covered by CI |
+| `nvidia`, `nvidia:sm89` | `torch.cuda` on a CUDA build | `inductor` (or `tensorrt`) | Supported, no physical-GPU CI |
+| `amd`, `amd:gfx942` | `torch.cuda` with `torch.version.hip` | `inductor` | Initial integration, no CI |
+| `apple` | `torch.backends.mps` | `inductor` | Initial integration, wider float16 tolerance |
+| `intel` | `torch.xpu` | `inductor` | Detected and plannable, least exercised |
+| `tpu` | a real PJRT `TPU` runtime | `openxla` | Initial integration, TPU VM only |
+
+Targets accept an optional qualifier — an architecture (`nvidia:sm89`,
+`amd:gfx942`), a device model, or an ordinal for multi-GPU hosts.
+`target="auto"` prefers the first detected GPU or accelerator and falls back to
+CPU.
+
+**Under evaluation, not yet selectable.** Each has a written plan and a
+measurement harness, and none is registered as a backend or reachable from
+automatic planning:
+
+| Hardware | Vendor compiler | Plan | Harness |
+| --- | --- | --- | --- |
+| Intel CPU, GPU, NPU | OpenVINO | [plan](docs/openvino-evaluation.md) | `benchmarks/openvino_eval.py` |
+| AMD GPU | MIGraphX | [plan](docs/amd-migraphx.md) | `benchmarks/migraphx.py` |
+| Qualcomm Hexagon NPU | Hexagon-MLIR | [plan](docs/qualcomm-hexagon.md) | `benchmarks/hexagon.py` |
+
+The OpenVINO evaluation is furthest along: on an Apple M4 Pro at matched FP32
+precision, OpenVINO IR artifacts beat eager PyTorch on real models (1.3x on
+ResNet-18, 2.2x on SmolLM2 prefill) while losing on a trivial MLP, and the
+`torch.compile` path was consistently worse than the IR path. Those numbers come
+from an ARM host, so the Intel measurements that would actually decide the
+question are still outstanding.
+
+`aws:trainium` parses into a `TargetSpec` with `remote=True`, but nothing
+detects or executes it. Hexagon would need the same remote handling, which is
+why it is a plan rather than a backend.
 
 The tasks below follow the usual path: install, detect the hardware, compile a
 local model, run a Hugging Face model, and export an artifact.
@@ -94,13 +156,18 @@ lm7.compile(model, target="nvidia", backend="tensorrt")
 lm7.compile(model, target="tpu", backend="openxla")
 ```
 
-| Backend | Availability | Purpose |
-| --- | --- | --- |
-| `eager` | Any detected PyTorch device | Reference execution and fallback |
-| `inductor` | PyTorch with `torch.compile` | Default JIT compiler |
-| `aot_inductor` | CPU/Apple prototype | Persistent ahead-of-time `.pt2` package |
-| `tensorrt` | Optional NVIDIA prototype | Torch-TensorRT JIT engine |
-| `openxla` | Optional Google TPU prototype | PyTorch/XLA and OpenXLA JIT compiler |
+| Backend | Underlying compiler | Model | Targets | Priority |
+| --- | --- | --- | --- | --- |
+| `inductor` | TorchInductor (`torch.compile`) | JIT | cpu, nvidia, amd, intel, apple | 100 |
+| `openxla` | PyTorch/XLA + OpenXLA | JIT | tpu | 100 |
+| `aot_inductor` | AOTInductor (`.pt2` package) | **AOT** | cpu, apple | 90 |
+| `tensorrt` | Torch-TensorRT | JIT | nvidia | 90 |
+| `eager` | none — plain PyTorch | none | any detected device | 0 |
+
+With `backend="auto"` LM7 picks the highest-priority backend that reports support
+for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
+`inductor` and TPU defaults to `openxla`. `eager` wins only when nothing else
+supports the target, or when a compile fails and `fallback="warn"` takes over.
 
 `tensorrt` and `openxla` need version-matched extras and must be selected
 explicitly: `pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
@@ -108,6 +175,48 @@ explicitly: `pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
 
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 `LM7_CACHE_DIR` set defaults; explicit function arguments take precedence.
+
+### JIT vs. AOT
+
+The difference is *when* compilation happens and *whether the result outlives
+the process*.
+
+**JIT** (`inductor`, `tensorrt`, `openxla`) compiles inside your process, on the
+first call, once per input signature:
+
+```python
+compiled = lm7.compile(model, target="cpu")  # returns immediately, compiles nothing
+out = compiled(example_input)  # first call: compiles, then runs
+out = compiled(example_input)  # subsequent calls: fast
+out = compiled(other_shape)  # new signature: compiles again
+```
+
+Nothing is written that another process can use. Restarting pays the compile
+cost again, and TensorRT engines and JIT callables cannot be shipped.
+
+**AOT** happens up front, through `lm7.export`, and writes an `.lm7` directory
+another process can load. There are two levels of it, which is worth being
+precise about:
+
+```python
+# Capture only: a portable ExportedProgram. PyTorch still generates kernels
+# when it runs, so this removes tracing, not compilation.
+lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
+
+# Capture and compile: a persistent AOTInductor package with kernels baked in.
+lm7.export(
+    model, args=(example_input,), target="cpu", backend="aot_inductor", output="model-aot.lm7"
+)
+
+loaded = lm7.load_artifact("model-aot.lm7")  # another process, nothing to compile
+out = loaded(example_input)
+```
+
+Use JIT while iterating locally, and `aot_inductor` when you want the compile
+cost paid once at build time instead of on every process start. Two caveats: AOT
+fixes the input signature captured at export time, and `.lm7` artifacts are tied
+to compatible PyTorch, runtime, and hardware versions rather than being a stable
+cross-version ABI.
 
 ## 4. Run a Hugging Face model
 
@@ -202,12 +311,16 @@ for environment checks, GPU integration tests, and compiler IR output, and
 ## Current limitations
 
 - Inference only; training and backward compilation are unsupported.
-- Only local PyTorch devices are detected.
-- JIT compiled callables and TensorRT engines are process-local.
+- Only local PyTorch devices are detected, and only the hardware listed under
+  [supported hardware](#supported-hardware).
+- JIT compiled callables and TensorRT engines are process-local; only
+  `aot_inductor` and `lm7.export` produce something another process can load.
 - AOTInductor is validated only for CPU and Apple Silicon (MPS) and uses Beta
   PyTorch APIs.
-- AMD ROCm, Apple Silicon (MPS), and OpenXLA TPU support are initial
+- AMD ROCm, Apple Silicon (MPS), Intel XPU, and OpenXLA TPU support are initial
   single-process integrations without physical-hardware CI.
+- Intel OpenVINO, AMD MIGraphX, and Qualcomm Hexagon are evaluation plans with
+  measurement harnesses, not usable backends.
 - Quantization, distributed inference, remote hardware, and a stable compiled
   artifact ABI are future work.
 
