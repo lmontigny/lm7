@@ -59,3 +59,6 @@ against eager and Inductor on representative models before becoming an
 automatic choice. Adding it to generic CPU support would otherwise introduce a
 large optional runtime and another model-coverage surface without being needed
 for correctness.
+
+See the [OpenVINO evaluation plan](openvino-evaluation.md) for the proposed
+acceptance criteria and first implementation slice.
