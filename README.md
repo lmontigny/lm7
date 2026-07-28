@@ -198,45 +198,22 @@ The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 
 ### JIT vs. AOT
 
-The difference is *when* compilation happens and *whether the result outlives
-the process*.
+The difference is *when* compilation happens and *whether the result outlives the
+process*.
 
-**JIT** (`inductor`, `tensorrt`, `openxla`) compiles inside your process, on the
-first call, once per input signature:
+- **JIT** (`inductor`, `tensorrt`, `openxla`) compiles inside your process, on
+  the first call, once per input signature. Nothing is written that another
+  process can use, so restarting recompiles.
+- **AOT** (`lm7.export`) compiles up front and writes an `.lm7` directory another
+  process loads with no compile step. Use `backend="aot_inductor"` to bake in
+  kernels; the default `backend="export"` captures a portable `ExportedProgram`
+  but still generates kernels at run time.
 
-```python
-compiled = lm7.compile(model, target="cpu")  # returns immediately, compiles nothing
-out = compiled(example_input)  # first call: compiles, then runs
-out = compiled(example_input)  # subsequent calls: fast
-out = compiled(other_shape)  # new signature: compiles again
-```
+Use JIT while iterating locally, and AOT when you want the compile cost paid once
+at build time instead of on every process start.
 
-Nothing is written that another process can use. Restarting pays the compile
-cost again, and TensorRT engines and JIT callables cannot be shipped.
-
-**AOT** happens up front, through `lm7.export`, and writes an `.lm7` directory
-another process can load. There are two levels of it, which is worth being
-precise about:
-
-```python
-# Capture only: a portable ExportedProgram. PyTorch still generates kernels
-# when it runs, so this removes tracing, not compilation.
-lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
-
-# Capture and compile: a persistent AOTInductor package with kernels baked in.
-lm7.export(
-    model, args=(example_input,), target="cpu", backend="aot_inductor", output="model-aot.lm7"
-)
-
-loaded = lm7.load_artifact("model-aot.lm7")  # another process, nothing to compile
-out = loaded(example_input)
-```
-
-Use JIT while iterating locally, and `aot_inductor` when you want the compile
-cost paid once at build time instead of on every process start. Two caveats: AOT
-fixes the input signature captured at export time, and `.lm7` artifacts are tied
-to compatible PyTorch, runtime, and hardware versions rather than being a stable
-cross-version ABI.
+See [JIT vs. AOT](docs/jit-vs-aot.md) for the two export levels, bundles, and the
+caveats — AOT fixes the input signature, and artifacts are not a stable ABI.
 
 ## 4. Run a Hugging Face model
 
