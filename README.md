@@ -193,11 +193,17 @@ lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
   --prompt "The capital of France is" \
   --target auto \
   --backend auto
+lm7 model run hf://Qwen/Qwen3.5-0.8B \
+  --prompt "The capital of France is" \
+  --target auto \
+  --backend auto
 ```
 
 `unsloth/Llama-3.2-1B-Instruct` is an ungated mirror of Meta's
 Llama-3.2-1B-Instruct weights; the original `meta-llama` repository requires
-accepting Meta's license and an authenticated Hugging Face token.
+accepting Meta's license and an authenticated Hugging Face token. Qwen3.5 uses
+a hybrid linear-attention/convolution architecture; first-call compilation is
+noticeably slower than the other validated models (about a minute locally).
 
 The command downloads through the normal Hugging Face cache, compiles a
 causal-LM forward pass, and reports the selected target and backend, first-call
@@ -206,11 +212,11 @@ output. The current
 JIT result is process-local; this command does not yet package weights,
 tokenizers, or a persistent GPU executable.
 
-`target="auto"` also compiles all three models on a local Apple Silicon GPU
+`target="auto"` also compiles all four models on a local Apple Silicon GPU
 (see [Apple Silicon GPUs](docs/apple-mps.md)). Compiled float16 logits diverge
 slightly more from eager on MPS than on CUDA; validated on SmolLM2-135M,
-LFM2.5-230M, and Llama-3.2-1B-Instruct with the wider tolerance in
-`tests/test_hf_integration.py`.
+LFM2.5-230M, Llama-3.2-1B-Instruct, and Qwen3.5-0.8B with the wider tolerance
+in `tests/test_hf_integration.py`.
 
 For experimental NVIDIA INT8 or FP8 weight-only inference, install TorchAO and
 select quantization explicitly:
@@ -256,6 +262,8 @@ python examples/hf_causal_lm.py \
   --model hf://LiquidAI/LFM2.5-230M
 python examples/hf_causal_lm.py \
   --model hf://unsloth/Llama-3.2-1B-Instruct
+python examples/hf_causal_lm.py \
+  --model hf://Qwen/Qwen3.5-0.8B
 ```
 
 Model weights stay in the normal Hugging Face cache and are not added to this

@@ -110,6 +110,7 @@ python -m pip install -e ".[dev,hf]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target apple --backend inductor
 python examples/hf_causal_lm.py --model hf://LiquidAI/LFM2.5-230M --target apple
 python examples/hf_causal_lm.py --model hf://unsloth/Llama-3.2-1B-Instruct --target apple
+python examples/hf_causal_lm.py --model hf://Qwen/Qwen3.5-0.8B --target apple
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
@@ -119,12 +120,20 @@ an accepted license and an authenticated Hugging Face token.
 
 MPS float16 matmul reductions accumulate in a different order than CUDA and
 produce a wider tail of outlier logits. Validated locally on SmolLM2-135M
-(max absolute logit diff about 0.20), LFM2.5-230M (about 0.03), and
-Llama-3.2-1B-Instruct (about 0.03); all three keep matching next-token
-predictions and cosine similarity above 0.9999 against eager.
-`tests/test_hf_integration.py` uses a wider `atol` on the `apple` vendor to
-account for this. TorchAO INT8/FP8 weight-only quantization remains
-NVIDIA-only and validated only for SmolLM2.
+(max absolute logit diff about 0.20), LFM2.5-230M (about 0.03),
+Llama-3.2-1B-Instruct (about 0.03), and Qwen3.5-0.8B (about 0.02); all four
+keep matching next-token predictions and cosine similarity above 0.9999
+against eager. `tests/test_hf_integration.py` uses a wider `atol` on the
+`apple` vendor to account for this. TorchAO INT8/FP8 weight-only
+quantization remains NVIDIA-only and validated only for SmolLM2.
+
+Qwen3.5 (like LFM2.5) uses a hybrid linear-attention/convolution
+architecture rather than plain attention. It runs correctly through both
+`inductor` and `aot_inductor` on Apple Silicon, but the generated C++ is
+much larger for this architecture: first-call compilation took roughly a
+minute for `inductor` and several minutes for `aot_inductor` locally
+(clang genuinely compiling a large generated wrapper, not hung), versus
+single-digit seconds for SmolLM2/LFM2.5/Llama.
 
 The initial integration covers local single-GPU inference. It does not yet
 provide TorchAO quantization or CI on physical Apple hardware; TorchInductor

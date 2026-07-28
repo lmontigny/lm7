@@ -19,6 +19,7 @@ MODEL_IDS = (
     "HuggingFaceTB/SmolLM2-135M-Instruct",
     "LiquidAI/LFM2.5-230M",
     "unsloth/Llama-3.2-1B-Instruct",
+    "Qwen/Qwen3.5-0.8B",
 )
 RUN_HF_TESTS = os.environ.get("LM7_RUN_HF_TESTS") == "1"
 HAS_ACCELERATOR = torch.cuda.is_available() or torch.backends.mps.is_available()

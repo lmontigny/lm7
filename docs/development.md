@@ -97,9 +97,12 @@ architecture remains available in BF16/FP16, but LM7 rejects INT8 for it after
 local full-logit validation showed unacceptable divergence.
 
 The examples use `HuggingFaceTB/SmolLM2-135M-Instruct`, `LiquidAI/LFM2.5-230M`,
-and `unsloth/Llama-3.2-1B-Instruct` (an ungated mirror of Meta's
+`unsloth/Llama-3.2-1B-Instruct` (an ungated mirror of Meta's
 Llama-3.2-1B-Instruct, which itself requires accepting a license and an
-authenticated token).
+authenticated token), and `Qwen/Qwen3.5-0.8B`. Qwen3.5 is also a hybrid
+linear-attention/convolution architecture like LFM2.5, and its Inductor
+compilation is noticeably slower (roughly a minute for the first call
+locally) than the other three models.
 
 Exercise the user-facing compiled model command on the local GPU:
 
