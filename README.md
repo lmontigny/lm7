@@ -3,10 +3,9 @@
 [![CI](https://github.com/lmontigny/lm7/actions/workflows/ci.yml/badge.svg)](https://github.com/lmontigny/lm7/actions/workflows/ci.yml)
 
 LM7 is a small, PyTorch-first compiler orchestration layer for local inference.
-Use it when an application already has a PyTorch `nn.Module` and needs a
-repeatable way to choose the best local CPU, GPU, or accelerator backend
-without rewriting model code. You keep writing ordinary PyTorch; LM7 decides
-*where* and *how* it runs.
+Give it a PyTorch `nn.Module` and LM7 picks the best local CPU, GPU, or
+accelerator backend for the machine it runs on — you keep writing ordinary
+PyTorch and LM7 decides *where* and *how* it runs.
 
 ```python
 import torch
@@ -26,28 +25,23 @@ not change.
 
 ## How it works
 
-A few ideas explain most of the API:
-
-- **Hardware target vs. backend are separate.** A *target* is where the model
-  runs (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used
-  to get there (`eager`, `inductor`, `tensorrt`, …). Pin either one, or let LM7
-  choose.
-- **Detection is automatic.** `target="auto"` probes the machine, prefers a
-  detected GPU or accelerator, and otherwise uses the CPU. `lm7 targets` shows
-  what LM7 found.
+- **Target vs. backend are separate.** A *target* is where the model runs
+  (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used to get
+  there (`eager`, `inductor`, `tensorrt`, …). Pin either, or let LM7 choose.
+- **Detection is automatic.** `target="auto"` prefers a detected GPU or
+  accelerator and otherwise uses the CPU.
 - **Compilation is lazy and per-input-shape.** Nothing compiles until the first
-  call; each new input signature compiles its own variant and is reused after
-  that. Expect the first call to be slow and later calls to be fast.
+  call; the first call is slow, later calls are fast.
 - **Fallback is safe by default.** If a backend fails to compile, LM7 falls
-  back to plain PyTorch eager and warns, so a compiler problem does not stop
-  inference. Use `fallback="error"` when you would rather it stop.
-- **Nothing is hidden.** `lm7 explain --target auto` (or `lm7.explain(model)`)
-  prints which backend LM7 would pick and why.
+  back to PyTorch eager and warns. Use `fallback="error"` to stop instead.
 
-## Quick start
+The tasks below follow the usual path: install, detect the hardware, compile a
+local model, run a Hugging Face model, and export an artifact.
 
-Start with Python 3.10 or newer and a PyTorch build that matches the target
-machine. LM7 does not install GPU drivers, CUDA/ROCm toolchains, Xcode,
+## 1. Install
+
+LM7 needs Python 3.10 or newer and a PyTorch build that matches the target
+machine. It does **not** install GPU drivers, CUDA/ROCm toolchains, Xcode,
 PyTorch/XLA, or platform C++ compilers.
 
 ```bash
@@ -56,72 +50,46 @@ cd lm7
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -e .          # add ".[dev]" for pytest + ruff
 ```
 
-For development tools:
+Per-hardware setup: [CPU](docs/cpu.md) ·
+[NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
+[Apple Silicon (MPS)](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md).
+
+## 2. Detect the hardware
+
+See what LM7 can use locally, and why it would choose a given backend:
 
 ```bash
-python -m pip install -e ".[dev]"
+lm7 doctor                    # environment and install check
+lm7 targets                   # detected hardware targets
+lm7 backends                  # registered compiler backends
+lm7 explain --target auto     # which backend LM7 would pick, and why
 ```
 
-Then inspect the machine before compiling anything:
+Add `--json` to any command for machine-readable output. The same CLI is
+available as `python -m lm7`.
 
-```bash
-lm7 doctor
-lm7 targets
-lm7 backends
-lm7 explain --target auto
-```
+## 3. Compile a local model
 
-Add `--json` to any command for machine-readable output, for example
-`lm7 doctor --json`. The same CLI is available as `python -m lm7`.
-
-Hardware setup details:
-
-- [CPU inference](docs/cpu.md)
-- [NVIDIA and development testing](docs/development.md#nvidia-cuda)
-- [AMD GPUs with ROCm](docs/amd-rocm.md)
-- [Apple Silicon GPUs with Metal (MPS)](docs/apple-mps.md)
-- [Google TPUs with PyTorch/XLA and OpenXLA](docs/google-tpu.md)
-
-## Common workflows
-
-### Compile an application model
-
-`target="auto"` prefers a detected GPU or accelerator and otherwise uses the
-CPU. Compilation is lazy: construct the wrapper during setup, then the first
-real request selects a backend and compiles that input signature.
+`target="auto"` selects hardware for you; the first real call compiles that
+input signature:
 
 ```python
-compiled = lm7.compile(
-    model.eval(),
-    target="auto",
-    transfers="automatic",
-    fallback="warn",
-)
+compiled = lm7.compile(model.eval(), target="auto")
 result = compiled(example_input)
 
-print(compiled.target)
-print(compiled.selected_backend)
+print(compiled.target, compiled.selected_backend)
 ```
 
-`fallback="warn"` falls back to eager PyTorch if compilation fails. Use
-`fallback="error"` when a compiler failure must stop execution.
-
-### Pin deployment hardware or backend
-
-Hardware targets and compiler backends are separate:
+Pin the hardware target, the backend, or both:
 
 ```python
 lm7.compile(model, target="cpu")
-lm7.compile(model, target="nvidia")
 lm7.compile(model, target="nvidia:sm89")
 lm7.compile(model, target="amd:gfx942")
 lm7.compile(model, target="apple")
-lm7.compile(model, target="tpu")
-
-lm7.compile(model, target="nvidia", backend="inductor")
 lm7.compile(model, target="nvidia", backend="tensorrt")
 lm7.compile(model, target="tpu", backend="openxla")
 ```
@@ -134,207 +102,101 @@ lm7.compile(model, target="tpu", backend="openxla")
 | `tensorrt` | Optional NVIDIA prototype | Torch-TensorRT JIT engine |
 | `openxla` | Optional Google TPU prototype | PyTorch/XLA and OpenXLA JIT compiler |
 
-TensorRT must be installed in a version-matched environment and selected
-explicitly:
-
-```bash
-python -m pip install -e ".[tensorrt]"
-```
-
-The current extra installs Torch-TensorRT 2.12.1 and its compatible PyTorch
-2.12/CUDA 13 stack.
-
-On a Google TPU VM, install the version-matched PyTorch/XLA runtime:
-
-```bash
-python -m pip install -e ".[openxla]"
-```
-
-### Explain a deployment decision
-
-```python
-print(lm7.detect_targets())
-print(lm7.backends())
-print(lm7.explain(model, target="auto"))
-```
+`tensorrt` and `openxla` need version-matched extras and must be selected
+explicitly: `pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
+2.12 / CUDA 13) or, on a TPU VM, `pip install -e ".[openxla]"`.
 
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
-`LM7_CACHE_DIR` provide defaults. Explicit function arguments take precedence.
+`LM7_CACHE_DIR` set defaults; explicit function arguments take precedence.
 
-### Export for another process or machine
+## 4. Run a Hugging Face model
 
-Create a source artifact with `torch.export`:
+Install the optional dependencies, then run a causal-LM forward pass from a
+Hugging Face URI:
+
+```bash
+python -m pip install -e ".[hf]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompt "The capital of France is" --target auto --backend auto
+```
+
+Validated compact, ungated models: `HuggingFaceTB/SmolLM2-135M-Instruct`,
+`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct` (an ungated mirror of
+Meta's Llama-3.2-1B-Instruct), and `Qwen/Qwen3.5-0.8B` (hybrid architecture; its
+first-call compilation is noticeably slower, about a minute locally). All four
+also compile on a local Apple Silicon GPU, with slightly wider float16
+tolerance on MPS than CUDA.
+
+The command downloads through the normal Hugging Face cache, compiles the
+forward pass, and reports the selected target and backend, first-call and
+steady-call time, and the predicted next token (`--json` for structured
+output). The JIT result is process-local: weights, tokenizers, and a persistent
+GPU executable are not yet packaged.
+
+The Python example additionally validates logits and deterministic generation:
+
+```bash
+python examples/hf_causal_lm.py --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
+```
+
+**Experimental low-bit inference (NVIDIA only).** Install TorchAO and select
+quantization explicitly:
+
+```bash
+python -m pip install -e ".[hf,torchao]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia --backend inductor --dtype bfloat16 \
+  --quantization int8-weight-only
+```
+
+Use `--quantization fp8-weight-only` on NVIDIA Ada (`sm89`), Hopper (`sm90`), or
+newer GPUs. LM7 quantizes MLP linear weights only, leaves `lm_head` in BF16, and
+reports model storage, quantization time, latency, and peak GPU memory. This
+path is validated for SmolLM2-135M and rejects unvalidated model IDs; it stays
+opt-in because small models may be slower on other shapes and hardware.
+
+## 5. Export an artifact
+
+Capture a model with `torch.export` and reload it in another process:
 
 ```python
-artifact = lm7.export(
-    model,
-    args=(example_input,),
-    target="cpu",
-    output="model.lm7",
-)
+artifact = lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
 
 loaded = lm7.load_artifact("model.lm7")
 output = loaded(example_input)
 ```
 
-An `.lm7` artifact is a directory containing a versioned manifest, checksums,
-and a PyTorch `.pt2` program. Use `backend="aot_inductor"` to build the current
-CPU AOT prototype. Compiled artifacts remain specific to compatible PyTorch,
-runtime, and hardware versions.
+An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
+PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU/Apple
+AOT prototype. Artifacts stay specific to compatible PyTorch, runtime, and
+hardware versions — they are not a stable cross-version ABI.
 
-Applications targeting several machines can combine artifacts:
+Combine per-target artifacts into one bundle and select at load time, from
+Python or the CLI:
 
 ```python
-bundle = lm7.create_bundle(
-    ["build/cpu.lm7", "build/nvidia.lm7"],
-    output="model.bundle.lm7",
-)
-
+lm7.create_bundle(["build/cpu.lm7", "build/nvidia.lm7"], output="model.bundle.lm7")
 deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 ```
 
-The same packaging flow is available from the CLI:
-
 ```bash
 lm7 bundle create model.bundle.lm7 build/cpu.lm7 build/nvidia.lm7
-lm7 bundle inspect model.bundle.lm7
-lm7 bundle inspect model.bundle.lm7 --json
+lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 ```
 
-### Run a Hugging Face causal LM from the CLI
-
-Install the optional dependencies:
+## Examples and more
 
 ```bash
-python -m pip install -e ".[hf]"
+python examples/basic_mlp.py                 # CPU
+python examples/cuda_mlp.py --target nvidia   # NVIDIA
+python examples/mac_mlp.py                    # Apple Silicon
+python examples/local_targets.py --require-nvidia   # CPU vs NVIDIA parity
+python benchmarks/local.py --target cpu nvidia --backend eager inductor
 ```
 
-Then try any of these compact, ungated test models:
-
-```bash
-lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --prompt "The capital of France is" \
-  --target auto \
-  --backend auto
-lm7 model run hf://LiquidAI/LFM2.5-230M \
-  --prompt "The capital of France is" \
-  --target nvidia \
-  --backend inductor
-lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
-  --prompt "The capital of France is" \
-  --target auto \
-  --backend auto
-lm7 model run hf://Qwen/Qwen3.5-0.8B \
-  --prompt "The capital of France is" \
-  --target auto \
-  --backend auto
-```
-
-`unsloth/Llama-3.2-1B-Instruct` is an ungated mirror of Meta's
-Llama-3.2-1B-Instruct weights; the original `meta-llama` repository requires
-accepting Meta's license and an authenticated Hugging Face token. Qwen3.5 uses
-a hybrid linear-attention/convolution architecture; first-call compilation is
-noticeably slower than the other validated models (about a minute locally).
-
-The command downloads through the normal Hugging Face cache, compiles a
-causal-LM forward pass, and reports the selected target and backend, first-call
-and steady-call time, and predicted next token. Add `--json` for structured
-output. The current
-JIT result is process-local; this command does not yet package weights,
-tokenizers, or a persistent GPU executable.
-
-`target="auto"` also compiles all four models on a local Apple Silicon GPU
-(see [Apple Silicon GPUs](docs/apple-mps.md)). Compiled float16 logits diverge
-slightly more from eager on MPS than on CUDA; validated on SmolLM2-135M,
-LFM2.5-230M, Llama-3.2-1B-Instruct, and Qwen3.5-0.8B with the wider tolerance
-in `tests/test_hf_integration.py`.
-
-For experimental NVIDIA INT8 or FP8 weight-only inference, install TorchAO and
-select quantization explicitly:
-
-```bash
-python -m pip install -e ".[hf,torchao]"
-lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --target nvidia \
-  --backend inductor \
-  --dtype bfloat16 \
-  --quantization int8-weight-only
-```
-
-Use `--quantization fp8-weight-only` instead on NVIDIA Ada (`sm89`), Hopper
-(`sm90`), or newer GPUs. LM7 uses TorchAO's version 2 weight-only
-configurations and reports model storage before and after quantization,
-quantization time, steady-call latency, and peak GPU memory. Model storage
-measures weights and buffers; peak GPU memory also includes compiler
-workspaces, kernels, activations, and temporary allocations, so it will not
-fall by the same percentage.
-
-These paths are initially NVIDIA-only and validated for SmolLM2-135M. LM7
-leaves `lm_head` in BF16. The FP8 policy quantizes MLP linear weights only:
-local validation reduced stored model bytes by about 29% while preserving the
-next token. The same local RTX 4070 SUPER run measured about 195 MiB peak
-allocated GPU memory, versus about 279 MiB for BF16. Exact latency and memory
-depend on the model, prompt shape, compiler cache, and GPU. Quantizing every
-linear reduced storage further but changed the output, so LM7 does not use that
-policy. LM7 rejects unvalidated model IDs, and LiquidAI LFM2.5 remains
-supported without quantization. Low-bit inference remains opt-in because small
-models may still be slower on other shapes and hardware.
-
-NVFP4 is not exposed yet: TorchAO's execution kernels require NVIDIA Blackwell
-(`sm100+`), while an RTX 4070 is Ada (`sm89`). FP8 is the supported low-bit
-floating-point path on that GPU.
-
-The Python example additionally validates logits and deterministic generation:
-
-```bash
-python examples/hf_causal_lm.py \
-  --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
-python examples/hf_causal_lm.py \
-  --model hf://LiquidAI/LFM2.5-230M
-python examples/hf_causal_lm.py \
-  --model hf://unsloth/Llama-3.2-1B-Instruct
-python examples/hf_causal_lm.py \
-  --model hf://Qwen/Qwen3.5-0.8B
-```
-
-Model weights stay in the normal Hugging Face cache and are not added to this
-repository.
-
-## Test local CPU and NVIDIA
-
-Validate identical model weights and inputs on CPU TorchInductor and the local
-NVIDIA GPU:
-
-```bash
-python examples/local_targets.py --require-nvidia
-```
-
-Compare first-call cost and steady-state latency:
-
-```bash
-python benchmarks/local.py \
-  --target cpu nvidia \
-  --backend eager inductor
-```
-
-OpenVINO is not required for CPU execution. LM7 already uses eager PyTorch,
-TorchInductor, and the AOTInductor CPU prototype. OpenVINO remains a possible
-future optional backend for Intel-specific CPU, GPU, or NPU deployment.
-
-## Examples
-
-```bash
-python examples/basic_mlp.py
-python examples/aot_mlp.py
-python examples/cuda_mlp.py --target nvidia
-python examples/rocm_mlp.py
-python examples/mac_mlp.py
-python examples/tpu_mlp.py
-python benchmarks/gpu.py --target auto --model mlp --backend eager inductor
-```
-
-See [development and testing](docs/development.md) for environment checks, GPU
-integration tests, compiler IR output, and benchmarks. See
+More examples live in [`examples/`](examples), and benchmarks in
+[`benchmarks/`](benchmarks). See [development and testing](docs/development.md)
+for environment checks, GPU integration tests, and compiler IR output, and
 [architecture](docs/architecture.md) for the backend and artifact design.
 
 ## Current limitations
