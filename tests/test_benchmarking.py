@@ -4,7 +4,8 @@ import pytest
 import torch
 
 import lm7
-from lm7.benchmarking import _percentile
+from lm7.benchmarking import _environment, _percentile, _synchronize
+from lm7.targets import TargetSpec
 
 
 def test_cpu_eager_benchmark_reports_stable_schema():
@@ -76,3 +77,43 @@ def test_batch_size_is_detected_in_keyword_inputs():
     )
 
     assert result.batch_size == 3
+
+
+def test_tpu_synchronize_uses_torch_xla(monkeypatch):
+    calls = {}
+
+    class FakeTorchXla:
+        @staticmethod
+        def sync(*, wait):
+            calls["wait"] = wait
+
+    monkeypatch.setattr(
+        "lm7.benchmarking.importlib.import_module",
+        lambda name: FakeTorchXla if name == "torch_xla" else None,
+    )
+
+    _synchronize(TargetSpec("tpu", "accelerator"))
+
+    assert calls == {"wait": True}
+
+
+def test_tpu_environment_reports_pjrt_metadata(monkeypatch):
+    class FakeRuntime:
+        @staticmethod
+        def device_type():
+            return "TPU"
+
+        @staticmethod
+        def addressable_device_count():
+            return 8
+
+    monkeypatch.setattr(
+        "lm7.benchmarking.importlib.import_module",
+        lambda name: FakeRuntime if name == "torch_xla.runtime" else None,
+    )
+
+    environment = _environment(TargetSpec("tpu", "accelerator"))
+
+    assert environment["device_name"] == "Google TPU"
+    assert environment["pjrt_device"] == "TPU"
+    assert environment["addressable_device_count"] == 8
