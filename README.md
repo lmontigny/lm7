@@ -68,44 +68,31 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 ## Supported hardware
 
-`lm7 targets` reports what is actually present on the current machine. LM7
-detects local PyTorch devices only — it does not install drivers or vendor
-toolchains, and it never reaches remote hardware.
-
-| Target | Detected via | Default backend | Status |
+| Vendor | Hardware | `target` | Status |
 | --- | --- | --- | --- |
-| `cpu`, `cpu:arm64` | always present, listed last | `inductor` | Supported, covered by CI |
-| `nvidia`, `nvidia:sm89` | `torch.cuda` on a CUDA build | `inductor` (Triton); `tensorrt` opt-in | Supported, no physical-GPU CI |
-| `amd`, `amd:gfx942` | `torch.cuda` with `torch.version.hip` | `inductor` | Initial integration, no CI |
-| `apple` | `torch.backends.mps` | `inductor` | Initial integration, wider float16 tolerance |
-| `intel` | `torch.xpu` | `inductor` | Detected and plannable, least exercised |
-| `tpu` | a real PJRT `TPU` runtime | `openxla` | Initial integration, TPU VM only |
+| any | CPU (x86-64, ARM64) | `cpu` | Supported |
+| NVIDIA | GPU | `nvidia` | Supported |
+| AMD | GPU (ROCm) | `amd` | Supported |
+| Apple | GPU (Metal) | `apple` | Supported |
+| Intel | GPU | `intel` | Supported |
+| Google | TPU | `tpu` | Supported |
+| Intel | CPU, GPU, NPU via OpenVINO | — | [Under evaluation](docs/openvino-evaluation.md) |
+| AMD | GPU via MIGraphX | — | [Under evaluation](docs/amd-migraphx.md) |
+| Qualcomm | Hexagon NPU | — | [Under evaluation](docs/qualcomm-hexagon.md) |
+| AWS | Trainium | `aws:trainium` | Parses only, never executed |
 
-Targets accept an optional qualifier — an architecture (`nvidia:sm89`,
-`amd:gfx942`), a device model, or an ordinal for multi-GPU hosts.
-`target="auto"` prefers the first detected GPU or accelerator and falls back to
-CPU.
+Run `lm7 targets` to see what is actually present on your machine. LM7 detects
+local PyTorch devices only, and installs no drivers or vendor toolchains.
 
-**Under evaluation, not yet selectable.** Each has a written plan and a
-measurement harness, and none is registered as a backend or reachable from
-automatic planning:
+Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
+`amd:gfx942`, `cpu:arm64`. `target="auto"` takes the first detected GPU or
+accelerator and falls back to CPU. Rows marked *under evaluation* have a written
+plan and a benchmark harness but no registered backend, so automatic planning
+never selects them.
 
-| Hardware | Vendor compiler | Plan | Harness |
-| --- | --- | --- | --- |
-| Intel CPU, GPU, NPU | OpenVINO | [plan](docs/openvino-evaluation.md) | `benchmarks/openvino_eval.py` |
-| AMD GPU | MIGraphX | [plan](docs/amd-migraphx.md) | `benchmarks/migraphx.py` |
-| Qualcomm Hexagon NPU | Hexagon-MLIR | [plan](docs/qualcomm-hexagon.md) | `benchmarks/hexagon.py` |
-
-The OpenVINO evaluation is furthest along: on an Apple M4 Pro at matched FP32
-precision, OpenVINO IR artifacts beat eager PyTorch on real models (1.3x on
-ResNet-18, 2.2x on SmolLM2 prefill) while losing on a trivial MLP, and the
-`torch.compile` path was consistently worse than the IR path. Those numbers come
-from an ARM host, so the Intel measurements that would actually decide the
-question are still outstanding.
-
-`aws:trainium` parses into a `TargetSpec` with `remote=True`, but nothing
-detects or executes it. Hexagon would need the same remote handling, which is
-why it is a plan rather than a backend.
+Only CPU is covered by CI; AMD, Apple, Intel, and TPU are early integrations
+without physical-hardware testing — see [current
+limitations](#current-limitations).
 
 The tasks below follow the usual path: install, detect the hardware, compile a
 local model, run a Hugging Face model, and export an artifact.
