@@ -70,16 +70,30 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
-| any | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `eager` | Supported |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `eager` | Supported |
 | NVIDIA | GPU | `nvidia` | `inductor`, `tensorrt`, `eager` | Supported |
 | AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
-| Intel | GPU | `intel` | `inductor`, `eager` | Supported |
+| Intel | GPU (XPU) | `intel` | `inductor`, `eager` | Supported |
 | Google | TPU | `tpu` | `openxla`, `eager` | Supported |
-| Intel | CPU, GPU, NPU via OpenVINO | — | none yet | [Under evaluation](docs/openvino-evaluation.md) |
-| AMD | GPU via MIGraphX | — | none yet | [Under evaluation](docs/amd-migraphx.md) |
-| Qualcomm | Hexagon NPU | — | none yet | [Under evaluation](docs/qualcomm-hexagon.md) |
+| Intel | NPU | — | — | Not supported |
+| Qualcomm | Hexagon NPU | — | — | Not supported |
 | AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
+
+Any x86-64 or ARM64 CPU runs through the `cpu` target, Intel and AMD included —
+and that is the only path with CI coverage. A vendor listed twice has an
+*additional* accelerator; it does not mean its CPU is unsupported.
+
+Separately, three vendor compilers are under evaluation. Each has a plan and a
+benchmark harness but no registered backend, so automatic planning never selects
+one. The first two would be alternatives for hardware that already works; the
+third would be the only route to a Qualcomm NPU:
+
+| Vendor compiler | Hardware it would target | Plan |
+| --- | --- | --- |
+| OpenVINO | Intel CPU, GPU, and NPU | [openvino-evaluation.md](docs/openvino-evaluation.md) |
+| MIGraphX | AMD GPU | [amd-migraphx.md](docs/amd-migraphx.md) |
+| Hexagon-MLIR | Qualcomm Hexagon NPU | [qualcomm-hexagon.md](docs/qualcomm-hexagon.md) |
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
@@ -91,13 +105,10 @@ local PyTorch devices only, and installs no drivers or vendor toolchains.
 
 Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
 `amd:gfx942`, `cpu:arm64`. `target="auto"` takes the first detected GPU or
-accelerator and falls back to CPU. Rows marked *under evaluation* have a written
-plan and a benchmark harness but no registered backend, so automatic planning
-never selects them.
+accelerator and falls back to CPU.
 
-Only CPU is covered by CI; AMD, Apple, Intel, and TPU are early integrations
-without physical-hardware testing — see [current
-limitations](#current-limitations).
+The GPU and TPU integrations are early and have no physical-hardware testing —
+see [current limitations](#current-limitations).
 
 The tasks below follow the usual path: install, detect the hardware, compile a
 local model, run a Hugging Face model, and export an artifact.
