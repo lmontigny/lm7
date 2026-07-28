@@ -119,7 +119,7 @@ Inductor until model coverage and artifact behavior are proven.
 Baseline the existing CPU paths through LM7:
 
 ```bash
-python -m pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]"
 python benchmarks/local.py --target cpu --backend eager inductor
 ```
 
@@ -127,7 +127,7 @@ Then run the side-by-side evaluation. Without OpenVINO installed it still
 reports eager and Inductor and marks the OpenVINO paths unavailable:
 
 ```bash
-python -m pip install openvino torchvision
+uv pip install openvino torchvision
 python benchmarks/openvino_eval.py \
   --model resnet18 \
   --path eager inductor openvino openvino_ir \

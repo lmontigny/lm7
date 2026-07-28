@@ -8,10 +8,9 @@ Use a TPU VM and a version-matched PyTorch/PyTorch-XLA environment. The current
 LM7 extra follows the latest stable PyTorch/XLA 2.9 pair:
 
 ```bash
-python3 -m venv .venv-tpu
+uv venv --python 3.12 .venv-tpu
+uv pip install --python .venv-tpu/bin/python -e ".[dev,openxla]"
 source .venv-tpu/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,openxla]"
 ```
 
 PyTorch/XLA versions must match PyTorch. Follow the

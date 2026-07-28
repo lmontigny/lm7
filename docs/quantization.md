@@ -63,7 +63,7 @@ TensorRT and OpenXLA have their own quantization stories that LM7 has not
 integrated.
 
 ```bash
-python -m pip install -e ".[hf,torchao]"
+uv pip install -e ".[hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia --backend inductor --dtype bfloat16 \
   --quantization int8-weight-only
