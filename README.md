@@ -178,7 +178,7 @@ Install the optional dependencies:
 python -m pip install -e ".[hf]"
 ```
 
-Then try either compact, ungated test model:
+Then try any of these compact, ungated test models:
 
 ```bash
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
@@ -189,7 +189,15 @@ lm7 model run hf://LiquidAI/LFM2.5-230M \
   --prompt "The capital of France is" \
   --target nvidia \
   --backend inductor
+lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
+  --prompt "The capital of France is" \
+  --target auto \
+  --backend auto
 ```
+
+`unsloth/Llama-3.2-1B-Instruct` is an ungated mirror of Meta's
+Llama-3.2-1B-Instruct weights; the original `meta-llama` repository requires
+accepting Meta's license and an authenticated Hugging Face token.
 
 The command downloads through the normal Hugging Face cache, compiles a
 causal-LM forward pass, and reports the selected target and backend, first-call
@@ -198,10 +206,11 @@ output. The current
 JIT result is process-local; this command does not yet package weights,
 tokenizers, or a persistent GPU executable.
 
-`target="auto"` also compiles both models on a local Apple Silicon GPU (see
-[Apple Silicon GPUs](docs/apple-mps.md)). Compiled float16 logits diverge
-slightly more from eager on MPS than on CUDA; validated on SmolLM2-135M and
-LFM2.5-230M with the wider tolerance in `tests/test_hf_integration.py`.
+`target="auto"` also compiles all three models on a local Apple Silicon GPU
+(see [Apple Silicon GPUs](docs/apple-mps.md)). Compiled float16 logits diverge
+slightly more from eager on MPS than on CUDA; validated on SmolLM2-135M,
+LFM2.5-230M, and Llama-3.2-1B-Instruct with the wider tolerance in
+`tests/test_hf_integration.py`.
 
 For experimental NVIDIA INT8 or FP8 weight-only inference, install TorchAO and
 select quantization explicitly:
@@ -245,6 +254,8 @@ python examples/hf_causal_lm.py \
   --model hf://HuggingFaceTB/SmolLM2-135M-Instruct
 python examples/hf_causal_lm.py \
   --model hf://LiquidAI/LFM2.5-230M
+python examples/hf_causal_lm.py \
+  --model hf://unsloth/Llama-3.2-1B-Instruct
 ```
 
 Model weights stay in the normal Hugging Face cache and are not added to this
