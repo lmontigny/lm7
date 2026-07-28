@@ -76,24 +76,18 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
 | Intel | GPU (XPU) | `intel` | `inductor`, `eager` | Supported |
 | Google | TPU | `tpu` | `openxla`, `eager` | Supported |
-| Intel | NPU | — | — | Not supported |
-| Qualcomm | Hexagon NPU | — | — | Not supported |
+| Intel | NPU | — | — | Not supported, [OpenVINO plan](docs/openvino-evaluation.md) |
+| Qualcomm | Hexagon NPU | — | — | Not supported, [Hexagon plan](docs/qualcomm-hexagon.md) |
 | AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
 
 Any x86-64 or ARM64 CPU runs through the `cpu` target, Intel and AMD included —
 and that is the only path with CI coverage. A vendor listed twice has an
 *additional* accelerator; it does not mean its CPU is unsupported.
 
-Separately, three vendor compilers are under evaluation. Each has a plan and a
-benchmark harness but no registered backend, so automatic planning never selects
-one. The first two would be alternatives for hardware that already works; the
-third would be the only route to a Qualcomm NPU:
-
-| Vendor compiler | Hardware it would target | Plan |
-| --- | --- | --- |
-| OpenVINO | Intel CPU, GPU, and NPU | [openvino-evaluation.md](docs/openvino-evaluation.md) |
-| MIGraphX | AMD GPU | [amd-migraphx.md](docs/amd-migraphx.md) |
-| Hexagon-MLIR | Qualcomm Hexagon NPU | [qualcomm-hexagon.md](docs/qualcomm-hexagon.md) |
+Two vendor compilers are also under evaluation as alternatives for hardware that
+already works — [OpenVINO](docs/openvino-evaluation.md) on Intel and
+[MIGraphX](docs/amd-migraphx.md) on AMD GPU. Each has a benchmark harness but no
+registered backend, so automatic planning never selects one.
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
