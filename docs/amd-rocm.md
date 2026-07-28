@@ -9,7 +9,7 @@ for a PyTorch build compatible with the host ROCm release and GPU architecture.
 Then install LM7 without replacing that build:
 
 ```bash
-python -m pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 PyTorch intentionally exposes ROCm devices through the `torch.cuda` API. LM7

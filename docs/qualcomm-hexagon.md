@@ -137,7 +137,7 @@ A later backend PR could wrap the winning path behind `backend="hexagon"` with a
 The host paths need no Qualcomm toolchain and establish the CPU baseline:
 
 ```bash
-python -m pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]"
 python benchmarks/hexagon.py --model mlp --path eager inductor
 python benchmarks/hexagon.py --model gpt2 --path eager inductor
 ```

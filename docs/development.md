@@ -8,10 +8,9 @@ user-facing README.
 LM7 currently targets Linux. Create a development environment:
 
 ```bash
-python3 -m venv .venv
+uv venv --python 3.12
+uv pip install -e ".[dev]"
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
 ```
 
 Run the portable checks:
@@ -61,12 +60,13 @@ Torch-TensorRT releases require matching PyTorch and CUDA versions. A separate
 environment avoids changing an existing PyTorch installation:
 
 ```bash
-python3 -m venv .venv-trt
-source .venv-trt/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,tensorrt]"
-python -m pytest tests/test_tensorrt_backend.py tests/test_tensorrt_integration.py -q
+uv venv --python 3.12 .venv-trt
+uv pip install --python .venv-trt/bin/python -e ".[dev,tensorrt]"
+.venv-trt/bin/python -m pytest tests/test_tensorrt_backend.py tests/test_tensorrt_integration.py -q
 ```
+
+`--python` targets the alternate environment without activating it, so the
+TensorRT install cannot leak into an already-working PyTorch environment.
 
 The TensorRT backend is explicit and experimental:
 
@@ -88,7 +88,7 @@ MPS GPU (`resolve_target("auto")` picks whichever is local); TorchAO
 quantization tests additionally require CUDA specifically:
 
 ```bash
-python -m pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]"
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
@@ -115,7 +115,7 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
 Validate the optional TorchAO INT8 and FP8 weight-only paths:
 
 ```bash
-python -m pip install -e ".[dev,hf,torchao]"
+uv pip install -e ".[dev,hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia \
   --backend inductor \

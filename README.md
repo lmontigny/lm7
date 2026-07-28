@@ -116,11 +116,20 @@ PyTorch/XLA, or platform C++ compilers.
 ```bash
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .          # add ".[dev]" for pytest + ruff
+uv venv --python 3.12
+uv pip install -e .            # add ".[dev]" for pytest + ruff
 ```
+
+`uv` also picks the right PyTorch wheel for the machine, which matters here more
+than usual — CPU, CUDA, and ROCm builds come from different indexes:
+
+```bash
+uv pip install torch --torch-backend=auto
+```
+
+Then either activate the environment (`source .venv/bin/activate`) or prefix
+commands with `uv run`. Without `uv`, the standard tools work unchanged:
+`python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e .`.
 
 Per-hardware setup: [CPU](docs/cpu.md) ·
 [NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
@@ -184,8 +193,8 @@ for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
 supports the target, or when a compile fails and `fallback="warn"` takes over.
 
 `tensorrt` and `openxla` need version-matched extras and must be selected
-explicitly: `pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
-2.12 / CUDA 13) or, on a TPU VM, `pip install -e ".[openxla]"`.
+explicitly: `uv pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
+2.12 / CUDA 13) or, on a TPU VM, `uv pip install -e ".[openxla]"`.
 
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 `LM7_CACHE_DIR` set defaults; explicit function arguments take precedence.
@@ -215,7 +224,7 @@ Install the optional dependencies, then run a causal-LM forward pass from a
 Hugging Face URI:
 
 ```bash
-python -m pip install -e ".[hf]"
+uv pip install -e ".[hf]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --prompt "The capital of France is" --target auto --backend auto
 ```
@@ -291,7 +300,7 @@ So everything LM7 offers is weight-only, with BF16 compute:
 | `fp8-weight-only` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer |
 
 ```bash
-python -m pip install -e ".[hf,torchao]"
+uv pip install -e ".[hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia --backend inductor --dtype bfloat16 \
   --quantization int8-weight-only

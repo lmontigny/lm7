@@ -45,7 +45,7 @@ lower automatic priority than `inductor` until model coverage is proven.
 Baseline the existing eager and Inductor AMD paths through LM7:
 
 ```bash
-python -m pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]"
 python benchmarks/gpu.py --target amd --model mlp --backend eager inductor
 python benchmarks/gpu.py --target amd --model smollm2 --backend eager inductor
 ```

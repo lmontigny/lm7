@@ -9,12 +9,15 @@ LM7 supports CPU inference without an additional runtime:
 Install a CPU-capable PyTorch build and LM7:
 
 ```bash
-python3 -m venv .venv
+uv venv --python 3.12
+uv pip install torch --torch-backend=cpu
+uv pip install -e ".[dev]"
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e ".[dev]"
 ```
+
+`--torch-backend=cpu` pins the CPU-only wheel index, which keeps the download
+small on a machine that also has a GPU. With pip instead of uv, the equivalent is
+`python -m pip install torch --index-url https://download.pytorch.org/whl/cpu`.
 
 ## Validate CPU and GPU locally
 

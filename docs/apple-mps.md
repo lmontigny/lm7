@@ -8,8 +8,8 @@ Install a PyTorch build for macOS, which includes MPS support by default,
 then install LM7:
 
 ```bash
-python -m pip install torch
-python -m pip install -e ".[dev]"
+uv pip install torch
+uv pip install -e ".[dev]"
 ```
 
 ## Verify the runtime
@@ -107,7 +107,7 @@ The [Hugging Face causal-LM path](../README.md#hugging-face-models) runs on
 Apple Silicon through `target="auto"` or `target="apple"`:
 
 ```bash
-python -m pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target apple --backend inductor
 python examples/hf_causal_lm.py --model hf://LiquidAI/LFM2.5-230M --target apple
 python examples/hf_causal_lm.py --model hf://unsloth/Llama-3.2-1B-Instruct --target apple
