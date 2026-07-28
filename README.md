@@ -29,10 +29,11 @@ ships a good one, and LM7 drives it — so the same call site reaches a differen
 vendor toolchain depending only on the target you ask for:
 
 ```python
-lm7.compile(model, target="cpu")  # TorchInductor CPU kernels
-lm7.compile(model, target="apple")  # Metal, via MPS
+lm7.compile(model, target="cpu")  # TorchInductor, C++/OpenMP kernels
+lm7.compile(model, target="nvidia")  # TorchInductor, Triton kernels + cuBLAS/cuDNN
+lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT instead
+lm7.compile(model, target="apple")  # TorchInductor, Metal via MPS
 lm7.compile(model, target="tpu")  # PyTorch/XLA and OpenXLA
-lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT
 ```
 
 You do not install or learn five toolchains to try a second device; you change a
@@ -41,47 +42,9 @@ is that LM7's reach is bounded by what those vendor toolchains already support �
 adding hardware means wiring up its compiler, not writing one, which is what the
 evaluation plans under [supported hardware](#supported-hardware) work through.
 
-### What this replaces
-
-Retargeting by hand means a branch per vendor, because the probe, the device
-string, and the compiler call are all different:
-
-```python
-if torch.cuda.is_available():
-    # True for NVIDIA *and* AMD ROCm; torch.version.hip is what tells them apart
-    device = torch.device("cuda", 0)
-    compiled = torch.compile(model.to(device))
-    # ...unless you want TensorRT, which is a different import and backend:
-    #   import torch_tensorrt; torch.compile(model, backend="tensorrt")
-elif getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
-    device = torch.device("xpu", 0)
-    compiled = torch.compile(model.to(device))
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")  # note: no ordinal, unlike the others
-    compiled = torch.compile(model.to(device))
-elif tpu_runtime_is_really_a_tpu():  # importable torch_xla is not enough
-    import torch_xla
-
-    device = torch_xla.device(0)
-    compiled = torch.compile(model.to(device), backend="openxla")
-else:
-    compiled = model  # eager fallback
-
-inputs = move_every_tensor(inputs, device)  # yours to write
-```
-
-And the branch is the easy part. You also own the traps: `torch.compile` is lazy,
-so a compile failure surfaces on the *first call* and a fallback has to wrap that
-call rather than the compile; TPU needs `torch.no_grad()` rather than
-`torch.inference_mode()`, because XLA tracing depends on the tensor version
-counters `inference_mode` removes; and each new input shape recompiles, so
-caching is on you.
-
-LM7 is that ladder, written once and tested:
-
-```python
-compiled = lm7.compile(model, target="auto")  # or target="apple", "tpu", ...
-```
+For the per-vendor code this replaces — the detection branches, the device-string
+inconsistencies, and the behaviour you would otherwise have to know about — see
+[what LM7 replaces](docs/what-this-replaces.md).
 
 > [!WARNING]
 > LM7 is an early inference-only prototype. Model coverage and compiled-artifact
@@ -112,7 +75,7 @@ toolchains, and it never reaches remote hardware.
 | Target | Detected via | Default backend | Status |
 | --- | --- | --- | --- |
 | `cpu`, `cpu:arm64` | always present, listed last | `inductor` | Supported, covered by CI |
-| `nvidia`, `nvidia:sm89` | `torch.cuda` on a CUDA build | `inductor` (or `tensorrt`) | Supported, no physical-GPU CI |
+| `nvidia`, `nvidia:sm89` | `torch.cuda` on a CUDA build | `inductor` (Triton); `tensorrt` opt-in | Supported, no physical-GPU CI |
 | `amd`, `amd:gfx942` | `torch.cuda` with `torch.version.hip` | `inductor` | Initial integration, no CI |
 | `apple` | `torch.backends.mps` | `inductor` | Initial integration, wider float16 tolerance |
 | `intel` | `torch.xpu` | `inductor` | Detected and plannable, least exercised |
@@ -203,13 +166,20 @@ lm7.compile(model, target="nvidia", backend="tensorrt")
 lm7.compile(model, target="tpu", backend="openxla")
 ```
 
-| Backend | Underlying compiler | Model | Targets | Priority |
-| --- | --- | --- | --- | --- |
-| `inductor` | TorchInductor (`torch.compile`) | JIT | cpu, nvidia, amd, intel, apple | 100 |
-| `openxla` | PyTorch/XLA + OpenXLA | JIT | tpu | 100 |
-| `aot_inductor` | AOTInductor (`.pt2` package) | **AOT** | cpu, apple | 90 |
-| `tensorrt` | Torch-TensorRT | JIT | nvidia | 90 |
-| `eager` | none — plain PyTorch | none | any detected device | 0 |
+| Backend | Underlying compiler | Generates | Model | Targets | Priority |
+| --- | --- | --- | --- | --- | --- |
+| `inductor` | TorchInductor (`torch.compile`) | Triton kernels on GPU, C++/OpenMP on CPU, plus vendor library calls | JIT | cpu, nvidia, amd, intel, apple | 100 |
+| `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
+| `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple | 90 |
+| `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
+| `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
+
+On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
+schedules and fuses the graph, then emits **Triton** kernels and calls into cuBLAS
+and cuDNN where those win. `tensorrt` is the opt-in alternative and is
+deliberately lower priority, because TensorRT's engine build is slower and its
+model coverage is narrower. LM7 never invokes Triton itself — TorchInductor owns
+kernel generation and selection.
 
 With `backend="auto"` LM7 picks the highest-priority backend that reports support
 for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
@@ -328,52 +298,23 @@ lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 
 ## Quantization
 
-Quantization stores or computes a tensor in fewer bits than the model was
-trained in. There are two halves to it, and **LM7 currently implements only the
-first**:
+Quantization stores or computes tensors in fewer bits than the model was trained
+in. It has two halves, and **LM7 implements only the first**:
 
-- **Weight quantization** shrinks the stored parameters. Weights are converted
-  once, up front, and dequantized on the fly during the matmul, which keeps
-  arithmetic in a higher precision. The win is memory footprint and bandwidth,
-  and it needs no calibration data.
-- **Activation quantization** also narrows the tensors flowing between layers, so
-  the matmul itself runs in low precision. That is where the larger speedups
-  come from, but it needs calibration or a quantization-aware recipe to pick
-  per-tensor scales, and it costs accuracy more readily. **LM7 does not do
-  this today.**
+- **Weight quantization** shrinks the stored parameters and dequantizes inside
+  the matmul, so arithmetic stays in higher precision. Saves memory and
+  bandwidth; needs no calibration.
+- **Activation quantization** also narrows the tensors between layers so the
+  matmul itself runs low-precision — bigger speedups, but it needs calibration
+  and costs accuracy. **Not implemented.**
 
-Everything below is therefore *weight-only*: activations, and the accumulation
-inside each matmul, stay in BF16.
+So everything LM7 offers is weight-only, with BF16 compute:
 
-### Supported data types
-
-| `--quantization` | Weight storage | Compute dtype | Requires |
+| `--quantization` | Weight storage | Compute | Requires |
 | --- | --- | --- | --- |
 | `none` (default) | as loaded | FP32 / FP16 / BF16 | nothing |
 | `int8-weight-only` | INT8 | BF16 | NVIDIA GPU |
-| `fp8-weight-only` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer |
-
-Both modes force BF16 compute: `--dtype` must be `auto` or `bfloat16`, and
-`auto` resolves to BF16 whenever quantization is on. `--backend` must be `auto`
-or `inductor`. Anything else raises `UnsupportedModelError` rather than silently
-degrading.
-
-Which layers get converted differs between the two, which matters for the
-memory saving you should expect:
-
-- `int8-weight-only` converts **every `nn.Linear` except `lm_head`**, including
-  the attention projections.
-- `fp8-weight-only` converts **only the MLP linears** (`.mlp.` in the module
-  path), leaving attention and `lm_head` in BF16.
-
-### TorchAO
-
-The conversion itself is [TorchAO](https://github.com/pytorch/ao)'s, not LM7's.
-LM7 pins `torchao==0.17.0` and calls `torchao.quantization.quantize_()` with
-`Int8WeightOnlyConfig` or `Float8WeightOnlyConfig`, passing a filter that selects
-the modules above. The quantized model is then compiled and run through the
-normal `inductor` path, so quantization composes with the rest of LM7 rather than
-being a separate execution path.
+| `fp8-weight-only` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer |
 
 ```bash
 python -m pip install -e ".[hf,torchao]"
@@ -382,16 +323,14 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --quantization int8-weight-only
 ```
 
-The run reports model storage bytes, quantization time, first-call and
-steady-state latency, and peak GPU memory, so the footprint/latency trade is
-visible rather than assumed.
+The conversion is [TorchAO](https://github.com/pytorch/ao)'s — LM7 pins
+`torchao==0.17.0` and calls `quantize_()` with a module filter, then runs the
+result through its normal `inductor` path. It is NVIDIA-only, validated for
+`SmolLM2-135M-Instruct` alone, and can be *slower* at small batch sizes, so it
+stays opt-in.
 
-> [!NOTE]
-> This path is validated for exactly one model,
-> `HuggingFaceTB/SmolLM2-135M-Instruct`, and rejects every other model id. It is
-> NVIDIA-only and stays opt-in because weight-only quantization can be *slower*
-> at small batch sizes, where dequantization overhead outweighs the bandwidth
-> saved. Treat it as a measurement tool, not a default.
+See [quantization](docs/quantization.md) for which layers each mode converts, the
+validation gates, and the full caveats.
 
 ## Examples and more
 
