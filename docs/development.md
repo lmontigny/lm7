@@ -132,6 +132,36 @@ LM7_RUN_HF_TESTS=1 .venv-trt/bin/python -m pytest \
   tests/test_tensorrt_integration.py -q
 ```
 
+## ONNX Runtime
+
+Use separate environments for the CPU and GPU wheels because both install the
+same `onnxruntime` Python module:
+
+```bash
+uv venv --python 3.12 .venv-ort
+uv pip install --python .venv-ort/bin/python -e ".[dev,onnxruntime]"
+.venv-ort/bin/python -m pytest \
+  tests/test_onnxruntime_backend.py tests/test_onnxruntime_integration.py -q
+```
+
+For CUDA 13:
+
+```bash
+uv venv --python 3.12 .venv-ort-gpu
+uv pip install --python .venv-ort-gpu/bin/python -e ".[dev,onnxruntime-gpu]"
+.venv-ort-gpu/bin/python -m pytest tests/test_onnxruntime_integration.py -q
+```
+
+The real suite validates CPU compilation and artifact reload. Its CUDA check
+runs only when both PyTorch CUDA and `CUDAExecutionProvider` are available and
+keeps CPU provider fallback disabled. The opt-in Hugging Face case exports the
+full fixed-shape SmolLM2-135M logits graph:
+
+```bash
+LM7_RUN_HF_TESTS=1 .venv-ort/bin/python -m pytest \
+  tests/test_onnxruntime_integration.py -q -k smollm2
+```
+
 ## IREE Vulkan
 
 Install the optional IREE compiler, Turbine bridge, and runtime in a separate or
