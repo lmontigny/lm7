@@ -182,6 +182,7 @@ lm7.compile(model, target="tpu", backend="openxla")
 | `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
+| `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
@@ -268,7 +269,9 @@ output = loaded(example_input)
 
 An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
 PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU/Apple
-AOT prototype. Artifacts stay specific to compatible PyTorch, runtime, and
+AOT prototype, or `backend="openvino"` on Intel CPU to add OpenVINO IR
+(`compiled_model.xml` + `.bin`) — the one payload that runs on a machine with no
+PyTorch installed. Artifacts stay specific to compatible PyTorch, runtime, and
 hardware versions — they are not a stable cross-version ABI.
 
 Combine per-target artifacts into one bundle and select at load time, from

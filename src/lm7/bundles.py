@@ -225,7 +225,9 @@ def _target_matches(value: Mapping[str, Any], local: TargetSpec) -> bool:
 
 
 def _backend_priority(backend: str) -> int:
-    return {"aot_inductor": 100, "export": 0}.get(backend, 50)
+    # A compiled payload beats a bare ExportedProgram. OpenVINO sits below
+    # AOTInductor to match the backend registry's ranking.
+    return {"aot_inductor": 100, "openvino": 80, "export": 0}.get(backend, 50)
 
 
 def _file_sha256(path: Path) -> str:
