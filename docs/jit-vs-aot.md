@@ -97,12 +97,55 @@ lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
 ```
 
 Two things to know about the captured graph. The shape comes from tokenizing
-`--prompt`, so the artifact is fixed to that many tokens. And LM7 captures a
-**logits-only** graph: a causal LM returns a `CausalLMOutputWithPast` dataclass,
-`torch.export` records it in the output pytree, and `torch.export.load` then
-fails with "Deserializing transformers.modeling_outputs.CausalLMOutputWithPast
-in pytree is not registered" — the artifact would save but never reload. The
-reloaded artifact takes tensors and returns one logits tensor.
+`--prompt`, so by default the artifact is fixed to that many tokens. And LM7
+captures a **logits-only** graph: a causal LM returns a `CausalLMOutputWithPast`
+dataclass, `torch.export` records it in the output pytree, and
+`torch.export.load` then fails with "Deserializing
+transformers.modeling_outputs.CausalLMOutputWithPast in pytree is not
+registered" — the artifact would save but never reload. The reloaded artifact
+takes `input_ids` and `attention_mask` and returns one logits tensor.
+
+### A dynamic sequence length
+
+A one-prompt-length artifact is rarely what you want from a causal LM.
+`--dynamic-seq` (or `dynamic_sequence=` from Python) captures the sequence
+dimension as a bounded `torch.export.Dim`, so a single artifact serves every
+length in range:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target nvidia --backend aot_inductor --dynamic-seq 1:512
+```
+
+```python
+lm7.huggingface.export_hf_model(
+    "hf://HuggingFaceTB/SmolLM2-135M-Instruct",
+    output="model.lm7",
+    target="nvidia",
+    backend="aot_inductor",
+    dynamic_sequence=True,  # or an explicit (min, max)
+)
+```
+
+Measured on an RTX 4070 SUPER (sm89), one packaged SmolLM2-135M-Instruct
+artifact answered 1-, 5-, and 17-token prompts in a fresh process, matching eager
+on every one.
+
+Four things constrain it:
+
+- **Bounds are part of the artifact.** They are written to the manifest and
+  checked on every call, so an out-of-range prompt raises instead of silently
+  producing wrong output. `dynamic_sequence=True` derives them from the model
+  config; pass `(min, max)` to set them.
+- **The example prompt must sit inside the bounds.** `torch.export` traces the
+  example input, so a 5-token prompt cannot capture a `min=8` artifact.
+- **Dynamic capture uses eager attention.** The default attention path builds its
+  mask in blocks, which makes `torch.export` emit a `sequence % 8` guard it
+  cannot prove over a range and fail with "Not all values of sequence ... satisfy
+  the generated guard". A fixed export keeps the faster default.
+- **Only the sequence dimension is dynamic.** Batch stays at the captured size,
+  and the graph is still prefill-only (`use_cache=False`), so this is not a
+  KV-cache decode loop.
 
 
 ## Bundles
@@ -127,7 +170,8 @@ service, or a machine where you would rather not ship a compiler.
 Two caveats either way:
 
 - **AOT fixes the input signature** captured at export time. A JIT path adapts to
-  new shapes by recompiling; an artifact does not.
+  new shapes by recompiling; an artifact does not, unless a dimension was
+  captured as dynamic — see [a dynamic sequence length](#a-dynamic-sequence-length).
 - **Artifacts are not a stable ABI.** An `.lm7` directory is tied to compatible
   PyTorch, runtime, and hardware versions. Treat it as a build output to
   regenerate, not a long-lived binary format.
