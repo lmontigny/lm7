@@ -71,10 +71,10 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
 | Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `eager` | Supported |
-| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `eager` | Supported |
-| AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
+| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
+| AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
-| Intel | GPU (XPU) | `intel` | `inductor`, `eager` | Supported |
+| Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Google | TPU | `tpu` | `openxla`, `eager` | Supported |
 | Intel | NPU | — | — | Not supported, [OpenVINO plan](docs/openvino-evaluation.md) |
 | Qualcomm | Hexagon NPU | — | — | Not supported, [Hexagon plan](docs/qualcomm-hexagon.md) |
@@ -89,6 +89,11 @@ target, but it is opt-in: it ranks below Inductor and AOTInductor, so
 `backend="auto"` never selects it. Ask for it with `backend="openvino"`. It
 compiles to Intel's IR format, which is the only LM7 artifact that runs in a
 process without PyTorch installed.
+
+[IREE Vulkan](docs/iree-vulkan.md) is an explicit, export-only backend for
+NVIDIA, AMD, and Intel GPUs. It lowers fixed-shape tensor graphs to a persistent
+VMFB containing Vulkan/SPIR-V code. It is not considered by `backend="auto"`,
+and full Hugging Face model coverage is not claimed yet.
 
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
@@ -192,6 +197,7 @@ lm7.compile(model, target="tpu", backend="openxla")
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
+| `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
@@ -209,10 +215,11 @@ for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
 `inductor` and TPU defaults to `openxla`. `eager` wins only when nothing else
 supports the target, or when a compile fails and `fallback="warn"` takes over.
 
-`tensorrt`, `openxla`, and `openvino` need extras and must be selected
+`tensorrt`, `openxla`, `openvino`, and `iree_vulkan` need extras and must be selected
 explicitly: `uv pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
-2.12 / CUDA 13), `uv pip install -e ".[openvino]"` on an Intel CPU, or, on a TPU
-VM, `uv pip install -e ".[openxla]"`.
+2.12 / CUDA 13), `uv pip install -e ".[openvino]"` on an Intel CPU,
+`uv pip install -e ".[iree-vulkan]"` for Vulkan AOT, or, on a TPU VM,
+`uv pip install -e ".[openxla]"`.
 
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 `LM7_CACHE_DIR` set defaults; explicit function arguments take precedence.
@@ -297,9 +304,26 @@ output = loaded(example_input)
 An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
 PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU,
 Apple, and NVIDIA AOT prototype, or `backend="openvino"` on Intel CPU to add
-OpenVINO IR (`compiled_model.xml` + `.bin`) — the one payload that runs on a
-machine with no PyTorch installed. Artifacts stay specific to compatible PyTorch,
-runtime, and hardware versions — they are not a stable cross-version ABI.
+OpenVINO IR (`compiled_model.xml` + `.bin`). Use `backend="iree_vulkan"` to add
+a Vulkan VMFB (`compiled_model.vmfb`) for an NVIDIA, AMD, or Intel GPU. Artifacts
+stay specific to compatible compiler, runtime, and hardware versions — they are
+not a stable cross-version ABI.
+
+The IREE Vulkan path compiles without a local GPU and loads the runtime lazily:
+
+```python
+artifact = lm7.export(
+    model,
+    args=(example_input,),
+    target="nvidia:sm89",
+    backend="iree_vulkan",
+    output="model-vulkan.lm7",
+)
+```
+
+It currently requires fixed shapes and tensor-only I/O. See the
+[IREE Vulkan guide](docs/iree-vulkan.md), including the validated WSL compile →
+native Windows RTX 4070 SUPER execution workflow and why WebGPU is separate.
 
 An NVIDIA AOT artifact is the only way to reach the GPU without a compiler in the
 process: both `inductor` and `tensorrt` compile on the first call and keep
@@ -412,8 +436,8 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - Only local PyTorch devices are detected, and only the hardware listed under
   [supported hardware](#supported-hardware).
 - JIT compiled callables and TensorRT engines are process-local; only
-  `aot_inductor`, `openvino`, and `lm7.export` produce something another process
-  can load.
+  `aot_inductor`, `openvino`, `iree_vulkan`, and `lm7.export` produce something
+  another process can load.
 - Exported causal-LM artifacts capture a prefill-only graph. `--dynamic-seq`
   makes the sequence length variable within recorded bounds; the batch dimension
   stays fixed, and a KV-cache decode loop is not captured.
@@ -426,6 +450,10 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - OpenVINO is validated for Intel CPU only, and rejects bfloat16 models because
   its runtime exchanges tensors through NumPy. It returns tensors or tuples, so
   models whose forward returns a dataclass need a wrapper.
+- IREE Vulkan is export-only and experimental: fixed shapes, tensor-only I/O,
+  and FP32 MLP execution are the validated scope. Full causal LMs, dynamic
+  sequences, KV caches, and WebGPU/browser execution remain future work; see
+  the [IREE Vulkan guide](docs/iree-vulkan.md).
 - AMD MIGraphX, Qualcomm Hexagon, and StableHLO/PJRT are evaluations with
   measurement harnesses, not usable backends.
 - Quantization is weight-only, NVIDIA-only, and validated per (model, mode)

@@ -19,6 +19,10 @@ import torch
 from .backends import registry
 from .backends.aot_inductor import SUPPORTED_VENDORS as AOT_INDUCTOR_VENDORS
 from .backends.aot_inductor import AOTInductorBackend
+from .backends.iree_vulkan import (
+    SUPPORTED_TARGET_VENDORS as IREE_VULKAN_VENDORS,
+)
+from .backends.iree_vulkan import IREEVulkanBackend
 from .backends.openvino import OpenVINOBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
@@ -48,8 +52,9 @@ PROGRAM_NAME = "exported_program.pt2"
 COMPILED_PROGRAM_NAME = "compiled_model.pt2"
 COMPILED_IR_NAME = "compiled_model.xml"
 COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
+COMPILED_VMFB_NAME = "compiled_model.vmfb"
 DEBUG_DIR_NAME = "debug"
-EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "openvino"})
+EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "iree_vulkan", "openvino"})
 
 
 @dataclass(frozen=True)
@@ -179,6 +184,10 @@ def export(
         raise BackendUnavailableError(
             "OpenVINO artifacts are validated for Intel CPU targets only."
         )
+    if backend == "iree_vulkan" and resolved_target.vendor not in IREE_VULKAN_VENDORS:
+        raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
+    if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
+        raise BackendUnavailableError("IREE Vulkan artifacts currently require static shapes.")
     if isinstance(model, torch.export.ExportedProgram):
         if args is not None or kwargs:
             raise ValueError("args and kwargs cannot be supplied with an ExportedProgram.")
@@ -187,7 +196,14 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
-        if resolved_target.vendor != "cpu":
+        if backend == "iree_vulkan":
+            # IREE owns device placement. Capture a host ExportedProgram even
+            # when the VMFB targets a discrete GPU, so export does not require
+            # CUDA, ROCm, or XPU to be available on the compiler host.
+            model = model.to("cpu")
+            args = _map_tensors(args, lambda tensor: tensor.detach().cpu())
+            kwargs = _map_tensors(kwargs, lambda tensor: tensor.detach().cpu())
+        elif resolved_target.vendor != "cpu":
             device = torch_device(resolved_target)
             model = model.to(device)
             args = _map_tensors(args, lambda tensor: tensor.to(device))
@@ -203,13 +219,23 @@ def export(
             else dynamic_shapes
         )
         try:
-            exported_program = torch.export.export(
-                model,
-                args,
-                kwargs,
-                dynamic_shapes=torch_dynamic_shapes,
-                strict=strict,
-            )
+            if backend == "iree_vulkan":
+                with torch.no_grad():
+                    exported_program = torch.export.export(
+                        model,
+                        args,
+                        kwargs,
+                        dynamic_shapes=torch_dynamic_shapes,
+                        strict=strict,
+                    )
+            else:
+                exported_program = torch.export.export(
+                    model,
+                    args,
+                    kwargs,
+                    dynamic_shapes=torch_dynamic_shapes,
+                    strict=strict,
+                )
         except Exception as exc:
             raise UnsupportedModelError(
                 f"Model export stage failed for target {target}: {exc}. "
@@ -239,6 +265,8 @@ def export(
         compiled_sha256 = None
         compiled_weights_file = None
         compiled_weights_sha256 = None
+        iree_device_uri = None
+        iree_vulkan_target = None
         debug_dir = staging / DEBUG_DIR_NAME
         if debug:
             _write_export_debug_files(exported_program, debug_dir)
@@ -278,6 +306,22 @@ def export(
             compiled_sha256 = _file_sha256(compiled_path)
             if debug:
                 _extract_package_debug_files(compiled_path, debug_dir)
+        if backend == "iree_vulkan":
+            iree_backend = _iree_vulkan_backend()
+            probe = iree_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            compiler_options = dict(options or {})
+            iree_device_uri = compiler_options.pop("device_uri", None)
+            iree_vulkan_target = compiler_options.get("vulkan_target")
+            compiled_path = staging / COMPILED_VMFB_NAME
+            iree_backend.compile_exported(
+                exported_program,
+                compiled_path,
+                options=compiler_options,
+            )
+            compiled_file = COMPILED_VMFB_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         debug_artifacts = _index_debug_artifacts(staging, debug_dir) if debug else ()
         manifest = ArtifactManifest(
             format_version=FORMAT_VERSION,
@@ -303,6 +347,15 @@ def export(
                 # The IR payload executes on the OpenVINO runtime alone; torch is
                 # only needed to read the exported_program.pt2 alongside it.
                 **({"openvino": _openvino_version()} if backend == "openvino" else {}),
+                **(
+                    {
+                        "iree-base-runtime": _iree_runtime_version(),
+                        "vulkan_device_uri": iree_device_uri,
+                        "vulkan_target": iree_vulkan_target,
+                    }
+                    if backend == "iree_vulkan"
+                    else {}
+                ),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -324,6 +377,11 @@ def export(
         compiled_callable = selected_backend.load_package(destination / COMPILED_PROGRAM_NAME)
     elif backend == "openvino":
         compiled_callable = _openvino_backend().load_ir(destination / COMPILED_IR_NAME)
+    elif backend == "iree_vulkan":
+        compiled_callable = _iree_vulkan_backend().load_vmfb(
+            destination / COMPILED_VMFB_NAME,
+            device_uri=iree_device_uri,
+        )
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -396,6 +454,15 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_weights_file, manifest.compiled_weights_sha256
         )
         compiled_callable = _openvino_backend().load_ir(compiled_path)
+    elif manifest.backend == "iree_vulkan":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        requirements = manifest.runtime_requirements or {}
+        compiled_callable = _iree_vulkan_backend().load_vmfb(
+            compiled_path,
+            device_uri=requirements.get("vulkan_device_uri"),
+        )
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -426,9 +493,23 @@ def _openvino_backend() -> OpenVINOBackend:
     return backend
 
 
+def _iree_vulkan_backend() -> IREEVulkanBackend:
+    backend = registry.get("iree_vulkan")
+    if not isinstance(backend, IREEVulkanBackend):
+        raise BackendUnavailableError("The registered iree_vulkan backend is invalid.")
+    return backend
+
+
 def _openvino_version() -> str | None:
     try:
         return importlib.metadata.version("openvino")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _iree_runtime_version() -> str | None:
+    try:
+        return importlib.metadata.version("iree-base-runtime")
     except importlib.metadata.PackageNotFoundError:
         return None
 
@@ -438,6 +519,8 @@ def _backend_version(backend: str) -> str | None:
         return torch.__version__
     if backend == "openvino":
         return _openvino_version()
+    if backend == "iree_vulkan":
+        return _iree_runtime_version()
     return None
 
 
