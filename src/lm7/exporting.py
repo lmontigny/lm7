@@ -19,6 +19,8 @@ import torch
 from .backends import registry
 from .backends.aot_inductor import SUPPORTED_VENDORS as AOT_INDUCTOR_VENDORS
 from .backends.aot_inductor import AOTInductorBackend
+from .backends.executorch import DELEGATE as EXECUTORCH_DELEGATE
+from .backends.executorch import ExecuTorchBackend
 from .backends.iree_vulkan import (
     SUPPORTED_TARGET_VENDORS as IREE_VULKAN_VENDORS,
 )
@@ -58,9 +60,18 @@ COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
 COMPILED_VMFB_NAME = "compiled_model.vmfb"
 COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
 COMPILED_ONNX_NAME = "compiled_model.onnx"
+COMPILED_PTE_NAME = "compiled_model.pte"
 DEBUG_DIR_NAME = "debug"
 EXPORT_BACKENDS = frozenset(
-    {"export", "aot_inductor", "iree_vulkan", "onnxruntime", "openvino", "stablehlo"}
+    {
+        "export",
+        "aot_inductor",
+        "executorch",
+        "iree_vulkan",
+        "onnxruntime",
+        "openvino",
+        "stablehlo",
+    }
 )
 
 
@@ -191,6 +202,11 @@ def export(
         raise BackendUnavailableError(
             "OpenVINO artifacts are validated for Intel CPU targets only."
         )
+    if backend == "executorch" and resolved_target.vendor != "cpu":
+        raise BackendUnavailableError(
+            "ExecuTorch artifacts use the XNNPACK delegate, which is a CPU target. "
+            "Export with target='cpu'; the .pte then runs on Android and iOS CPUs too."
+        )
     if backend == "iree_vulkan" and resolved_target.vendor not in IREE_VULKAN_VENDORS:
         raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
     if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
@@ -278,6 +294,8 @@ def export(
         compiled_weights_sha256 = None
         iree_device_uri = None
         iree_vulkan_target = None
+        executorch_delegated = None
+        executorch_total = None
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
         if debug:
@@ -309,6 +327,18 @@ def export(
             stablehlo_backend.compile_exported(exported_program, compiled_path)
             compiled_file = COMPILED_STABLEHLO_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+        if backend == "executorch":
+            executorch_backend = _executorch_backend()
+            probe = executorch_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            lowered = executorch_backend.compile_exported(
+                exported_program, staging / COMPILED_PTE_NAME, options=options
+            )
+            compiled_file = COMPILED_PTE_NAME
+            compiled_sha256 = _file_sha256(lowered.path)
+            executorch_delegated = lowered.delegated_calls
+            executorch_total = lowered.total_calls
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -406,6 +436,22 @@ def export(
                 # plugin is chosen at load time -- so unlike every other compiled
                 # payload this one is not pinned to the export-time device.
                 **({"pjrt_plugin": "any", "device_bound": False} if backend == "stablehlo" else {}),
+                # A .pte is executed by the ExecuTorch C++ runtime with no PyTorch
+                # present, and the XNNPACK delegate covers ARM64 and x86-64 alike --
+                # so this payload is not bound to the CPU that built it. The
+                # delegate ratio records how much of the graph XNNPACK took; the
+                # remainder runs on ExecuTorch's portable kernels.
+                **(
+                    {
+                        "executorch": _executorch_backend().probe().version,
+                        "delegate": EXECUTORCH_DELEGATE,
+                        "delegated_calls": executorch_delegated,
+                        "total_calls": executorch_total,
+                        "device_bound": False,
+                    }
+                    if backend == "executorch"
+                    else {}
+                ),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -442,6 +488,8 @@ def export(
         )
     elif backend == "stablehlo":
         compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
+    elif backend == "executorch":
+        compiled_callable = _executorch_backend().load_pte(destination / COMPILED_PTE_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -539,6 +587,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
         )
         compiled_callable = _stablehlo_backend().load_package(compiled_path)
+    elif manifest.backend == "executorch":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _executorch_backend().load_pte(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -566,6 +619,13 @@ def _openvino_backend() -> OpenVINOBackend:
     backend = registry.get("openvino")
     if not isinstance(backend, OpenVINOBackend):
         raise BackendUnavailableError("The registered openvino backend is invalid.")
+    return backend
+
+
+def _executorch_backend() -> ExecuTorchBackend:
+    backend = registry.get("executorch")
+    if not isinstance(backend, ExecuTorchBackend):
+        raise BackendUnavailableError("The registered executorch backend is invalid.")
     return backend
 
 
@@ -624,6 +684,8 @@ def _backend_version(backend: str) -> str | None:
         return _onnxruntime_version()
     if backend == "stablehlo":
         return _stablehlo_backend().probe().version
+    if backend == "executorch":
+        return _executorch_backend().probe().version
     return None
 
 

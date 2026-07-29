@@ -1,6 +1,14 @@
 # Qualcomm Hexagon NPU evaluation plan
 
-LM7 has no Qualcomm path today. [Hexagon-MLIR](https://github.com/qualcomm/hexagon-mlir)
+> [!NOTE]
+> LM7 now reaches Snapdragon devices through their **CPU**, via
+> [ExecuTorch](executorch.md)'s XNNPACK delegate. That path needed no Qualcomm
+> SDK and no device, which is why it shipped first. This plan remains the route
+> to the Hexagon **NPU** specifically. ExecuTorch also has a Qualcomm QNN
+> delegate, which is likely a cheaper way in than hexagon-mlir and should be
+> compared before this plan is executed.
+
+LM7 has no Qualcomm NPU path today. [Hexagon-MLIR](https://github.com/qualcomm/hexagon-mlir)
 is Qualcomm's open-source compiler toolchain for running Triton kernels and
 PyTorch models on Hexagon NPUs, and it should be evaluated before a Qualcomm
 target or backend is added to automatic planning.

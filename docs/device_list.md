@@ -47,8 +47,8 @@ This document summarizes the major AI inference hardware platforms and their com
 
 | Vendor | Hardware | Devices | Software Stack | Open Source | Compiler | PyTorch Support |
 |---------|----------|---------|----------------|-------------|----------|-----------------|
-| Apple | Apple Neural Engine (ANE) | iPhone, iPad, Mac | Core ML | ❌ | Core ML Compiler | coremltools |
-| Qualcomm | Hexagon NPU | Snapdragon | AI Engine Direct, [Hexagon-MLIR](qualcomm-hexagon.md) | Partial | AI Compiler, Hexagon-MLIR (MLIR) | ExecuTorch, torch-mlir |
+| Apple | Apple Neural Engine (ANE) | iPhone, iPad, Mac | Core ML | ❌ | Core ML Compiler | coremltools, [ExecuTorch](executorch.md) |
+| Qualcomm | Hexagon NPU | Snapdragon | AI Engine Direct, [Hexagon-MLIR](qualcomm-hexagon.md) | Partial | AI Compiler, Hexagon-MLIR (MLIR) | [ExecuTorch](executorch.md), torch-mlir |
 | Google | Tensor G4/G5 TPU | Pixel | LiteRT (TensorFlow Lite) | Partial | XLA / LiteRT | Limited |
 | Samsung | Exynos NPU | Galaxy | ENN SDK | ❌ | ENN Compiler | Limited |
 | MediaTek | APU | Dimensity | NeuroPilot | Partial | NeuroPilot Compiler | ONNX |

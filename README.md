@@ -34,6 +34,7 @@ lm7.compile(model, target="nvidia")  # TorchInductor, Triton kernels + cuBLAS/cu
 lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT instead
 lm7.compile(model, target="apple")  # TorchInductor, Metal via MPS
 lm7.compile(model, target="tpu")  # PyTorch/XLA and OpenXLA
+lm7.compile(model, target="tenstorrent")  # tt-xla, tt-mlir, tt-metal
 ```
 
 You do not install or learn five toolchains to try a second device; you change a
@@ -76,6 +77,8 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Google | TPU | `tpu` | `openxla`, `eager` | Supported |
+| Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` | Supported |
+| Android, iOS, embedded | CPU (ARM64, x86-64) | `cpu` | `executorch` | Export only, [ExecuTorch](docs/executorch.md) |
 | Intel | NPU | — | — | Not supported, [OpenVINO plan](docs/openvino-evaluation.md) |
 | Qualcomm | Hexagon NPU | — | — | Not supported, [Hexagon plan](docs/qualcomm-hexagon.md) |
 | AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
@@ -103,6 +106,14 @@ validated locally.
 
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
+
+[Tenstorrent](docs/tenstorrent.md) is the one vendor here whose whole stack is
+open source, and LM7 drives it end to end: `torch.compile(..., backend="tt")`
+goes through [tt-xla](https://github.com/tenstorrent/tt-xla)'s PJRT plugin to
+StableHLO, [tt-mlir](https://github.com/tenstorrent/tt-mlir), and
+[tt-metal](https://github.com/tenstorrent/tt-metal). The plugin ships from
+Tenstorrent's own package index, so it needs an explicit `--extra-index-url` and
+a matching tt-kmd driver.
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
@@ -150,7 +161,8 @@ commands with `uv run`. Without `uv`, the standard tools work unchanged:
 
 Per-hardware setup: [CPU](docs/cpu.md) ·
 [NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
-[Apple Silicon (MPS)](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md).
+[Apple Silicon (MPS)](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md) ·
+[Tenstorrent](docs/tenstorrent.md).
 
 ## 2. Detect the hardware
 
@@ -187,18 +199,21 @@ lm7.compile(model, target="amd:gfx942")
 lm7.compile(model, target="apple")
 lm7.compile(model, target="nvidia", backend="tensorrt")
 lm7.compile(model, target="tpu", backend="openxla")
+lm7.compile(model, target="tenstorrent:blackhole")
 ```
 
 | Backend | Underlying compiler | Generates | Model | Targets | Priority |
 | --- | --- | --- | --- | --- | --- |
 | `inductor` | TorchInductor (`torch.compile`) | Triton kernels on GPU, C++/OpenMP on CPU, plus vendor library calls | JIT | cpu, nvidia, amd, intel, apple | 100 |
 | `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
+| `tenstorrent` | tt-xla + tt-mlir + tt-metal | StableHLO, then a TT-NN flatbuffer | JIT | tenstorrent | 100 |
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
+| `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | — |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
@@ -366,6 +381,24 @@ lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
   --target cpu --backend stablehlo
 ```
 
+`backend="executorch"` is the edge path: it writes a `.pte`, the file Android
+and iOS load, which the ExecuTorch C++ runtime executes with no Python and no
+PyTorch on the device. Like `stablehlo` it is not bound to the machine that
+built it — the XNNPACK delegate covers ARM64 and x86-64 alike, which is also why
+it is the one mobile route this project can validate on ordinary CI:
+
+```bash
+python3 -m venv .venv-et && .venv-et/bin/python -m pip install -e ".[executorch]"
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target cpu --backend executorch
+```
+
+XNNPACK is a CPU delegate, so `--target cpu` is required; reaching phone NPUs
+(Core ML, Qualcomm QNN, MediaTek) means adding those delegates, each needing a
+macOS host or a vendor SDK. See [ExecuTorch](docs/executorch.md) for the measured
+lowering cost, the partition-coverage field in the manifest, and why artifact
+size makes quantization matter more here than elsewhere.
+
 An NVIDIA AOTInductor artifact packages native GPU code, while ONNX Runtime
 packages a provider-neutral ONNX graph. `inductor` and `tensorrt` compile on the
 first call and keep nothing. Packaging AOTInductor needs a CUDA toolkit, which
@@ -462,6 +495,7 @@ validation gates, and the full caveats.
 python examples/basic_mlp.py                 # CPU
 python examples/cuda_mlp.py --target nvidia   # NVIDIA
 python examples/mac_mlp.py                    # Apple Silicon
+python examples/tenstorrent_mlp.py            # Tenstorrent Wormhole / Blackhole
 python examples/local_targets.py --require-nvidia   # CPU vs NVIDIA parity
 python benchmarks/local.py --target cpu nvidia --backend eager inductor
 ```
@@ -486,8 +520,15 @@ for environment checks, GPU integration tests, and compiler IR output, and
   Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch
   wheel does not ship — install `".[cuda-aot]"`, and see
   [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) for the WSL linker caveat.
-- AMD ROCm, Apple Silicon (MPS), Intel XPU, and OpenXLA TPU support are initial
-  single-process integrations without physical-hardware CI.
+- AMD ROCm, Apple Silicon (MPS), Intel XPU, OpenXLA TPU, and Tenstorrent support
+  are initial single-process integrations without physical-hardware CI.
+- ExecuTorch is export-only and XNNPACK-only, so the edge story is CPU: phone
+  NPUs (Core ML, Qualcomm QNN, MediaTek, Exynos) are not wired up, artifacts are
+  unquantized and static-shape, and validation is host x86-64 rather than a real
+  phone. LM7 writes the `.pte`; deploying it into an app is ExecuTorch's tooling.
+- Tenstorrent is JIT-only and single-card: the compiled flatbuffer does not
+  outlive the process, multi-card sharding is not exposed, and model coverage is
+  bounded by what tt-mlir lowers — see [Tenstorrent](docs/tenstorrent.md).
 - OpenVINO is validated for Intel CPU only, and rejects bfloat16 models because
   its runtime exchanges tensors through NumPy. It returns tensors or tuples, so
   models whose forward returns a dataclass need a wrapper.
