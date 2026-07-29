@@ -251,12 +251,20 @@ def _apply_quantization(
     # logits.
     matched = sum(1 for fqn, module in model.named_modules() if filter_fn(module, fqn))
     if matched == 0:
+        selects = (
+            "linears whose module path contains '.mlp.'"
+            if quantization == FP8_WEIGHT_ONLY
+            else "every linear except lm_head"
+        )
+        alternative = (
+            f" Try {INT8_WEIGHT_ONLY}, which selects every linear except lm_head."
+            if quantization == FP8_WEIGHT_ONLY
+            else ""
+        )
         raise UnsupportedModelError(
             f"{quantization} matched no quantizable layers in this model, so quantization "
-            "would silently do nothing. The FP8 filter selects only linears whose module "
-            "path contains '.mlp.'; this model does not use that naming. "
-            "Use quantization='none', or int8-weight-only, which selects every linear "
-            "except lm_head."
+            f"would silently do nothing. It selects {selects}, and this model has none. "
+            f"Use quantization='none'.{alternative}"
         )
     torchao_quantization.quantize_(
         model,
