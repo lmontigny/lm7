@@ -162,6 +162,27 @@ LM7_RUN_HF_TESTS=1 .venv-ort/bin/python -m pytest \
   tests/test_onnxruntime_integration.py -q -k smollm2
 ```
 
+## LiteRT
+
+LiteRT Torch 0.9.2 requires PyTorch `>=2.4,<2.13`, so keep its conversion stack
+separate from a PyTorch 2.13 development environment:
+
+```bash
+uv venv --python 3.12 .venv-litert
+uv pip install --python .venv-litert/bin/python -e ".[dev,litert]"
+.venv-litert/bin/python -m pytest \
+  tests/test_litert_backend.py tests/test_litert_integration.py -q
+```
+
+The integration suite performs real PyTorch-to-LiteRT conversion, writes and
+reloads `compiled_model.tflite`, and validates FP32 MLP output, keyword inputs,
+tuple outputs, and lightweight conversion. The default LiteRT Torch Python
+model wrapper creates the XNNPACK CPU delegate. Dynamic-shape conversion is
+intentionally rejected after a bounded batch prototype failed in LiteRT
+Torch/JAX symbolic-shape lowering.
+
+See [LiteRT artifacts](litert.md) for the user-facing API and scope.
+
 ## IREE Vulkan
 
 Install the optional IREE compiler, Turbine bridge, and runtime in a separate or

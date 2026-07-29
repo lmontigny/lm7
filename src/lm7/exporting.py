@@ -25,6 +25,8 @@ from .backends.iree_vulkan import (
     SUPPORTED_TARGET_VENDORS as IREE_VULKAN_VENDORS,
 )
 from .backends.iree_vulkan import IREEVulkanBackend
+from .backends.litert import LiteRTBackend
+from .backends.litert import parse_options as parse_litert_options
 from .backends.onnxruntime import ONNXRuntimeBackend
 from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
@@ -61,6 +63,7 @@ COMPILED_VMFB_NAME = "compiled_model.vmfb"
 COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
 COMPILED_ONNX_NAME = "compiled_model.onnx"
 COMPILED_PTE_NAME = "compiled_model.pte"
+COMPILED_TFLITE_NAME = "compiled_model.tflite"
 DEBUG_DIR_NAME = "debug"
 EXPORT_BACKENDS = frozenset(
     {
@@ -68,6 +71,7 @@ EXPORT_BACKENDS = frozenset(
         "aot_inductor",
         "executorch",
         "iree_vulkan",
+        "litert",
         "onnxruntime",
         "openvino",
         "stablehlo",
@@ -215,6 +219,17 @@ def export(
         raise BackendUnavailableError(
             "ONNX Runtime artifacts are initially validated for CPU and NVIDIA targets only."
         )
+    if backend == "litert" and resolved_target.vendor != "cpu":
+        raise BackendUnavailableError(
+            "LiteRT artifacts are initially validated for CPU/XNNPACK execution only."
+        )
+    if backend == "litert" and (dynamic_shapes is not None or shape_profile is not None):
+        raise BackendUnavailableError("LiteRT artifacts currently require static shapes.")
+    if backend == "litert" and isinstance(model, torch.export.ExportedProgram):
+        raise BackendUnavailableError(
+            "LiteRT conversion requires the source nn.Module and representative args; "
+            "an ExportedProgram alone cannot be converted by the public LiteRT Torch API."
+        )
     if isinstance(model, torch.export.ExportedProgram):
         if args is not None or kwargs:
             raise ValueError("args and kwargs cannot be supplied with an ExportedProgram.")
@@ -223,7 +238,7 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
-        if backend in {"iree_vulkan", "onnxruntime"}:
+        if backend in {"iree_vulkan", "litert", "onnxruntime"}:
             # These runtimes own device placement. Capture a host ExportedProgram
             # even when the artifact targets a discrete GPU, so export needs no
             # CUDA, ROCm, or XPU to be available on the compiler host.
@@ -246,7 +261,7 @@ def export(
             else dynamic_shapes
         )
         try:
-            if backend in {"iree_vulkan", "onnxruntime"}:
+            if backend in {"iree_vulkan", "litert", "onnxruntime"}:
                 with torch.no_grad():
                     exported_program = torch.export.export(
                         model,
@@ -298,6 +313,7 @@ def export(
         executorch_total = None
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
+        litert_settings = None
         if debug:
             _write_export_debug_files(exported_program, debug_dir)
         if backend == "openvino":
@@ -387,6 +403,24 @@ def export(
             )
             compiled_file = COMPILED_ONNX_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+        if backend == "litert":
+            litert_backend = _litert_backend()
+            probe = litert_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            litert_settings = parse_litert_options(options)
+            compiled_path = staging / COMPILED_TFLITE_NAME
+            assert isinstance(model, torch.nn.Module)
+            assert args is not None
+            litert_backend.convert_module(
+                model,
+                args,
+                kwargs,
+                compiled_path,
+                options=litert_settings.converter_options,
+            )
+            compiled_file = COMPILED_TFLITE_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         debug_artifacts = _index_debug_artifacts(staging, debug_dir) if debug else ()
         manifest = ArtifactManifest(
             format_version=FORMAT_VERSION,
@@ -430,6 +464,19 @@ def export(
                         "opset_version": onnxruntime_settings.opset_version,
                     }
                     if backend == "onnxruntime" and onnxruntime_settings is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "litert-torch": _litert_version(),
+                        "runtime": "LiteRT Interpreter/XNNPACK",
+                        "static_shapes": True,
+                        "strict_export": litert_settings.strict_export,
+                        "lightweight_conversion": litert_settings.lightweight_conversion,
+                        "enable_x64": litert_settings.enable_x64,
+                        "runtime_constant_folding": litert_settings.runtime_constant_folding,
+                    }
+                    if backend == "litert" and litert_settings is not None
                     else {}
                 ),
                 # The StableHLO payload needs a PJRT plugin, not PyTorch, and the
@@ -486,6 +533,8 @@ def export(
             provider_options=onnxruntime_settings.provider_options,
             disable_cpu_fallback=onnxruntime_settings.disable_cpu_fallback,
         )
+    elif backend == "litert":
+        compiled_callable = _litert_backend().load_tflite(destination / COMPILED_TFLITE_NAME)
     elif backend == "stablehlo":
         compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
     elif backend == "executorch":
@@ -582,6 +631,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             provider_options=requirements.get("provider_options"),
             disable_cpu_fallback=bool(requirements.get("disable_cpu_fallback", True)),
         )
+    elif manifest.backend == "litert":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _litert_backend().load_tflite(compiled_path)
     elif manifest.backend == "stablehlo":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
@@ -643,6 +697,13 @@ def _onnxruntime_backend() -> ONNXRuntimeBackend:
     return backend
 
 
+def _litert_backend() -> LiteRTBackend:
+    backend = registry.get("litert")
+    if not isinstance(backend, LiteRTBackend):
+        raise BackendUnavailableError("The registered litert backend is invalid.")
+    return backend
+
+
 def _stablehlo_backend() -> StableHLOBackend:
     backend = registry.get("stablehlo")
     if not isinstance(backend, StableHLOBackend):
@@ -673,6 +734,13 @@ def _onnxruntime_version() -> str | None:
     return None
 
 
+def _litert_version() -> str | None:
+    try:
+        return importlib.metadata.version("litert-torch")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 def _backend_version(backend: str) -> str | None:
     if backend == "aot_inductor":
         return torch.__version__
@@ -682,6 +750,8 @@ def _backend_version(backend: str) -> str | None:
         return _iree_runtime_version()
     if backend == "onnxruntime":
         return _onnxruntime_version()
+    if backend == "litert":
+        return _litert_version()
     if backend == "stablehlo":
         return _stablehlo_backend().probe().version
     if backend == "executorch":
