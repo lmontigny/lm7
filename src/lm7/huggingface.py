@@ -60,6 +60,142 @@ class HuggingFaceRunResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class HuggingFaceGenerateResult:
+    model_uri: str
+    model_id: str
+    prompt: str
+    target: str
+    backend: str
+    dtype: str
+    parameter_count: int
+    input_tokens: int
+    generated_tokens: int
+    max_new_tokens: int
+    cache_implementation: str
+    first_call_ms: float
+    latency_ms: float
+    peak_memory_bytes: int | None
+    generated_token_ids: tuple[int, ...]
+    generated_text: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def generate_hf_model(
+    model_uri: str,
+    *,
+    prompt: str,
+    max_new_tokens: int = 32,
+    target: str | TargetSpec = "auto",
+    backend: str = "auto",
+    dtype: str = "auto",
+) -> HuggingFaceGenerateResult:
+    """Greedily generate with an eager prefill and compiled static-cache decode."""
+    if max_new_tokens < 2:
+        raise UnsupportedModelError(
+            "Compiled generation requires max_new_tokens >= 2: the first token "
+            "comes from prefill and the fixed-shape decode graph starts with the second."
+        )
+    if backend not in {"auto", "inductor"}:
+        raise UnsupportedModelError(
+            "Compiled Hugging Face generation currently requires "
+            "backend='auto' or backend='inductor'."
+        )
+
+    model_id = _model_id(model_uri)
+    resolved_target = resolve_target(target)
+    torch_dtype = _resolve_dtype(dtype, resolved_target)
+    transformers = _load_transformers()
+    compile_config_type = getattr(transformers, "CompileConfig", None)
+    if compile_config_type is None:
+        raise UnsupportedModelError(
+            "This Transformers version does not expose compiled generation. "
+            'Upgrade the Hugging Face extra with: pip install -U "lm7[hf]".'
+        )
+
+    try:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch_dtype,
+        ).eval()
+        inputs = dict(tokenizer(prompt, return_tensors="pt"))
+    except Exception as exc:
+        raise UnsupportedModelError(
+            f"Hugging Face load stage failed for {model_uri}: {exc}."
+        ) from exc
+
+    input_ids = inputs.get("input_ids")
+    if not isinstance(input_ids, torch.Tensor) or input_ids.ndim < 2:
+        raise UnsupportedModelError(
+            f"Hugging Face tokenization stage failed for {model_uri}: "
+            "the tokenizer did not return batched input_ids."
+        )
+
+    device = torch_device(resolved_target)
+    model = model.to(device)
+    inputs = {
+        name: value.to(device) if isinstance(value, torch.Tensor) else value
+        for name, value in inputs.items()
+    }
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    compile_config = compile_config_type(
+        backend="inductor",
+        mode="reduce-overhead",
+        fullgraph=False,
+        dynamic=None,
+    )
+    generation_kwargs = {
+        **inputs,
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+        "cache_implementation": "static",
+        "compile_config": compile_config,
+    }
+
+    _reset_peak_memory(resolved_target)
+    try:
+        with torch.inference_mode():
+            _synchronize(resolved_target)
+            started = time.perf_counter()
+            generated = model.generate(**generation_kwargs)
+            _synchronize(resolved_target)
+            first_call_ms = (time.perf_counter() - started) * 1000
+
+            started = time.perf_counter()
+            generated = model.generate(**generation_kwargs)
+            _synchronize(resolved_target)
+            latency_ms = (time.perf_counter() - started) * 1000
+    except Exception as exc:
+        raise UnsupportedModelError(
+            f"Hugging Face compiled generation failed for {model_uri}: {exc}."
+        ) from exc
+
+    prompt_tokens = int(input_ids.shape[-1])
+    generated_ids = generated[0, prompt_tokens:].detach().cpu().tolist()
+    generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    return HuggingFaceGenerateResult(
+        model_uri=model_uri,
+        model_id=model_id,
+        prompt=prompt,
+        target=str(resolved_target),
+        backend="inductor",
+        dtype=str(torch_dtype).removeprefix("torch."),
+        parameter_count=parameter_count,
+        input_tokens=prompt_tokens,
+        generated_tokens=len(generated_ids),
+        max_new_tokens=max_new_tokens,
+        cache_implementation="static",
+        first_call_ms=first_call_ms,
+        latency_ms=latency_ms,
+        peak_memory_bytes=_peak_memory(resolved_target),
+        generated_token_ids=tuple(int(token_id) for token_id in generated_ids),
+        generated_text=generated_text,
+    )
+
+
 def run_hf_model(
     model_uri: str,
     *,

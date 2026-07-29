@@ -20,8 +20,10 @@ from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
 from .huggingface import (
     HuggingFaceExportResult,
+    HuggingFaceGenerateResult,
     HuggingFaceRunResult,
     export_hf_model,
+    generate_hf_model,
     run_hf_model,
 )
 from .planner import Plan, plan
@@ -223,6 +225,23 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Next token: {result.next_token_id} ({result.next_token!r})")
 
 
+def _print_model_generate(result: HuggingFaceGenerateResult) -> None:
+    print(f"Model: {result.model_uri}")
+    print(f"Target: {result.target}")
+    print(f"Backend: {result.backend}")
+    print(f"Dtype: {result.dtype}")
+    print(f"Parameters: {result.parameter_count:,}")
+    print(f"Input tokens: {result.input_tokens}")
+    print(f"Generated tokens: {result.generated_tokens}")
+    print(f"KV cache: {result.cache_implementation}")
+    print(f"First generation (includes compile): {result.first_call_ms:.2f} ms")
+    print(f"Steady generation: {result.latency_ms:.2f} ms")
+    if result.peak_memory_bytes is not None:
+        print(f"Peak GPU memory: {result.peak_memory_bytes / 1024**2:.1f} MiB")
+    print()
+    print(result.generated_text)
+
+
 def _dynamic_sequence(value: str | None) -> bool | tuple[int, int]:
     """Turn the --dynamic-seq argument into an export_hf_model argument."""
     if value is None:
@@ -315,6 +334,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_json_argument(run_parser)
 
+    generate_parser = model_subparsers.add_parser(
+        "generate", help="generate tokens with a compiled static KV-cache decode loop"
+    )
+    generate_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    generate_parser.add_argument(
+        "--prompt", default="The capital of France is", help="input prompt"
+    )
+    generate_parser.add_argument(
+        "--max-new-tokens", type=int, default=32, help="tokens to generate (default: 32)"
+    )
+    generate_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    generate_parser.add_argument(
+        "--backend", choices=("auto", "inductor"), default="auto", help="backend selector"
+    )
+    generate_parser.add_argument(
+        "--dtype",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        default="auto",
+        help="model dtype (default: auto)",
+    )
+    _add_json_argument(generate_parser)
+
     export_parser = model_subparsers.add_parser(
         "export", help="capture a model into an LM7 artifact"
     )
@@ -396,6 +437,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 quantization=args.quantization,
             )
             _emit_json(result.to_dict()) if args.json else _print_model_run(result)
+        elif args.command == "model" and args.model_command == "generate":
+            generate_result = generate_hf_model(
+                args.model_uri,
+                prompt=args.prompt,
+                max_new_tokens=args.max_new_tokens,
+                target=args.target,
+                backend=args.backend,
+                dtype=args.dtype,
+            )
+            (
+                _emit_json(generate_result.to_dict())
+                if args.json
+                else _print_model_generate(generate_result)
+            )
         elif args.command == "model" and args.model_command == "export":
             export_result = export_hf_model(
                 args.model_uri,

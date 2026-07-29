@@ -254,6 +254,20 @@ steady-call time, and the predicted next token (`--json` for structured
 output). The JIT result is process-local: weights, tokenizers, and a persistent
 GPU executable are not yet packaged.
 
+For greedy token generation, use the static KV-cache path:
+
+```bash
+lm7 model generate hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompt "The capital of France is" --max-new-tokens 32 --target nvidia
+```
+
+Generation runs the prompt prefill eagerly, then uses one Inductor-compiled,
+fixed-shape single-token decode graph against a static KV cache. The first run
+includes compilation; the reported steady run reuses that graph for every
+decoded token. This path is currently greedy-only and requires a Transformers
+causal LM that supports static caching. See
+[compiled Hugging Face generation](docs/huggingface-generation.md).
+
 The Python example additionally validates logits and deterministic generation:
 
 ```bash

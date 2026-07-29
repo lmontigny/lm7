@@ -102,6 +102,105 @@ def test_run_hf_model_uses_lm7_and_reports_next_token(monkeypatch):
     assert result.next_token == "token-5"
 
 
+class FakeGenerationTokenizer:
+    def __call__(self, prompt, return_tensors):
+        assert prompt == "Hello"
+        assert return_tensors == "pt"
+        return {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "attention_mask": torch.ones((1, 3), dtype=torch.long),
+        }
+
+    def decode(self, token_ids, skip_special_tokens):
+        assert skip_special_tokens is True
+        return " ".join(f"token-{token_id}" for token_id in token_ids)
+
+
+class FakeGeneratingCausalLM(torch.nn.Module):
+    def __init__(self, calls):
+        super().__init__()
+        self.calls = calls
+
+    def generate(self, **kwargs):
+        self.calls.setdefault("generate", []).append(
+            {
+                "max_new_tokens": kwargs["max_new_tokens"],
+                "do_sample": kwargs["do_sample"],
+                "cache_implementation": kwargs["cache_implementation"],
+                "compile_config": kwargs["compile_config"],
+            }
+        )
+        suffix = torch.tensor([[4, 5, 6, 7]], device=kwargs["input_ids"].device)
+        return torch.cat((kwargs["input_ids"], suffix), dim=1)
+
+
+def _fake_generation_transformers(calls):
+    class CompileConfig:
+        def __init__(self, **kwargs):
+            calls["compile_config"] = kwargs
+
+    class TokenizerFactory:
+        @staticmethod
+        def from_pretrained(model_id):
+            calls["tokenizer_model_id"] = model_id
+            return FakeGenerationTokenizer()
+
+    class ModelFactory:
+        @staticmethod
+        def from_pretrained(model_id, *, dtype):
+            calls["model_id"] = model_id
+            calls["dtype"] = dtype
+            return FakeGeneratingCausalLM(calls)
+
+    return SimpleNamespace(
+        AutoTokenizer=TokenizerFactory,
+        AutoModelForCausalLM=ModelFactory,
+        CompileConfig=CompileConfig,
+    )
+
+
+def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        huggingface, "_load_transformers", lambda: _fake_generation_transformers(calls)
+    )
+
+    result = huggingface.generate_hf_model(
+        "hf://example/tiny-model",
+        prompt="Hello",
+        max_new_tokens=4,
+        target="cpu",
+    )
+
+    assert calls["model_id"] == "example/tiny-model"
+    assert calls["dtype"] == torch.float32
+    assert calls["compile_config"] == {
+        "backend": "inductor",
+        "mode": "reduce-overhead",
+        "fullgraph": False,
+        "dynamic": None,
+    }
+    assert len(calls["generate"]) == 2
+    assert all(call["cache_implementation"] == "static" for call in calls["generate"])
+    assert all(call["do_sample"] is False for call in calls["generate"])
+    assert result.backend == "inductor"
+    assert result.cache_implementation == "static"
+    assert result.input_tokens == 3
+    assert result.generated_tokens == 4
+    assert result.generated_token_ids == (4, 5, 6, 7)
+    assert result.generated_text == "token-4 token-5 token-6 token-7"
+    assert result.first_call_ms >= 0
+    assert result.latency_ms >= 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"), [({"max_new_tokens": 1}, ">= 2"), ({"backend": "eager"}, "inductor")]
+)
+def test_generate_hf_model_rejects_non_compiled_requests(kwargs, message):
+    with pytest.raises(UnsupportedModelError, match=message):
+        huggingface.generate_hf_model("hf://example/tiny-model", prompt="Hello", **kwargs)
+
+
 @pytest.mark.parametrize("value", ["model", "hf://", "hf://model"])
 def test_run_hf_model_rejects_invalid_uri(value):
     with pytest.raises(UnsupportedModelError, match="Hugging Face"):

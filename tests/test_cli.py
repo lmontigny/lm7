@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from lm7 import cli
-from lm7.huggingface import HuggingFaceExportResult, HuggingFaceRunResult
+from lm7.huggingface import (
+    HuggingFaceExportResult,
+    HuggingFaceGenerateResult,
+    HuggingFaceRunResult,
+)
 from lm7.targets import DeviceInfo, TargetSpec
 
 
@@ -164,6 +168,71 @@ def test_model_run_json(monkeypatch, capsys):
     assert output["model_storage_bytes"] == 75
     assert output["peak_memory_bytes"] == 1024
     assert output["next_token"] == " world"
+
+
+def test_model_generate_json(monkeypatch, capsys):
+    calls = {}
+    result = HuggingFaceGenerateResult(
+        model_uri="hf://example/tiny",
+        model_id="example/tiny",
+        prompt="Hello",
+        target="nvidia:sm89",
+        backend="inductor",
+        dtype="float16",
+        parameter_count=10,
+        input_tokens=2,
+        generated_tokens=4,
+        max_new_tokens=4,
+        cache_implementation="static",
+        first_call_ms=12000.0,
+        latency_ms=20.0,
+        peak_memory_bytes=1024,
+        generated_token_ids=(4, 5, 6, 7),
+        generated_text=" world",
+    )
+
+    def generate_model(model_uri, **kwargs):
+        calls["model_uri"] = model_uri
+        calls.update(kwargs)
+        return result
+
+    monkeypatch.setattr(cli, "generate_hf_model", generate_model)
+
+    assert (
+        cli.main(
+            [
+                "model",
+                "generate",
+                "hf://example/tiny",
+                "--prompt",
+                "Hello",
+                "--max-new-tokens",
+                "4",
+                "--target",
+                "nvidia",
+                "--backend",
+                "inductor",
+                "--dtype",
+                "float16",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    assert calls == {
+        "model_uri": "hf://example/tiny",
+        "prompt": "Hello",
+        "max_new_tokens": 4,
+        "target": "nvidia",
+        "backend": "inductor",
+        "dtype": "float16",
+    }
+    output = json.loads(capsys.readouterr().out)
+    assert output["backend"] == "inductor"
+    assert output["cache_implementation"] == "static"
+    assert output["generated_token_ids"] == [4, 5, 6, 7]
+    assert output["generated_text"] == " world"
 
 
 def _fake_bundle(path):
