@@ -105,8 +105,10 @@ Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
 `amd:gfx942`, `cpu:arm64`. `target="auto"` takes the first detected GPU or
 accelerator and falls back to CPU.
 
-The GPU and TPU integrations are early and have no physical-hardware testing —
-see [current limitations](#current-limitations).
+The GPU and TPU integrations are early and have no physical-hardware CI.
+NVIDIA Inductor, quantization, and TensorRT have been exercised on a local Ada
+GPU; see the [TensorRT evaluation](docs/nvidia-tensorrt-evaluation.md) for the
+measured backend trade-offs.
 
 The tasks below follow the usual path: install, detect the hardware, compile a
 local model, run a Hugging Face model, and export an artifact.
@@ -189,8 +191,11 @@ On NVIDIA both GPU paths are available and `inductor` is the default: TorchInduc
 schedules and fuses the graph, then emits **Triton** kernels and calls into cuBLAS
 and cuDNN where those win. `tensorrt` is the opt-in alternative and is
 deliberately lower priority, because TensorRT's engine build is slower and its
-model coverage is narrower. LM7 never invokes Triton itself — TorchInductor owns
-kernel generation and selection.
+model coverage is narrower. On a local RTX 4070 SUPER, TensorRT beat Inductor
+1.76x on a fixed-shape SmolLM2 FP16 forward pass but lost on two small MLP
+workloads and took 56 seconds for the SmolLM2 first call. See the
+[evaluation](docs/nvidia-tensorrt-evaluation.md). LM7 never invokes Triton
+itself — TorchInductor owns kernel generation and selection.
 
 With `backend="auto"` LM7 picks the highest-priority backend that reports support
 for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to

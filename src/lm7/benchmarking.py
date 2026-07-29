@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import os
 import platform
 import statistics
@@ -95,7 +96,7 @@ def benchmark(
         warmup=warmup,
         repeats=repeats,
         batch_size=batch_size,
-        environment=_environment(wrapped.target),
+        environment=_environment(wrapped.target, wrapped.selected_backend),
     )
 
 
@@ -117,7 +118,7 @@ def _peak_memory(target: TargetSpec) -> int | None:
     return torch.cuda.max_memory_allocated(target.ordinal or 0)
 
 
-def _environment(target: TargetSpec) -> Mapping[str, Any]:
+def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str, Any]:
     value: dict[str, Any] = {
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -158,7 +159,22 @@ def _environment(target: TargetSpec) -> Mapping[str, Any]:
             )
         except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as exc:
             value.update({"device_name": "Google TPU", "pjrt_error": str(exc)})
+    if backend == "tensorrt":
+        value.update(
+            {
+                "torch_tensorrt": _package_version("torch-tensorrt"),
+                "tensorrt": _package_version("tensorrt"),
+            }
+        )
+
     return value
+
+
+def _package_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def _uses_cuda_runtime(target: str | TargetSpec) -> bool:
