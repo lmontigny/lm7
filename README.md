@@ -274,6 +274,21 @@ AOT prototype, or `backend="openvino"` on Intel CPU to add OpenVINO IR
 PyTorch installed. Artifacts stay specific to compatible PyTorch, runtime, and
 hardware versions — they are not a stable cross-version ABI.
 
+A Hugging Face model can be exported without writing any PyTorch, straight from
+the CLI:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target cpu --backend aot_inductor
+```
+
+The example inputs come from tokenizing `--prompt`, so the artifact is pinned to
+that input shape — an AOT artifact does not adapt to new shapes the way a JIT
+path recompiles. LM7 captures a logits-only graph, because a causal LM's
+`CausalLMOutputWithPast` return value cannot be deserialized by
+`torch.export.load`; the reloaded artifact therefore takes tensors and returns a
+logits tensor.
+
 Combine per-target artifacts into one bundle and select at load time, from
 Python or the CLI:
 

@@ -1,0 +1,11 @@
+
+# inputs
+p_0_weight: PARAMETER target='0.weight'
+p_0_bias: PARAMETER target='0.bias'
+p_2_weight: PARAMETER target='2.weight'
+p_2_bias: PARAMETER target='2.bias'
+input: USER_INPUT
+
+# outputs
+linear_1: USER_OUTPUT
+

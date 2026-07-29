@@ -1,0 +1,28 @@
+ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, p_0_weight: "f32[32, 16]", p_0_bias: "f32[32]", p_2_weight: "f32[4, 32]", p_2_bias: "f32[4]", input: "f32[2, 16]"):
+            input_1 = input
+    
+            # File: /home/bernard/dev/lm7/.venv/lib/python3.12/site-packages/torch/nn/modules/linear.py:134 in forward, code: return F.linear(input, self.weight, self.bias)
+            linear: "f32[2, 32]" = torch.ops.aten.linear.default(input_1, p_0_weight, p_0_bias);  input_1 = p_0_weight = p_0_bias = None
+    
+            # File: /home/bernard/dev/lm7/.venv/lib/python3.12/site-packages/torch/nn/modules/activation.py:143 in forward, code: return F.relu(input, inplace=self.inplace)
+            relu: "f32[2, 32]" = torch.ops.aten.relu.default(linear);  linear = None
+    
+            # File: /home/bernard/dev/lm7/.venv/lib/python3.12/site-packages/torch/nn/modules/linear.py:134 in forward, code: return F.linear(input, self.weight, self.bias)
+            linear_1: "f32[2, 4]" = torch.ops.aten.linear.default(relu, p_2_weight, p_2_bias);  relu = p_2_weight = p_2_bias = None
+            return (linear_1,)
+    
+Graph signature: 
+    # inputs
+    p_0_weight: PARAMETER target='0.weight'
+    p_0_bias: PARAMETER target='0.bias'
+    p_2_weight: PARAMETER target='2.weight'
+    p_2_bias: PARAMETER target='2.bias'
+    input: USER_INPUT
+    
+    # outputs
+    linear_1: USER_OUTPUT
+    
+Range constraints: {}
+

@@ -274,3 +274,68 @@ def test_missing_torchao_has_install_hint(monkeypatch):
 
     with pytest.raises(UnsupportedModelError, match=r"lm7\[hf,torchao\]"):
         huggingface._load_torchao_quantization()
+
+
+class ExportableCausalLM(torch.nn.Module):
+    """A fake that torch.export can trace, returning the HF output dataclass."""
+
+    def __init__(self):
+        super().__init__()
+        self.embedding = torch.nn.Embedding(16, 8)
+        self.head = torch.nn.Linear(8, 16)
+
+    def forward(self, input_ids, attention_mask=None, use_cache=False):
+        del attention_mask, use_cache
+        return SimpleNamespace(logits=self.head(self.embedding(input_ids)))
+
+
+def _exportable_transformers(calls):
+    class TokenizerFactory:
+        @staticmethod
+        def from_pretrained(model_id):
+            calls["tokenizer_model_id"] = model_id
+            return FakeTokenizer()
+
+    class ModelFactory:
+        @staticmethod
+        def from_pretrained(model_id, *, dtype):
+            calls["model_id"] = model_id
+            return ExportableCausalLM()
+
+    return SimpleNamespace(AutoTokenizer=TokenizerFactory, AutoModelForCausalLM=ModelFactory)
+
+
+def test_export_hf_model_writes_a_loadable_artifact(monkeypatch, tmp_path):
+    """A Hugging Face causal LM returns CausalLMOutputWithPast, which torch.export
+    puts in the output pytree and torch.export.load then cannot deserialize. LM7
+    captures a logits-only graph so the artifact actually round-trips."""
+    import lm7
+
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers({}))
+    output = tmp_path / "model.lm7"
+
+    result = huggingface.export_hf_model(
+        "hf://example/tiny-model",
+        output=str(output),
+        prompt="Hello",
+        target="cpu",
+    )
+
+    assert result.model_id == "example/tiny-model"
+    assert result.backend == "export"
+    assert result.input_tokens == 3
+    assert "exported_program.pt2" in result.files
+    assert result.artifact_bytes > 0
+
+    reloaded = lm7.load_artifact(output)
+    logits = reloaded(
+        input_ids=torch.tensor([[1, 2, 3]]),
+        attention_mask=torch.ones((1, 3), dtype=torch.long),
+    )
+    assert isinstance(logits, torch.Tensor)
+    assert logits.shape == (1, 3, 16)
+
+
+def test_export_hf_model_rejects_a_non_hf_uri(tmp_path):
+    with pytest.raises(UnsupportedModelError, match="expected a Hugging Face URI"):
+        huggingface.export_hf_model("./local/model", output=str(tmp_path / "m.lm7"))
