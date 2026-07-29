@@ -50,6 +50,12 @@ lm7.export(
     model, args=(example_input,), target="cpu", backend="aot_inductor", output="model-aot.lm7"
 )
 
+# Level 3 - capture and compile to a vendor runtime's own format. On Intel CPU,
+# OpenVINO IR, which does not need PyTorch to execute.
+lm7.export(
+    model, args=(example_input,), target="cpu", backend="openvino", output="model-ov.lm7"
+)
+
 loaded = lm7.load_artifact("model-aot.lm7")  # another process, nothing to compile
 out = loaded(example_input)
 ```
@@ -60,6 +66,18 @@ version and the checksums before loading anything.
 
 `aot_inductor` is validated for CPU and Apple Silicon only, and uses Beta PyTorch
 APIs. On other targets, export still works at level 1.
+
+`openvino` is validated for Intel CPU only. It adds `compiled_model.xml` and
+`compiled_model.bin` next to the `.pt2`, and both are checksummed. That IR pair
+is the only LM7 payload a machine can run **without PyTorch installed** — load it
+straight through `openvino.Core().compile_model()`, no `lm7` and no `torch`:
+
+```python
+import numpy, openvino
+
+model = openvino.Core().compile_model("model-ov.lm7/compiled_model.xml", "CPU")
+result = model([numpy.random.rand(8, 16).astype("float32")])[model.outputs[0]]
+```
 
 ## Bundles
 

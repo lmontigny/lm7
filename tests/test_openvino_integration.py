@@ -14,7 +14,7 @@ import torch
 import lm7
 from lm7.backends.base import CompileRequest
 from lm7.backends.openvino import OpenVINOBackend
-from lm7.errors import BackendUnavailableError, CompilationError
+from lm7.errors import ArtifactLoadError, BackendUnavailableError, CompilationError
 from lm7.targets import parse_target
 
 pytestmark = [
@@ -118,6 +118,56 @@ def test_openvino_does_not_compress_weights_to_fp16_by_default():
     assert compiled.artifact.metadata["compress_to_fp16"] is False
     # FP16 weight compression lands around 1e-3 on this model; FP32 stays near 1e-6.
     assert (actual - reference).abs().max().item() < 1e-5
+
+
+def test_export_writes_openvino_ir_and_round_trips(tmp_path):
+    torch.manual_seed(0)
+    source = model()
+    example = torch.randn(8, 16)
+    expected = copy.deepcopy(source)(example)
+
+    artifact = lm7.export(
+        source,
+        args=(example,),
+        target="cpu",
+        backend="openvino",
+        output=tmp_path / "model.lm7",
+    )
+
+    assert artifact.manifest.backend == "openvino"
+    assert artifact.manifest.runtime_requirements["openvino"] is not None
+    assert (artifact.path / "compiled_model.xml").is_file()
+    assert (artifact.path / "compiled_model.bin").is_file()
+    torch.testing.assert_close(artifact(example), expected, rtol=1e-4, atol=1e-4)
+
+    reloaded = lm7.load_artifact(artifact.path)
+    torch.testing.assert_close(reloaded(example), expected, rtol=1e-4, atol=1e-4)
+
+
+def test_export_rejects_openvino_for_non_intel_targets(tmp_path):
+    with pytest.raises(BackendUnavailableError, match="Intel CPU"):
+        lm7.export(
+            model(),
+            args=(torch.randn(8, 16),),
+            target="nvidia",
+            backend="openvino",
+            output=tmp_path / "model.lm7",
+        )
+
+
+def test_corrupt_openvino_weights_fail_checksum_validation(tmp_path):
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(8, 16),),
+        target="cpu",
+        backend="openvino",
+        output=tmp_path / "model.lm7",
+    )
+    weights = artifact.path / "compiled_model.bin"
+    weights.write_bytes(weights.read_bytes() + b"corrupt")
+
+    with pytest.raises(ArtifactLoadError, match="checksum does not match"):
+        lm7.load_artifact(artifact.path)
 
 
 def test_openvino_ir_artifact_loads_without_torch():

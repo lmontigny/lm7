@@ -124,11 +124,7 @@ class OpenVINOBackend:
                 export_kwargs,
                 strict=False,
             )
-            ov_model = openvino.convert_model(exported_program)
-
             flat_inputs = _flatten_tensors((export_args, export_kwargs))
-            if static_shapes:
-                _reshape_to_static(ov_model, flat_inputs)
 
             artifact_root = cache_dir() / "openvino"
             artifact_root.mkdir(parents=True, exist_ok=True)
@@ -137,7 +133,12 @@ class OpenVINOBackend:
             model_path = Path(stem)
             model_path.unlink(missing_ok=True)
             try:
-                openvino.save_model(ov_model, str(model_path), compress_to_fp16=compress_to_fp16)
+                self.compile_exported(
+                    exported_program,
+                    model_path,
+                    static_shapes=flat_inputs if static_shapes else None,
+                    compress_to_fp16=compress_to_fp16,
+                )
                 compiled = _compile_ir(
                     openvino,
                     model_path,
@@ -171,6 +172,36 @@ class OpenVINOBackend:
                 f"{exc}. Try backend='inductor', backend='eager', or fallback='warn'."
             ) from exc
 
+    def compile_exported(
+        self,
+        exported_program: torch.export.ExportedProgram,
+        model_path: Path,
+        *,
+        static_shapes: Sequence[torch.Tensor] | None = None,
+        compress_to_fp16: bool = False,
+    ) -> Path:
+        """Convert an ExportedProgram to OpenVINO IR and save it to ``model_path``.
+
+        Writes ``model_path`` and its ``.bin`` weight sibling. ``static_shapes``
+        pins the IR to those tensor shapes; leaving it ``None`` keeps the symbolic
+        dimensions ``torch.export`` produces.
+        """
+        probe = self.probe()
+        if not probe.available:
+            raise CompilationError(probe.reason)
+        openvino = importlib.import_module("openvino")
+        try:
+            ov_model = openvino.convert_model(exported_program)
+            if static_shapes is not None:
+                _reshape_to_static(ov_model, static_shapes)
+            openvino.save_model(ov_model, str(model_path), compress_to_fp16=compress_to_fp16)
+        except Exception as exc:
+            raise CompilationError(
+                f"OpenVINO IR conversion failed for {model_path}: {exc}. "
+                "Check that the model's operators are supported by the PyTorch frontend."
+            ) from exc
+        return model_path
+
     def load(self, artifact: Artifact) -> Callable[..., Any]:
         if artifact.callable is not None:
             return artifact.callable
@@ -180,10 +211,31 @@ class OpenVINOBackend:
         if not probe.available:
             raise ArtifactLoadError(probe.reason)
         openvino = importlib.import_module("openvino")
-        device = str(artifact.metadata.get("device", "CPU"))
-        precision = artifact.metadata.get("inference_precision")
-        config = {"INFERENCE_PRECISION_HINT": str(precision)} if precision else {}
-        compiled = _compile_ir(openvino, artifact.path, device=device, config=config)
+        return self.load_ir(
+            artifact.path,
+            device=str(artifact.metadata.get("device", "CPU")),
+            inference_precision=artifact.metadata.get("inference_precision"),
+            openvino=openvino,
+        )
+
+    def load_ir(
+        self,
+        model_path: Path,
+        *,
+        device: str = "CPU",
+        inference_precision: str | None = _DEFAULT_INFERENCE_PRECISION,
+        openvino: Any = None,
+    ) -> Callable[..., Any]:
+        """Load saved OpenVINO IR into a tensor-in/tensor-out callable."""
+        probe = self.probe()
+        if not probe.available:
+            raise ArtifactLoadError(probe.reason)
+        if openvino is None:
+            openvino = importlib.import_module("openvino")
+        config = (
+            {"INFERENCE_PRECISION_HINT": str(inference_precision)} if inference_precision else {}
+        )
+        compiled = _compile_ir(openvino, model_path, device=device, config=config)
         return _OpenVINOCallable(compiled, len(compiled.inputs))
 
 

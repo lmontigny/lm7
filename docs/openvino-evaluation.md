@@ -148,9 +148,28 @@ for example) needs the same wrapper the benchmark harness uses. And only the
 `cpu` and `intel` target vendors are accepted; Intel GPU and NPU are untested
 because no such device was available.
 
+### Artifacts
+
+`lm7.export(..., backend="openvino")` writes the IR into an `.lm7` artifact
+alongside the `ExportedProgram`, with both `compiled_model.xml` and
+`compiled_model.bin` checksummed in the manifest:
+
+```python
+lm7.export(model, args=(example,), target="cpu", backend="openvino", output="model.lm7")
+```
+
+`load_artifact()` verifies both files and returns a callable backed by the IR.
+In a bundle the OpenVINO entry ranks at 80, below `aot_inductor` and above a bare
+`export`.
+
+This is the payload that answers the evaluation's deployment criterion: the IR
+runs on a machine with no PyTorch installed, through
+`openvino.Core().compile_model()` alone.
+
 `tests/test_openvino_integration.py` covers eager parity, the planner ranking,
-the bfloat16 and device guards, FP32 weight preservation, and loading the saved
-IR in a subprocess that never imports `torch`.
+the bfloat16 and device guards, FP32 weight preservation, the export round trip,
+weight-checksum validation, and loading the saved IR in a subprocess that never
+imports `torch`.
 
 ## Validation commands
 
