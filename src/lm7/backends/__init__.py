@@ -7,6 +7,7 @@ from .openxla import OpenXLABackend
 from .registry import BackendRegistry
 from .stablehlo import StableHLOBackend
 from .tensorrt import TensorRTBackend
+from .tenstorrent import TenstorrentBackend
 
 registry = BackendRegistry()
 registry.register(EagerBackend())
@@ -17,5 +18,6 @@ registry.register(IREEVulkanBackend())
 registry.register(OpenVINOBackend())
 registry.register(OpenXLABackend())
 registry.register(StableHLOBackend())
+registry.register(TenstorrentBackend())
 
 __all__ = ["registry"]

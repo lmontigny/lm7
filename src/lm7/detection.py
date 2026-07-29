@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import platform
 import re
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -67,6 +69,7 @@ def detect_targets() -> list[DeviceInfo]:
         pass
 
     devices.extend(_detect_tpu_targets())
+    devices.extend(_detect_tenstorrent_targets())
 
     cpu_arch = platform.machine().lower() or None
     devices.append(
@@ -114,7 +117,7 @@ def torch_device(target: TargetSpec) -> torch.device:
         return torch.device("xpu", ordinal)
     if target.vendor == "apple":
         return torch.device("mps")
-    if target.vendor == "tpu":
+    if target.vendor in {"tpu", "tenstorrent"}:
         return torch.device("xla", ordinal)
     return torch.device("cpu")
 
@@ -152,3 +155,78 @@ def _detect_tpu_targets() -> list[DeviceInfo]:
         )
         for ordinal in range(count)
     ]
+
+
+TENSTORRENT_DEVICE_ROOT = Path("/dev/tenstorrent")
+
+
+def tenstorrent_device_nodes() -> list[str]:
+    """Character devices published by tt-kmd, one per Tenstorrent PCIe card.
+
+    This is the driver-level view, independent of any Python package, so it
+    tells a missing card apart from a missing runtime in diagnostics.
+    """
+    try:
+        return sorted(node.name for node in TENSTORRENT_DEVICE_ROOT.iterdir())
+    except OSError:
+        return []
+
+
+def activate_tenstorrent_pjrt(runtime: Any) -> str | None:
+    """Select the TT PJRT device when that is safe, returning the resulting type.
+
+    torch_plugin_tt registers the plugin through torch_xla's entry point, but the
+    device type still has to be selected — this is the call tt-xla's own demos
+    make. PJRT serves one device type per process, so an explicit `PJRT_DEVICE`
+    and a runtime that has already come up elsewhere both win over Tenstorrent.
+    """
+    device_type = runtime.device_type()
+    if device_type == "TT" or device_type == "TPU":
+        return device_type
+    requested = os.environ.get("PJRT_DEVICE")
+    if requested not in {None, "", "TT"}:
+        return device_type
+    runtime.set_device_type("TT")
+    return runtime.device_type()
+
+
+def _detect_tenstorrent_targets() -> list[DeviceInfo]:
+    try:
+        if importlib.util.find_spec("torch_plugin_tt") is None:
+            return []
+        torch_xla = importlib.import_module("torch_xla")
+        runtime = importlib.import_module("torch_xla.runtime")
+        if activate_tenstorrent_pjrt(runtime) != "TT":
+            return []
+        count = runtime.addressable_device_count()
+        attributes = runtime.global_runtime_device_attributes()
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError):
+        # Optional runtime discovery must not make CPU/GPU detection fail when
+        # the card, the tt-kmd driver, or the tt-metal runtime is absent.
+        return []
+    if count < 1:
+        return []
+
+    first_attributes = dict(attributes[0]) if attributes else {}
+    device_kind = str(first_attributes.get("device_kind", "Tenstorrent device"))
+    architecture = _tenstorrent_architecture(device_kind)
+    capabilities = {
+        "torch_xla": getattr(torch_xla, "__version__", None),
+        "pjrt_device": "TT",
+        "addressable_device_count": count,
+        "device_nodes": tenstorrent_device_nodes(),
+        "runtime_attributes": first_attributes,
+    }
+    return [
+        DeviceInfo(
+            TargetSpec("tenstorrent", "accelerator", architecture=architecture, ordinal=ordinal),
+            device_kind,
+            capabilities=capabilities,
+        )
+        for ordinal in range(count)
+    ]
+
+
+def _tenstorrent_architecture(device_kind: str) -> str | None:
+    lowered = device_kind.lower()
+    return next((arch for arch in ("blackhole", "wormhole") if arch in lowered), None)

@@ -15,7 +15,7 @@ This document summarizes the major AI inference hardware platforms and their com
 | Cerebras | WSE-3 | Cerebras Software Platform | Partial | Cerebras Graph Compiler | Native SDK |
 | Graphcore | Bow IPU | Poplar SDK | ❌ | Poplar Compiler | PopTorch |
 | SambaNova | RDU | SambaFlow | ❌ | SambaFlow Compiler | Native SDK |
-| Tenstorrent | Wormhole, Blackhole | TT-Metal, TT-NN | Mostly ✅ | TT-Metal Compiler (MLIR) | Native SDK |
+| Tenstorrent | Wormhole, Blackhole | TT-Metal, TT-NN | ✅ | tt-mlir (MLIR) via tt-xla | torch-xla (PJRT) |
 | Huawei | Ascend 310, 910 | CANN | Partial | GE + TBE Compiler | torch_npu |
 | Microsoft | Maia 100 | Azure AI Stack | ❌ | Internal MLIR/XLA Compiler | Internal |
 | Meta | MTIA | Internal | ❌ | Internal Compiler | Internal |
