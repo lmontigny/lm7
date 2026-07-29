@@ -52,9 +52,7 @@ lm7.export(
 
 # Level 3 - capture and compile to a vendor runtime's own format. On Intel CPU,
 # OpenVINO IR, which does not need PyTorch to execute.
-lm7.export(
-    model, args=(example_input,), target="cpu", backend="openvino", output="model-ov.lm7"
-)
+lm7.export(model, args=(example_input,), target="cpu", backend="openvino", output="model-ov.lm7")
 
 loaded = lm7.load_artifact("model-aot.lm7")  # another process, nothing to compile
 out = loaded(example_input)
