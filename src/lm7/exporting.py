@@ -17,6 +17,7 @@ from typing import Any
 import torch
 
 from .backends import registry
+from .backends.aot_inductor import SUPPORTED_VENDORS as AOT_INDUCTOR_VENDORS
 from .backends.aot_inductor import AOTInductorBackend
 from .backends.openvino import OpenVINOBackend
 from .cache import input_signature
@@ -169,10 +170,10 @@ def export(
             f"Export backend {backend!r} is not supported; choose one of {choices}."
         )
     resolved_target = _artifact_target(target)
-    if backend == "aot_inductor" and resolved_target.vendor not in {"cpu", "apple"}:
+    if backend == "aot_inductor" and resolved_target.vendor not in AOT_INDUCTOR_VENDORS:
         raise BackendUnavailableError(
-            "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU and "
-            "Apple Silicon targets."
+            "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU, Apple "
+            "Silicon, and NVIDIA targets."
         )
     if backend == "openvino" and resolved_target.vendor not in {"cpu", "intel"}:
         raise BackendUnavailableError(
@@ -270,7 +271,9 @@ def export(
             compiler_options = dict(options or {})
             if debug:
                 compiler_options.update(_debug_inductor_options(debug_dir))
-            selected_backend.compile_exported(exported_program, compiled_path, compiler_options)
+            selected_backend.compile_exported(
+                exported_program, compiled_path, compiler_options, target=resolved_target
+            )
             compiled_file = COMPILED_PROGRAM_NAME
             compiled_sha256 = _file_sha256(compiled_path)
             if debug:

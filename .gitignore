@@ -10,3 +10,4 @@ build/
 .coverage
 .lm7-openvino-ir/
 artifacts/
+model-debug.lm7/

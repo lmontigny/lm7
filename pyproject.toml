@@ -20,6 +20,15 @@ hf = ["transformers>=4.46", "safetensors>=0.4"]
 torchao = ["torchao==0.17.0"]
 tensorrt = ["torch-tensorrt==2.12.1"]
 openvino = ["openvino>=2025.0"]
+# AOTInductor compiles a C++ wrapper against the CUDA headers, which the PyTorch
+# CUDA wheel does not ship. These wheels unpack into the same nvidia/cu13 tree,
+# so LM7 finds one complete toolkit. CUDA 12 PyTorch builds need the *-cu12
+# packages instead, and a system CUDA toolkit works too — see docs/development.md.
+cuda-aot = [
+    "nvidia-cuda-nvcc>=13.0",
+    "nvidia-cuda-crt>=13.0",
+    "nvidia-cuda-cccl>=13.0",
+]
 openxla = ["torch_xla[tpu]==2.9.0"]
 
 [tool.hatch.build.targets.wheel]
