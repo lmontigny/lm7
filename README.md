@@ -113,6 +113,13 @@ runtime.
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
 
+[Apache TVM](docs/tvm.md) is a registered CPU backend, but an initial one and
+**much slower than Inductor** — 167x slower than eager on LM7's own MLP
+benchmark, because the TVM wheel no longer ships autotuning and Relax has no
+BLAS dispatch for matmul. It sits at priority 0 so `backend="auto"` never
+picks it. Note LM7 does not use `torch.compile(backend="tvm")`, which is
+broken against current TVM; the doc explains why.
+
 [Tenstorrent](docs/tenstorrent.md) is the one vendor here whose whole stack is
 open source, and LM7 drives it end to end: `torch.compile(..., backend="tt")`
 goes through [tt-xla](https://github.com/tenstorrent/tt-xla)'s PJRT plugin to
@@ -220,6 +227,7 @@ lm7.compile(model, target="tenstorrent:blackhole")
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
 | `litert` | LiteRT Torch + LiteRT/XNNPACK | persistent `.tflite` model | **AOT export only** | cpu | explicit |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
+| `tvm` | Apache TVM (Relax) | TVM VM module | JIT | cpu | explicit |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | — |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
@@ -527,6 +535,7 @@ python examples/mac_mlp.py                    # Apple Silicon
 python examples/tenstorrent_mlp.py            # Tenstorrent Wormhole / Blackhole
 python examples/local_targets.py --require-nvidia   # CPU vs NVIDIA parity
 python benchmarks/local.py --target cpu nvidia --backend eager inductor
+python benchmarks/tvm_relax.py                # TVM vs Inductor vs eager, CPU
 ```
 
 More examples live in [`examples/`](examples), and benchmarks in
@@ -551,6 +560,9 @@ for environment checks, GPU integration tests, and compiler IR output, and
   [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) for the WSL linker caveat.
 - AMD ROCm, Apple Silicon (MPS), Intel XPU, OpenXLA TPU, and Tenstorrent support
   are initial single-process integrations without physical-hardware CI.
+- Apache TVM is CPU-only, JIT-only, positional-inputs-only, and far slower than
+  Inductor; it is registered for reachability, not speed. Autotuning, CUDA, and
+  artifacts are not wired up — see [TVM](docs/tvm.md).
 - ExecuTorch is export-only and XNNPACK-only, so the edge story is CPU: phone
   NPUs (Core ML, Qualcomm QNN, MediaTek, Exynos) are not wired up, artifacts are
   unquantized and static-shape, and validation is host x86-64 rather than a real

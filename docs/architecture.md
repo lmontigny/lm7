@@ -43,6 +43,15 @@ process, and the artifact is the deliverable. Because XNNPACK spans ARM64 and
 x86-64, export *and* execution are validated on ordinary CI. See
 [ExecuTorch support](executorch.md).
 
+The optional `tvm` adapter compiles through Apache TVM's Relax IR for CPU. It
+does not use PyTorch's built-in `tvm` dynamo backend, which still imports the
+Relay API TVM deleted, nor TVM's `relax_dynamo()`, whose `from_fx` translator
+rejects `embedding` and so cannot lower a causal LM. Instead it captures with
+`torch.export` and converts with `from_exported_program`, then builds and runs
+on the Relax VM. It reports priority 0, tying with `eager` so that automatic
+planning never selects it — TVM's untuned codegen measured far slower than
+Inductor. See [Apache TVM support](tvm.md).
+
 ## Source artifacts
 
 `lm7.export()` captures an `nn.Module` through `torch.export` or accepts an

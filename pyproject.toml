@@ -66,6 +66,9 @@ tenstorrent = ["pjrt-plugin-tt"]
 # extra needs an environment built around the matching PyTorch rather than the
 # latest one -- see docs/executorch.md.
 executorch = ["executorch>=1.3,<2"]
+# Relax-era TVM only. LM7 does not use PyTorch's built-in `tvm` dynamo backend,
+# which still targets the removed Relay API -- see docs/tvm.md.
+tvm = ["apache-tvm>=0.25,<1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -88,6 +91,7 @@ markers = [
     "tpu: requires PyTorch/XLA on a Google TPU VM",
     "tenstorrent: requires the tt-xla PJRT plugin and a Tenstorrent card",
     "executorch: requires the ExecuTorch runtime and a matching PyTorch",
+    "tvm: requires Apache TVM with the Relax PyTorch frontend",
 ]
 
 [tool.ruff]

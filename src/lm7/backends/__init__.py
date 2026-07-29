@@ -11,6 +11,7 @@ from .registry import BackendRegistry
 from .stablehlo import StableHLOBackend
 from .tensorrt import TensorRTBackend
 from .tenstorrent import TenstorrentBackend
+from .tvm import TVMBackend
 
 registry = BackendRegistry()
 registry.register(EagerBackend())
@@ -25,5 +26,6 @@ registry.register(OpenXLABackend())
 registry.register(StableHLOBackend())
 registry.register(ExecuTorchBackend())
 registry.register(TenstorrentBackend())
+registry.register(TVMBackend())
 
 __all__ = ["registry"]
