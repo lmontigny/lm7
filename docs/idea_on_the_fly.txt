@@ -27,3 +27,4 @@ extend pytorchAO for quantization as single param at --quantize bf16/fp4/fp8
 explore very low precision binary, int2,int4 etc for weight (and activation?)
 validate XLA / openXLA (clarify) on lightniightAI, they have TPU
 amd dev cloud for mi300 access, 2$/h
+Metal (Apple Silicon), CUDA, Vulkan (via WebGPU/spirv),
