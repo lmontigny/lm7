@@ -132,6 +132,38 @@ LM7_RUN_HF_TESTS=1 .venv-trt/bin/python -m pytest \
   tests/test_tensorrt_integration.py -q
 ```
 
+## IREE Vulkan
+
+Install the optional IREE compiler, Turbine bridge, and runtime in a separate or
+existing development environment:
+
+```bash
+uv pip install -e ".[dev,iree-vulkan]"
+python -m pytest tests/test_iree_vulkan.py -q
+python -m pytest tests/test_iree_vulkan_integration.py -q
+```
+
+The first suite uses test doubles for compiler/runtime boundaries. The second
+invokes the real compiler and writes a VMFB even if no Vulkan device is visible;
+its execution check skips unless IREE enumerates a device.
+
+On the validated Windows/WSL machine, compile in WSL and inspect the native
+Windows driver separately:
+
+```powershell
+vulkaninfo.exe --summary
+python -c "import iree.runtime as rt; print(rt.get_driver('vulkan').query_available_devices())"
+```
+
+```bash
+python -m pytest tests/test_iree_vulkan_integration.py -q
+```
+
+The native Windows runtime enumerated and executed the WSL-produced VMFB on an
+RTX 4070 SUPER; WSL itself exposed CUDA but no IREE Vulkan device. See
+[IREE Vulkan artifacts](iree-vulkan.md) for the API, target tuning, exact scope,
+and the distinction from WebGPU.
+
 ## Hugging Face integration
 
 These tests are opt-in because they download weights and require a CUDA or
