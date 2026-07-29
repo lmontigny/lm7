@@ -34,5 +34,6 @@ ExecuTorch Vulkan is a separate edge/Android deployment path.
 
 simplify readme see z
 add examples/ dir
+add tenstorrent support (open source compiler llvm/mlir)
 
 -> HackerNews feedback on 7 days
