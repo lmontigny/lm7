@@ -104,6 +104,10 @@ Even a good result would not change the recommendation for a JIT backend:
 - **Weights are baked in.** LM7 converts with `keep_params_as_input=False`, so
   the built module takes only the call's real arguments.
 
+Tensors cross into TVM and back over **DLPack**, so the exchange is zero-copy
+and needs no NumPy — unlike the OpenVINO adapter, which round-trips through
+NumPy arrays.
+
 Set a different TVM target with `options={"target": "llvm -mcpu=..."}` if you
 want to try architecture-specific codegen.
 

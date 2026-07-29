@@ -163,12 +163,9 @@ class _TVMRunner:
                 "A TVM-compiled callable takes positional tensors only; got "
                 f"{', '.join(sorted(kwargs))}."
             )
-        inputs = [
-            self._tvm.runtime.tensor(
-                tensor.detach().cpu().contiguous().numpy(), device=self._device
-            )
-            for tensor in args
-        ]
+        # DLPack rather than NumPy: it is zero-copy, and it keeps this adapter
+        # working on a base LM7 install, which does not depend on NumPy.
+        inputs = [self._tvm.runtime.from_dlpack(tensor.detach().contiguous()) for tensor in args]
         outputs = self._machine["main"](*inputs)
         return _to_torch(outputs)
 
@@ -177,10 +174,10 @@ def _to_torch(value: Any) -> Any:
     """Convert a Relax VM return value back into torch tensors.
 
     The VM returns its own array type, or a nested container of them for a
-    multi-output graph.
+    multi-output graph. DLPack keeps the conversion zero-copy and NumPy-free.
     """
-    if hasattr(value, "numpy"):
-        return torch.from_numpy(value.numpy())
+    if hasattr(value, "__dlpack__"):
+        return torch.from_dlpack(value)
     if isinstance(value, (list, tuple)) or type(value).__name__ == "Array":
         converted = tuple(_to_torch(item) for item in value)
         return converted[0] if len(converted) == 1 else converted

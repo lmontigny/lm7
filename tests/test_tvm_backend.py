@@ -76,15 +76,20 @@ def install_fake_tvm(monkeypatch, *, output=None, build_error: Exception | None 
             return run
 
     class _FakeTensor:
+        """Exposes __dlpack__ like a real TVM tensor, so no NumPy is involved."""
+
         def __init__(self, value):
             self._value = value
             self.shape = tuple(value.shape)
 
-        def numpy(self):
-            return self._value.numpy()
+        def __dlpack__(self, *args, **kwargs):
+            return self._value.__dlpack__(*args, **kwargs)
 
-    def fake_tensor(array, device=None):
-        return _FakeTensor(torch.from_numpy(array))
+        def __dlpack_device__(self):
+            return self._value.__dlpack_device__()
+
+    def from_dlpack(tensor):
+        return _FakeTensor(tensor)
 
     def build(mod, target=None):
         calls["built_target"] = str(target)
@@ -116,7 +121,7 @@ def install_fake_tvm(monkeypatch, *, output=None, build_error: Exception | None 
         __version__="0.25.0-test",
         target=SimpleNamespace(Target=Target),
         cpu=lambda index: SimpleNamespace(name="cpu", index=index),
-        runtime=SimpleNamespace(tensor=fake_tensor),
+        runtime=SimpleNamespace(from_dlpack=from_dlpack),
     )
     for name, module in {
         "tvm": tvm_module,
@@ -246,8 +251,11 @@ def test_to_torch_unwraps_nested_arrays():
     tensor = torch.ones(2, 2)
 
     class Holder:
-        def numpy(self):
-            return tensor.numpy()
+        def __dlpack__(self, *args, **kwargs):
+            return tensor.__dlpack__(*args, **kwargs)
+
+        def __dlpack_device__(self):
+            return tensor.__dlpack_device__()
 
     assert isinstance(tvm_backend_module._to_torch(Holder()), torch.Tensor)
     nested = FakeArray([FakeArray([Holder()])])
@@ -259,8 +267,11 @@ def test_to_torch_keeps_multiple_outputs_as_a_tuple():
         def __init__(self, value):
             self._value = value
 
-        def numpy(self):
-            return self._value.numpy()
+        def __dlpack__(self, *args, **kwargs):
+            return self._value.__dlpack__(*args, **kwargs)
+
+        def __dlpack_device__(self):
+            return self._value.__dlpack_device__()
 
     out = tvm_backend_module._to_torch([Holder(torch.ones(2)), Holder(torch.zeros(2))])
 
