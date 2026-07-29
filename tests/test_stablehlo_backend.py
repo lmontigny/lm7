@@ -224,3 +224,19 @@ def test_program_entries_reports_an_unreadable_package(tmp_path):
     broken.write_bytes(b"not a zip")
     with pytest.raises(ArtifactLoadError, match="unreadable"):
         StableHLOBackend().program_entries(broken)
+
+
+def test_export_works_when_the_cache_directory_does_not_exist(tmp_path, monkeypatch):
+    """A first run on a clean machine has no LM7 cache directory yet."""
+    install_fake_torch_xla(monkeypatch)
+    monkeypatch.setenv("LM7_CACHE_DIR", str(tmp_path / "absent" / "cache"))
+
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        backend="stablehlo",
+        output=tmp_path / "model.lm7",
+    )
+    assert artifact.manifest.compiled_file == COMPILED_STABLEHLO_NAME
+    lm7.load_artifact(artifact.path)

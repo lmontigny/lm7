@@ -25,6 +25,17 @@ PROGRAM_TEXT_ENTRY = "functions/forward.mlir"
 PROGRAM_META_ENTRY = "functions/forward.meta"
 
 
+def _scratch_dir(prefix: str) -> Path:
+    """Return a private directory under the LM7 cache, creating the cache if new.
+
+    ``cache_dir()`` reports where the cache belongs; it does not guarantee the
+    directory exists, and ``mkdtemp`` will not create parents.
+    """
+    root = cache_dir() / "stablehlo"
+    root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+
+
 def _has_keyword_inputs(exported_program: torch.export.ExportedProgram) -> bool:
     """Report whether a captured program takes any keyword input.
 
@@ -140,7 +151,7 @@ class StableHLOBackend:
                 "example args=(input_ids, attention_mask) rather than kwargs."
             )
 
-        staging = Path(tempfile.mkdtemp(prefix="lm7-stablehlo-", dir=cache_dir()))
+        staging = _scratch_dir("package-")
         try:
             tree = staging / "stablehlo"
             stablehlo.save_as_stablehlo(exported_program, str(tree))
@@ -185,7 +196,7 @@ class StableHLOBackend:
             raise ArtifactLoadError(probe.reason)
         try:
             stablehlo = importlib.import_module("torch_xla.stablehlo")
-            unpacked = Path(tempfile.mkdtemp(prefix="lm7-stablehlo-load-", dir=cache_dir()))
+            unpacked = _scratch_dir("load-")
             with zipfile.ZipFile(package_path) as archive:
                 archive.extractall(unpacked)
             # A zip stores no empty directories, and a model with no baked
