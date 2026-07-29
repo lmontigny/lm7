@@ -30,6 +30,10 @@ cuda-aot = [
     "nvidia-cuda-cccl>=13.0",
 ]
 openxla = ["torch_xla[tpu]==2.9.0"]
+# The StableHLO lowering ships in torch_xla, which is ABI-tied to a matching
+# PyTorch, so this extra needs an environment built around that pair rather
+# than the latest torch -- see docs/stablehlo-pjrt-evaluation.md.
+stablehlo = ["torch_xla==2.9.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -45,6 +49,7 @@ markers = [
     "hf: requires Hugging Face model downloads and a CUDA GPU",
     "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
     "openvino: requires the OpenVINO runtime",
+    "stablehlo: requires PyTorch/XLA for the StableHLO lowering",
     "tpu: requires PyTorch/XLA on a Google TPU VM",
 ]
 
