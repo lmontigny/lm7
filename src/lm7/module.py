@@ -58,6 +58,9 @@ class CompiledModule(torch.nn.Module):
         self.selected_backend: str | None = None
         self.target: TargetSpec | None = None
         self.plan: Plan | None = None
+        # Retained so callers can find a backend's on-disk artifact, such as the
+        # OpenVINO IR or the AOTInductor package, after the first compile.
+        self.artifact: Artifact | None = None
         self._variants: dict[tuple[Any, ...], Any] = {}
         self._compile_lock = threading.RLock()
         if self.model.training:
@@ -116,6 +119,7 @@ class CompiledModule(torch.nn.Module):
             artifact = backend.compile(request, args, kwargs)
             self.selected_backend = "eager"
         callable_variant = backend.load(artifact)
+        self.artifact = artifact
         self._variants[signature] = callable_variant
         if self.cache_enabled:
             memory_cache.put(

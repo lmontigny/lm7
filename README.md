@@ -70,7 +70,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `eager` | Supported |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `eager` | Supported |
 | NVIDIA | GPU | `nvidia` | `inductor`, `tensorrt`, `eager` | Supported |
 | AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
@@ -84,10 +84,14 @@ Any x86-64 or ARM64 CPU runs through the `cpu` target, Intel and AMD included �
 and that is the only path with CI coverage. A vendor listed twice has an
 *additional* accelerator; it does not mean its CPU is unsupported.
 
-Two vendor compilers are also under evaluation as alternatives for hardware that
-already works — [OpenVINO](docs/openvino-evaluation.md) on Intel and
-[MIGraphX](docs/amd-migraphx.md) on AMD GPU. Each has a benchmark harness but no
-registered backend, so automatic planning never selects one.
+[OpenVINO](docs/openvino-evaluation.md) is a registered backend for the `cpu`
+target, but it is opt-in: it ranks below Inductor and AOTInductor, so
+`backend="auto"` never selects it. Ask for it with `backend="openvino"`. It
+compiles to Intel's IR format, which is the only LM7 artifact that runs in a
+process without PyTorch installed.
+
+[MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
+benchmark harness but no registered backend.
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
@@ -192,9 +196,10 @@ for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
 `inductor` and TPU defaults to `openxla`. `eager` wins only when nothing else
 supports the target, or when a compile fails and `fallback="warn"` takes over.
 
-`tensorrt` and `openxla` need version-matched extras and must be selected
+`tensorrt`, `openxla`, and `openvino` need extras and must be selected
 explicitly: `uv pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
-2.12 / CUDA 13) or, on a TPU VM, `uv pip install -e ".[openxla]"`.
+2.12 / CUDA 13), `uv pip install -e ".[openvino]"` on an Intel CPU, or, on a TPU
+VM, `uv pip install -e ".[openxla]"`.
 
 The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 `LM7_CACHE_DIR` set defaults; explicit function arguments take precedence.
@@ -336,13 +341,17 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - Only local PyTorch devices are detected, and only the hardware listed under
   [supported hardware](#supported-hardware).
 - JIT compiled callables and TensorRT engines are process-local; only
-  `aot_inductor` and `lm7.export` produce something another process can load.
+  `aot_inductor`, `openvino`, and `lm7.export` produce something another process
+  can load.
 - AOTInductor is validated only for CPU and Apple Silicon (MPS) and uses Beta
   PyTorch APIs.
 - AMD ROCm, Apple Silicon (MPS), Intel XPU, and OpenXLA TPU support are initial
   single-process integrations without physical-hardware CI.
-- Intel OpenVINO, AMD MIGraphX, and Qualcomm Hexagon are evaluation plans with
-  measurement harnesses, not usable backends.
+- OpenVINO is validated for Intel CPU only, and rejects bfloat16 models because
+  its runtime exchanges tensors through NumPy. It returns tensors or tuples, so
+  models whose forward returns a dataclass need a wrapper.
+- AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
+  harnesses, not usable backends.
 - Quantization, distributed inference, remote hardware, and a stable compiled
   artifact ABI are future work.
 

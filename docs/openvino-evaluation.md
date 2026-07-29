@@ -110,9 +110,47 @@ causal-LM ids as `benchmarks/gpu.py`: `smollm2`, `lfm25`, `llama32-1b`, and
 and one logits tensor out, with `use_cache=False`, which measures a single
 prefill forward pass rather than a decode loop.
 
-Only add `backend="openvino"` after the evaluation shows a clear advantage for
-Intel CPU, GPU, NPU, or IR-based deployment. Keep it lower priority than
-Inductor until model coverage and artifact behavior are proven.
+## The registered backend
+
+The evaluation met its bar on Intel CPU, so `backend="openvino"` now exists as a
+registered backend in `src/lm7/backends/openvino.py`.
+
+```python
+model = lm7.compile(model, target="cpu", backend="openvino")
+```
+
+It implements **the IR path only**, because that is the path the measurements
+justify: `openvino_ir` beat eager on every workload on both hosts and beat
+Inductor on all six Intel workloads, while the `torch.compile` path lost to
+eager on two and never beat Inductor. LM7 exports with `torch.export`, converts
+with `convert_model`, saves IR with `save_model`, and executes through
+`Core().compile_model()`.
+
+It is **opt-in**. `supports()` reports priority 80, below Inductor (100) and
+AOTInductor (90), so `backend="auto"` never selects it. The latency case is
+made; broad operator coverage is not, which is what would justify raising it.
+
+The pitfalls in the section above are encoded as behaviour rather than left to
+the caller:
+
+| Pitfall | What the backend does |
+| --- | --- |
+| Reduced default precision | Pins `INFERENCE_PRECISION_HINT` to `f32`; override with `options={"inference_precision": ...}` |
+| FP16 weight compression | Passes `compress_to_fp16=False` |
+| Dynamically shaped export | Reshapes IR to the example input shapes; disable with `options={"static_shapes": False}` |
+| Output buffer aliasing | Clones every returned tensor |
+| No bfloat16 | Rejects bfloat16 models in `supports()` with an actionable reason |
+| Silent device fallback | Raises if the requested device is absent from `Core().available_devices` instead of quietly using CPU |
+
+Two limits worth knowing. The callable returns a tensor or a tuple of tensors,
+so a model whose `forward` returns a dataclass (a Hugging Face `ModelOutput`,
+for example) needs the same wrapper the benchmark harness uses. And only the
+`cpu` and `intel` target vendors are accepted; Intel GPU and NPU are untested
+because no such device was available.
+
+`tests/test_openvino_integration.py` covers eager parity, the planner ranking,
+the bfloat16 and device guards, FP32 weight preservation, and loading the saved
+IR in a subprocess that never imports `torch`.
 
 ## Validation commands
 
