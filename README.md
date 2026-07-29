@@ -71,7 +71,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` | Supported |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `litert`, `eager` | Supported; LiteRT export experimental |
 | NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `onnxruntime`, `iree_vulkan`, `eager` | Supported; ORT/Vulkan experimental |
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
@@ -103,6 +103,12 @@ uses PyTorch's `torch.export`-based ONNX exporter and an explicit execution
 provider, and supports both lazy compilation and persistent `.onnx` artifacts.
 Fixed-shape SmolLM2 logits, bounded dynamic MLP batches, CPU, and CUDA have been
 validated locally.
+
+[LiteRT](docs/litert.md) is an explicit CPU export backend. LiteRT Torch
+converts the source `nn.Module` to a static `compiled_model.tflite`, and the
+reloaded artifact executes through LiteRT's XNNPACK interpreter. This is the
+generic tensor-model path, not LiteRT-LM's tokenizer/KV-cache/conversation
+runtime.
 
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
@@ -212,6 +218,7 @@ lm7.compile(model, target="tenstorrent:blackhole")
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
+| `litert` | LiteRT Torch + LiteRT/XNNPACK | persistent `.tflite` model | **AOT export only** | cpu | explicit |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | — |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
@@ -232,14 +239,18 @@ for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
 `tenstorrent`. `eager` wins only when nothing else supports the target, or when
 a compile fails and `fallback="warn"` takes over.
 
-`tensorrt`, `openxla`, `openvino`, `onnxruntime`, and `iree_vulkan` need extras
-and must be selected explicitly: `uv pip install -e ".[tensorrt]"`
+`tensorrt`, `openxla`, `openvino`, `onnxruntime`, `iree_vulkan`, and `litert`
+need extras and must be selected explicitly: `uv pip install -e ".[tensorrt]"`
 (Torch-TensorRT 2.12.1 / PyTorch 2.12 / CUDA 13),
 `uv pip install -e ".[openvino]"` on an Intel CPU, or choose exactly one of
 `".[onnxruntime]"` for CPU and `".[onnxruntime-gpu]"` for CUDA 13. Use
 `uv pip install -e ".[iree-vulkan]"` for Vulkan AOT or, on a TPU VM,
 `uv pip install -e ".[openxla]"`. The two ONNX Runtime wheels expose the same
-module and must not be installed together. The Tenstorrent plugin is not on PyPI:
+module and must not be installed together.
+
+LiteRT Torch currently requires PyTorch `>=2.4,<2.13`, so install
+`uv pip install -e ".[litert]"` in a separate export environment if the main
+environment uses PyTorch 2.13. The Tenstorrent plugin is not on PyPI:
 
 ```bash
 uv pip install pjrt-plugin-tt --extra-index-url https://pypi.eng.aws.tenstorrent.com/
@@ -329,9 +340,10 @@ An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
 PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU,
 Apple, and NVIDIA AOT prototype, or `backend="openvino"` on Intel CPU to add
 OpenVINO IR (`compiled_model.xml` + `.bin`). `backend="onnxruntime"` adds an ONNX
-model, and `backend="iree_vulkan"` adds a Vulkan VMFB for an NVIDIA, AMD, or
-Intel GPU. Artifacts stay specific to compatible compiler, runtime, and hardware
-versions — they are not a stable cross-version ABI.
+model, `backend="litert"` adds a CPU `.tflite` flatbuffer, and
+`backend="iree_vulkan"` adds a Vulkan VMFB for an NVIDIA, AMD, or Intel GPU.
+Artifacts stay specific to compatible compiler, runtime, and hardware versions
+— they are not a stable cross-version ABI.
 
 The ONNX Runtime path writes `compiled_model.onnx` and records its execution
 provider in the manifest:
@@ -351,6 +363,23 @@ Use `target="nvidia:sm89"` with the GPU wheel to select
 target. See the [ONNX Runtime guide](docs/onnxruntime.md) for dynamic shapes,
 provider options, CUDA compatibility, SmolLM2 coverage, and the initial 2 GiB
 embedded-weight limit.
+
+The LiteRT path converts the original module with representative static inputs:
+
+```python
+artifact = lm7.export(
+    model.eval(),
+    args=(example_input,),
+    target="cpu",
+    backend="litert",
+    output="model-litert.lm7",
+)
+```
+
+It writes `compiled_model.tflite`, records the converter settings and checksum,
+and returns CPU tensors through LiteRT/XNNPACK after reload. See the
+[LiteRT guide](docs/litert.md) for the separate-environment requirement,
+supported options, and why LiteRT-LM is a separate future integration.
 
 The IREE Vulkan path compiles without a local GPU and loads the runtime lazily:
 
@@ -511,7 +540,7 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - Only local PyTorch devices are detected, and only the hardware listed under
   [supported hardware](#supported-hardware).
 - JIT compiled callables and TensorRT engines are process-local; only
-  `aot_inductor`, `openvino`, `onnxruntime`, `iree_vulkan`, and `lm7.export`
+  `aot_inductor`, `openvino`, `onnxruntime`, `iree_vulkan`, `litert`, and `lm7.export`
   produce something another process can load.
 - Exported causal-LM artifacts capture a prefill-only graph. `--dynamic-seq`
   makes the sequence length variable within recorded bounds; the batch dimension
@@ -541,6 +570,11 @@ for environment checks, GPU integration tests, and compiler IR output, and
   binding. Tensor-only inputs and flat outputs are supported; external-data ONNX
   packaging for models above the 2 GiB protobuf limit remains future work. See
   the [ONNX Runtime guide](docs/onnxruntime.md).
+- LiteRT is export-only and initially CPU/XNNPACK-only. It requires static,
+  tensor-only inputs and returns CPU tensors. LiteRT Torch currently caps
+  PyTorch below 2.13, so conversion belongs in a separate environment. This
+  backend packages generic `.tflite` graphs; it does not yet package or run
+  LiteRT-LM conversations. See the [LiteRT guide](docs/litert.md).
 - AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
   harnesses, not usable backends. Replacing the `stablehlo` lowering with
   torch-mlir, which would unpin it from a matching PyTorch, is evaluated in

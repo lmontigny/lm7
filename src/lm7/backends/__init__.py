@@ -3,6 +3,7 @@ from .eager import EagerBackend
 from .executorch import ExecuTorchBackend
 from .inductor import InductorBackend
 from .iree_vulkan import IREEVulkanBackend
+from .litert import LiteRTBackend
 from .onnxruntime import ONNXRuntimeBackend
 from .openvino import OpenVINOBackend
 from .openxla import OpenXLABackend
@@ -17,6 +18,7 @@ registry.register(InductorBackend())
 registry.register(AOTInductorBackend())
 registry.register(TensorRTBackend())
 registry.register(IREEVulkanBackend())
+registry.register(LiteRTBackend())
 registry.register(ONNXRuntimeBackend())
 registry.register(OpenVINOBackend())
 registry.register(OpenXLABackend())
