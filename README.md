@@ -71,7 +71,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
 | Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `eager` | Supported |
-| NVIDIA | GPU | `nvidia` | `inductor`, `tensorrt`, `eager` | Supported |
+| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `eager` | Supported |
 | AMD | GPU (ROCm) | `amd` | `inductor`, `eager` | Supported |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
 | Intel | GPU (XPU) | `intel` | `inductor`, `eager` | Supported |
@@ -180,7 +180,7 @@ lm7.compile(model, target="tpu", backend="openxla")
 | --- | --- | --- | --- | --- | --- |
 | `inductor` | TorchInductor (`torch.compile`) | Triton kernels on GPU, C++/OpenMP on CPU, plus vendor library calls | JIT | cpu, nvidia, amd, intel, apple | 100 |
 | `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
-| `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple | 90 |
+| `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
@@ -268,11 +268,22 @@ output = loaded(example_input)
 ```
 
 An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
-PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU/Apple
-AOT prototype, or `backend="openvino"` on Intel CPU to add OpenVINO IR
-(`compiled_model.xml` + `.bin`) — the one payload that runs on a machine with no
-PyTorch installed. Artifacts stay specific to compatible PyTorch, runtime, and
-hardware versions — they are not a stable cross-version ABI.
+PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU,
+Apple, and NVIDIA AOT prototype, or `backend="openvino"` on Intel CPU to add
+OpenVINO IR (`compiled_model.xml` + `.bin`) — the one payload that runs on a
+machine with no PyTorch installed. Artifacts stay specific to compatible PyTorch,
+runtime, and hardware versions — they are not a stable cross-version ABI.
+
+An NVIDIA AOT artifact is the only way to reach the GPU without a compiler in the
+process: both `inductor` and `tensorrt` compile on the first call and keep
+nothing. Packaging one needs a CUDA toolkit, which the PyTorch CUDA wheel does
+not include, so install the extra first:
+
+```bash
+uv pip install -e ".[cuda-aot]"
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target nvidia --backend aot_inductor
+```
 
 A Hugging Face model can be exported without writing any PyTorch, straight from
 the CLI:
@@ -361,8 +372,10 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - JIT compiled callables and TensorRT engines are process-local; only
   `aot_inductor`, `openvino`, and `lm7.export` produce something another process
   can load.
-- AOTInductor is validated only for CPU and Apple Silicon (MPS) and uses Beta
-  PyTorch APIs.
+- AOTInductor is validated for CPU, Apple Silicon (MPS), and NVIDIA GPU, and uses
+  Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch
+  wheel does not ship — install `".[cuda-aot]"`, and see
+  [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) for the WSL linker caveat.
 - AMD ROCm, Apple Silicon (MPS), Intel XPU, and OpenXLA TPU support are initial
   single-process integrations without physical-hardware CI.
 - OpenVINO is validated for Intel CPU only, and rejects bfloat16 models because

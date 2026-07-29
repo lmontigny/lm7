@@ -45,7 +45,7 @@ levels of it, and conflating them is easy:
 lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
 
 # Level 2 - capture and compile. A persistent AOTInductor package with kernels
-# already generated.
+# already generated. Swap target="nvidia" to bake in CUDA kernels instead.
 lm7.export(
     model, args=(example_input,), target="cpu", backend="aot_inductor", output="model-aot.lm7"
 )
@@ -62,8 +62,18 @@ An `.lm7` artifact is a directory holding a versioned JSON manifest, checksums,
 and a PyTorch `.pt2` program. `load_artifact()` validates the manifest schema
 version and the checksums before loading anything.
 
-`aot_inductor` is validated for CPU and Apple Silicon only, and uses Beta PyTorch
-APIs. On other targets, export still works at level 1.
+`aot_inductor` is validated for CPU, Apple Silicon, and NVIDIA GPU, and uses Beta
+PyTorch APIs. On other targets, export still works at level 1.
+
+On NVIDIA it is the only path that reaches the GPU without a compiler in the
+process — `inductor` and `tensorrt` both compile on the first call and keep
+nothing. Packaging one needs a CUDA toolkit, because AOTInductor compiles a C++
+wrapper against the CUDA headers that the PyTorch CUDA wheel does not ship;
+`uv pip install -e ".[cuda-aot]"` supplies them, and LM7 finds them without a
+`CUDA_HOME`. Loading the artifact needs no toolkit, so a deployment host needs
+the CUDA runtime and a compatible GPU only. See
+[NVIDIA AOT Inductor](development.md#nvidia-aot-inductor) for the WSL caveat and
+the CUDA 12 case.
 
 `openvino` is validated for Intel CPU only. It adds `compiled_model.xml` and
 `compiled_model.bin` next to the `.pt2`, and both are checksummed. That IR pair

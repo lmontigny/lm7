@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import shutil
+import site
+import sys
+import sysconfig
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +16,33 @@ import torch
 from ..cache import cache_dir
 from ..detection import torch_device
 from ..errors import ArtifactLoadError, CompilationError
+from ..targets import TargetSpec
 from .base import Artifact, BackendInfo, CompileRequest, Support
+
+# Vendors whose AOTInductor output LM7 has validated on physical hardware.
+SUPPORTED_VENDORS = frozenset({"cpu", "apple", "nvidia"})
+
+# Vendors that reach the GPU through CUDA, and therefore need a CUDA toolkit at
+# package time. JIT Inductor does not: it generates Triton kernels and compiles
+# them through Triton's own bundled PTX path. AOTInductor additionally compiles
+# and links a C++ wrapper against the CUDA headers, so a CUDA target needs
+# headers the PyTorch wheel does not ship.
+_CUDA_VENDORS = frozenset({"nvidia"})
+
+# The PyTorch CUDA wheel bundles the runtime headers but not the compiler front
+# end, so `crt/host_defines.h` (nvidia-cuda-crt) and `nv/target` (nvidia-cuda-cccl)
+# are missing and the wrapper build fails deep inside g++. Probe for them by name
+# so the failure is reported before compilation starts.
+_CUDA_TOOLKIT_HEADERS = ("include/crt/host_defines.h", "include/nv/target")
+
+# WSL keeps the CUDA driver library outside the default linker search path, so an
+# otherwise complete setup fails to link the wrapper with `cannot find -lcuda`.
+_WSL_DRIVER_DIR = Path("/usr/lib/wsl/lib")
+
+_CUDA_TOOLKIT_HINT = (
+    'install the CUDA toolkit wheels with `uv pip install -e ".[cuda-aot]"`, or set '
+    "CUDA_HOME to a CUDA toolkit installation"
+)
 
 
 def _map_tensors(value: Any, fn: Any) -> Any:
@@ -24,6 +55,107 @@ def _map_tensors(value: Any, fn: Any) -> Any:
     if isinstance(value, dict):
         return {key: _map_tensors(item, fn) for key, item in value.items()}
     return value
+
+
+def _site_package_dirs() -> list[Path]:
+    candidates = [sysconfig.get_paths().get("purelib"), *sys.path]
+    with contextlib.suppress(AttributeError):
+        candidates.extend(site.getsitepackages())
+    seen: dict[str, Path] = {}
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        seen.setdefault(str(path), path)
+    return list(seen.values())
+
+
+def _cuda_home_candidates() -> list[Path]:
+    """Return every plausible CUDA toolkit root, most explicit first."""
+    candidates: list[Path] = []
+    for variable in ("CUDA_HOME", "CUDA_PATH"):
+        value = os.environ.get(variable)
+        if value:
+            candidates.append(Path(value))
+    # PyTorch's CUDA wheels unpack into `nvidia/cu13`, and the toolkit wheels
+    # unpack into that same tree, so one directory holds runtime and compiler.
+    cuda_version = getattr(torch.version, "cuda", None)
+    if cuda_version:
+        major = cuda_version.split(".")[0]
+        for directory in _site_package_dirs():
+            candidates.append(directory / "nvidia" / f"cu{major}")
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        candidates.append(Path(nvcc).resolve().parent.parent)
+    candidates.append(Path("/usr/local/cuda"))
+    return candidates
+
+
+def _cuda_toolkit_home() -> Path | None:
+    """Return the first CUDA root holding the headers AOTInductor compiles against."""
+    for candidate in _cuda_home_candidates():
+        if all((candidate / header).is_file() for header in _CUDA_TOOLKIT_HEADERS):
+            return candidate
+    return None
+
+
+def _cuda_driver_library_dirs(cuda_home: Path | None) -> list[Path]:
+    """Return directories holding a linkable `libcuda.so`.
+
+    The wrapper links against the driver library, and the toolkit wheels ship no
+    stub for it. Distributions that install the driver leave `libcuda.so` on the
+    default linker path; the candidates here cover the hosts that do not.
+    """
+    candidates = [_WSL_DRIVER_DIR]
+    if cuda_home is not None:
+        candidates.extend([cuda_home / "lib64" / "stubs", cuda_home / "lib" / "stubs"])
+    return [directory for directory in candidates if (directory / "libcuda.so").is_file()]
+
+
+@contextlib.contextmanager
+def _cuda_build_environment(target: TargetSpec) -> Iterator[None]:
+    """Point the AOTInductor wrapper build at the CUDA toolkit LM7 found.
+
+    Only fills in what the caller has not set, so an explicit CUDA_HOME still
+    wins. `torch.utils.cpp_extension` resolves CUDA_HOME once at import time and
+    inductor has already imported it by now, so the module attribute has to be
+    overridden alongside the environment variable.
+    """
+    if target.vendor not in _CUDA_VENDORS:
+        yield
+        return
+
+    cuda_home = _cuda_toolkit_home()
+    overrides: dict[str, str] = {}
+    if cuda_home is not None and not any(
+        os.environ.get(name) for name in ("CUDA_HOME", "CUDA_PATH")
+    ):
+        overrides["CUDA_HOME"] = str(cuda_home)
+    link_dirs = _cuda_driver_library_dirs(cuda_home)
+    if link_dirs:
+        existing = os.environ.get("LIBRARY_PATH")
+        entries = [str(directory) for directory in link_dirs]
+        if existing:
+            entries.append(existing)
+        overrides["LIBRARY_PATH"] = os.pathsep.join(entries)
+
+    cpp_extension = getattr(torch.utils, "cpp_extension", None)
+    previous_env = {name: os.environ.get(name) for name in overrides}
+    patch_module = cuda_home is not None and cpp_extension is not None
+    previous_module_home = getattr(cpp_extension, "CUDA_HOME", None) if patch_module else None
+    try:
+        os.environ.update(overrides)
+        if patch_module and not previous_module_home:
+            cpp_extension.CUDA_HOME = str(cuda_home)
+        yield
+    finally:
+        for name, value in previous_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        if patch_module and not previous_module_home:
+            cpp_extension.CUDA_HOME = previous_module_home
 
 
 class AOTInductorBackend:
@@ -44,15 +176,21 @@ class AOTInductorBackend:
         probe = self.probe()
         if not probe.available:
             return Support(False, probe.reason)
-        if request.target.vendor not in {"cpu", "apple"}:
+        if request.target.vendor not in SUPPORTED_VENDORS:
             return Support(
                 False,
-                "LM7 v0.1 only validates packaged AOTInductor execution for CPU and "
-                "Apple Silicon targets.",
+                "LM7 v0.1 only validates packaged AOTInductor execution for CPU, "
+                "Apple Silicon, and NVIDIA targets.",
+            )
+        if request.target.vendor in _CUDA_VENDORS and _cuda_toolkit_home() is None:
+            return Support(
+                False,
+                "AOTInductor needs a CUDA toolkit to build its wrapper for a CUDA "
+                f"target, and LM7 found none: {_CUDA_TOOLKIT_HINT}.",
             )
         return Support(
             True,
-            "AOTInductor can package an ExportedProgram for CPU or Apple execution.",
+            "AOTInductor can package an ExportedProgram for CPU, Apple, or NVIDIA execution.",
             priority=90,
         )
 
@@ -81,7 +219,9 @@ class AOTInductorBackend:
             Path(package_name).unlink()
             try:
                 package_path = Path(package_name)
-                self.compile_exported(exported_program, package_path, request.options)
+                self.compile_exported(
+                    exported_program, package_path, request.options, target=request.target
+                )
                 return Artifact(
                     self.name,
                     request.target,
@@ -110,17 +250,26 @@ class AOTInductorBackend:
         exported_program: torch.export.ExportedProgram,
         package_path: Path,
         options: Mapping[str, Any] | None = None,
+        *,
+        target: TargetSpec | None = None,
     ) -> Path:
         probe = self.probe()
         if not probe.available:
             raise CompilationError(probe.reason)
+        if target is not None and target.vendor in _CUDA_VENDORS and _cuda_toolkit_home() is None:
+            raise CompilationError(
+                f"AOTInductor packaging failed for {package_path}: no CUDA toolkit was "
+                f"found, and the wrapper for a {target.vendor} target cannot be built "
+                f"without one. To fix this, {_CUDA_TOOLKIT_HINT}."
+            )
         configs = dict(options or {})
         try:
-            result = torch._inductor.aoti_compile_and_package(
-                exported_program,
-                package_path=str(package_path),
-                inductor_configs=configs or None,
-            )
+            with _cuda_build_environment(target) if target else contextlib.nullcontext():
+                result = torch._inductor.aoti_compile_and_package(
+                    exported_program,
+                    package_path=str(package_path),
+                    inductor_configs=configs or None,
+                )
         except Exception as exc:
             raise CompilationError(
                 f"AOTInductor packaging failed for {package_path}: {exc}. "

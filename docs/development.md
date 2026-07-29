@@ -54,6 +54,37 @@ python examples/cuda_mlp.py --target nvidia
 LM7 detects the compute capability, moves the model and CPU inputs when
 `transfers="automatic"`, and compares TorchInductor output with eager CUDA.
 
+## NVIDIA AOT Inductor
+
+Packaging for a CUDA target needs more than the CUDA-enabled PyTorch wheel. JIT
+Inductor reaches the GPU through Triton and links nothing, but AOTInductor
+compiles a C++ wrapper against the CUDA headers, and the PyTorch wheel ships the
+runtime headers without the compiler front end. The missing pieces install into
+the same `nvidia/cu13` tree PyTorch already populates, so one extra completes it:
+
+```bash
+uv pip install -e ".[dev,cuda-aot]"
+python -m pytest tests/test_nvidia_aot_integration.py -q
+python examples/aot_mlp.py --target nvidia --output artifacts/nvidia.lm7
+python examples/aot_mlp.py --load artifacts/nvidia.lm7
+```
+
+LM7 discovers that tree itself and points the wrapper build at it, so no
+`CUDA_HOME` is needed. An explicit `CUDA_HOME` or `CUDA_PATH` still wins, which
+is how a system toolkit (`/usr/local/cuda`) or a CUDA 12 PyTorch build — whose
+wheels use a different layout, and whose toolkit packages are the `*-cu12` ones —
+is selected instead. Without any toolkit, `lm7 explain --target nvidia --backend
+aot_inductor` reports the backend as unavailable rather than failing inside g++.
+
+Two host-specific notes:
+
+- **WSL.** The CUDA driver library lives in `/usr/lib/wsl/lib`, which the linker
+  does not search, so linking the wrapper would fail with `cannot find -lcuda`.
+  LM7 adds that directory to `LIBRARY_PATH` for the duration of the build.
+- **Reloading needs no toolkit.** `lm7.load_artifact` opens a prebuilt package,
+  so the deployment host needs the CUDA runtime and a compatible GPU, not a
+  compiler.
+
 ## TensorRT
 
 Torch-TensorRT releases require matching PyTorch and CUDA versions. A separate

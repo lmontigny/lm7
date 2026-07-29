@@ -47,9 +47,17 @@ LM7 records the backend and PyTorch versions, runtime target, and compiled
 payload checksum in the manifest. `load_artifact()` validates both source and
 compiled payloads before using `aoti_load_package`.
 
-LM7 0.1 validates this path for CPU and Apple Silicon (MPS). Packages require a
-compatible PyTorch runtime and target architecture and do not provide a stable
-cross-version ABI.
+LM7 0.1 validates this path for CPU, Apple Silicon (MPS), and NVIDIA GPU.
+Packages require a compatible PyTorch runtime and target architecture and do not
+provide a stable cross-version ABI.
+
+A CUDA target adds one build-time requirement the others do not have: the
+wrapper is compiled against the CUDA headers, which the PyTorch CUDA wheel does
+not ship. The backend resolves a toolkit before packaging — an explicit
+`CUDA_HOME`/`CUDA_PATH` first, then the `nvidia/cu<major>` tree in site-packages,
+then `nvcc` on `PATH`, then `/usr/local/cuda` — and reports an unavailable
+backend when none of them is complete, rather than failing inside the C++
+compiler. Loading a package needs no toolkit.
 
 ### Compiler debug artifacts
 

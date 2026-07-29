@@ -9,7 +9,9 @@ from pathlib import Path
 import torch
 
 import lm7
+from lm7.detection import torch_device
 from lm7.errors import CompilationError
+from lm7.targets import parse_target
 
 
 def _model_and_input() -> tuple[torch.nn.Module, torch.Tensor]:
@@ -23,23 +25,29 @@ def _model_and_input() -> tuple[torch.nn.Module, torch.Tensor]:
     return model, example_input
 
 
+def _device_input(example_input: torch.Tensor, target: str) -> torch.Tensor:
+    """Move the example input to the device the artifact was captured for."""
+    return example_input.to(torch_device(parse_target(target)))
+
+
 def _verify_loaded(path: Path) -> None:
     model, example_input = _model_and_input()
     expected = model(example_input)
     loaded = lm7.load_artifact(path)
-    actual = loaded(example_input)
-    torch.testing.assert_close(actual, expected)
+    target = loaded.manifest.target["vendor"]
+    actual = loaded(_device_input(example_input, target))
+    torch.testing.assert_close(actual.cpu(), expected)
     print(f"Reloaded artifact matches eager PyTorch: {path}")
 
 
-def _compile(output: Path) -> None:
+def _compile(output: Path, target: str) -> None:
     model, example_input = _model_and_input()
     expected = model(example_input)
     try:
         artifact = lm7.export(
             model,
             args=(example_input,),
-            target="cpu",
+            target=target,
             backend="aot_inductor",
             output=output,
             debug=True,
@@ -49,8 +57,8 @@ def _compile(output: Path) -> None:
         print("Run this test in Linux or WSL with a working g++ toolchain.", file=sys.stderr)
         raise SystemExit(2) from None
     loaded = lm7.load_artifact(output)
-    actual = loaded(example_input)
-    torch.testing.assert_close(actual, expected)
+    actual = loaded(_device_input(example_input, target))
+    torch.testing.assert_close(actual.cpu(), expected)
 
     print(f"AOT artifact: {artifact.path}")
     print(f"Backend: {artifact.manifest.backend}")
@@ -61,7 +69,12 @@ def _compile(output: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compile or reload the LM7 CPU AOT example.")
+    parser = argparse.ArgumentParser(description="Compile or reload the LM7 AOT example.")
+    parser.add_argument(
+        "--target",
+        default="cpu",
+        help="Target to package for; aot_inductor validates cpu, apple, and nvidia.",
+    )
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "--output",
@@ -91,7 +104,7 @@ def main() -> None:
             else Path(temporary_directory) / "model.lm7"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
-        _compile(output)
+        _compile(output, arguments.target)
 
 
 if __name__ == "__main__":

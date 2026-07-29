@@ -1,4 +1,5 @@
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -6,9 +7,11 @@ import pytest
 import torch
 
 import lm7
-from lm7.backends import registry
+from lm7.backends import aot_inductor, registry
 from lm7.backends.aot_inductor import AOTInductorBackend
+from lm7.backends.base import CompileRequest
 from lm7.errors import ArtifactLoadError, BackendUnavailableError, CompilationError
+from lm7.targets import parse_target
 
 
 def model():
@@ -163,14 +166,121 @@ def test_compiled_checksum_is_validated(tmp_path, monkeypatch):
 
 
 def test_aot_export_rejects_unvalidated_target(tmp_path):
-    with pytest.raises(BackendUnavailableError, match="CPU and Apple Silicon targets"):
+    with pytest.raises(BackendUnavailableError, match="CPU, Apple Silicon, and NVIDIA"):
         lm7.export(
             model(),
             args=(torch.randn(1, 4),),
-            target="nvidia:sm90",
+            target="amd:gfx942",
             backend="aot_inductor",
             output=tmp_path / "model.lm7",
         )
+
+
+def cuda_request() -> CompileRequest:
+    return CompileRequest(
+        model=model(),
+        target=parse_target("nvidia:sm89"),
+        mode="lazy",
+        transfers="automatic",
+        fallback="error",
+    )
+
+
+def write_cuda_toolkit(root: Path) -> Path:
+    for header in ("include/crt/host_defines.h", "include/nv/target"):
+        path = root / header
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    return root
+
+
+def test_cuda_support_requires_a_toolkit(monkeypatch, tmp_path):
+    backend = AOTInductorBackend()
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: None)
+    support = backend.supports(cuda_request())
+    assert support.supported is False
+    assert "CUDA toolkit" in support.reason
+    assert "cuda-aot" in support.reason
+
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: tmp_path)
+    support = backend.supports(cuda_request())
+    assert support.supported is True
+    assert support.priority == 90
+
+
+def test_cuda_compile_fails_before_packaging_without_a_toolkit(monkeypatch, tmp_path):
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: None)
+
+    def unreachable(*args, **kwargs):
+        raise AssertionError("packaging must not start without a CUDA toolkit")
+
+    monkeypatch.setattr(torch._inductor, "aoti_compile_and_package", unreachable)
+    exported = torch.export.export(model(), (torch.randn(2, 4),))
+
+    with pytest.raises(CompilationError, match="no CUDA toolkit was found"):
+        AOTInductorBackend().compile_exported(
+            exported, tmp_path / "model.pt2", target=parse_target("nvidia:sm89")
+        )
+
+
+def test_cuda_toolkit_discovery_needs_every_header(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUDA_HOME", str(tmp_path))
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    assert aot_inductor._cuda_toolkit_home() != tmp_path
+
+    (tmp_path / "include" / "crt").mkdir(parents=True)
+    (tmp_path / "include" / "crt" / "host_defines.h").write_text("", encoding="utf-8")
+    assert aot_inductor._cuda_toolkit_home() != tmp_path
+
+    write_cuda_toolkit(tmp_path)
+    assert aot_inductor._cuda_toolkit_home() == tmp_path
+
+
+def test_cuda_driver_library_dirs_need_a_linkable_stub(monkeypatch, tmp_path):
+    # Pin the WSL candidate away from the host so the result is the same whether
+    # or not the test machine has a WSL driver directory.
+    monkeypatch.setattr(aot_inductor, "_WSL_DRIVER_DIR", tmp_path / "absent")
+    stubs = tmp_path / "lib64" / "stubs"
+    stubs.mkdir(parents=True)
+    assert aot_inductor._cuda_driver_library_dirs(tmp_path) == []
+
+    (stubs / "libcuda.so").write_text("", encoding="utf-8")
+    assert aot_inductor._cuda_driver_library_dirs(tmp_path) == [stubs]
+
+
+def test_cuda_build_environment_fills_gaps_and_restores(monkeypatch, tmp_path):
+    toolkit = write_cuda_toolkit(tmp_path / "toolkit")
+    stubs = toolkit / "lib64" / "stubs"
+    stubs.mkdir(parents=True)
+    (stubs / "libcuda.so").write_text("", encoding="utf-8")
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: toolkit)
+    monkeypatch.setattr(aot_inductor, "_WSL_DRIVER_DIR", tmp_path / "absent")
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    monkeypatch.setenv("LIBRARY_PATH", "/existing")
+
+    with aot_inductor._cuda_build_environment(parse_target("nvidia:sm89")):
+        assert os.environ["CUDA_HOME"] == str(toolkit)
+        assert os.environ["LIBRARY_PATH"].split(os.pathsep) == [str(stubs), "/existing"]
+
+    assert "CUDA_HOME" not in os.environ
+    assert os.environ["LIBRARY_PATH"] == "/existing"
+
+
+def test_cuda_build_environment_keeps_an_explicit_toolkit(monkeypatch, tmp_path):
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: tmp_path / "discovered")
+    monkeypatch.setenv("CUDA_HOME", "/opt/cuda")
+
+    with aot_inductor._cuda_build_environment(parse_target("nvidia:sm89")):
+        assert os.environ["CUDA_HOME"] == "/opt/cuda"
+
+
+def test_cpu_compile_leaves_the_cuda_environment_alone(monkeypatch, tmp_path):
+    monkeypatch.setattr(aot_inductor, "_cuda_toolkit_home", lambda: tmp_path)
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+
+    with aot_inductor._cuda_build_environment(parse_target("cpu")):
+        assert "CUDA_HOME" not in os.environ
 
 
 def test_aot_compile_failure_leaves_no_output(tmp_path, monkeypatch):
