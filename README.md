@@ -355,8 +355,11 @@ for environment checks, GPU integration tests, and compiler IR output, and
   models whose forward returns a dataclass need a wrapper.
 - AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
   harnesses, not usable backends.
-- Quantization, distributed inference, remote hardware, and a stable compiled
-  artifact ABI are future work.
+- Quantization is weight-only, NVIDIA-only, and validated per (model, mode)
+  pair — see [quantization](docs/quantization.md) for the list and the
+  measurements behind it.
+- Distributed inference, remote hardware, and a stable compiled artifact ABI are
+  future work.
 
 ## License
 

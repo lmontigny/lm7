@@ -10,6 +10,22 @@ from lm7.errors import UnsupportedModelError
 from lm7.targets import TargetSpec
 
 
+class FakeDecoderLayer(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Named so the fully qualified path contains ".mlp.", which is what the
+        # FP8 filter selects on.
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(8, 8))
+
+
+class FakeQuantizableLM(torch.nn.Module):
+    """A fake with layers both weight-only filters actually match."""
+
+    def __init__(self):
+        super().__init__()
+        self.layer = FakeDecoderLayer()
+
+
 class FakeCausalLM(torch.nn.Module):
     def forward(self, input_ids, attention_mask, use_cache=False):
         del attention_mask, use_cache
@@ -129,7 +145,7 @@ def test_int8_weight_only_uses_torchao_version_two(monkeypatch):
     )
     monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
 
-    model = FakeCausalLM()
+    model = FakeQuantizableLM()
     elapsed = huggingface._apply_quantization(
         model,
         TargetSpec("cpu", "cpu"),
@@ -163,7 +179,7 @@ def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
     monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
     monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
 
-    model = FakeCausalLM()
+    model = FakeQuantizableLM()
     elapsed = huggingface._apply_quantization(
         model,
         TargetSpec("nvidia", "gpu"),
