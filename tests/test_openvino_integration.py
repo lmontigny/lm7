@@ -7,7 +7,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy
 import pytest
 import torch
 
@@ -123,6 +122,10 @@ def test_openvino_does_not_compress_weights_to_fp16_by_default():
 def test_openvino_ir_artifact_loads_without_torch():
     """The IR is a portable artifact: it must run in a process that never imports
     torch, which no other LM7 backend offers."""
+    # Imported here rather than at module scope: CI's torch build ships without
+    # NumPy, and a top-level import fails collection before the skip applies.
+    numpy = pytest.importorskip("numpy")
+
     torch.manual_seed(0)
     compiled = lm7.compile(model(), target="cpu", backend="openvino", fallback="error")
     example_input = torch.randn(8, 16)
