@@ -32,4 +32,7 @@ use H100 with large HBM >32GB or something to check usual llama model, liquidAI 
 IREE vulkan? IREE
 ExecuTorch Vulkan is a separate edge/Android deployment path.
 
+simplify readme see z
+add examples/ dir
+
 -> HackerNews feedback on 7 days
