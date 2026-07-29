@@ -15,9 +15,19 @@ from .targets import TargetSpec
 
 INT8_WEIGHT_ONLY = "int8-weight-only"
 FP8_WEIGHT_ONLY = "fp8-weight-only"
-WEIGHT_ONLY_MODEL_IDS = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
 WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY})
 NO_QUANTIZATION = "none"
+
+# Validated per model *and* per mode, because the two are not interchangeable:
+# LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
+# (0/4 prompts agreed with BF16, max logit difference 22.4 on NVIDIA sm89). A
+# model earns an entry here only after its outputs have been compared against an
+# unquantized baseline on real hardware. See docs/quantization.md.
+VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
+    "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY}),
+    "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY}),
+}
+WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 
 
 @dataclass(frozen=True)
@@ -204,11 +214,16 @@ def _validate_quantization(
             "FP8 weight-only quantization requires NVIDIA Ada (sm89), Hopper (sm90), "
             "or newer hardware."
         )
-    if model_id is not None and model_id not in WEIGHT_ONLY_MODEL_IDS:
-        supported = ", ".join(sorted(WEIGHT_ONLY_MODEL_IDS))
+    if model_id is not None and quantization not in VALIDATED_WEIGHT_ONLY.get(
+        model_id, frozenset()
+    ):
+        validated = ", ".join(
+            f"{name} ({', '.join(sorted(modes))})"
+            for name, modes in sorted(VALIDATED_WEIGHT_ONLY.items())
+        )
         raise UnsupportedModelError(
             f"{label} weight-only quantization is not validated for {model_id!r}. "
-            f"Currently validated: {supported}. Use quantization='none' for this model."
+            f"Currently validated: {validated}. Use quantization='none' for this model."
         )
 
 
@@ -229,6 +244,20 @@ def _apply_quantization(
     filter_fn = (
         _is_fp8_quantizable_linear if quantization == FP8_WEIGHT_ONLY else _is_quantizable_linear
     )
+    # torchao silently does nothing when the filter matches no module, so an
+    # unmatched filter would report a successful quantization that left the model
+    # untouched. LFM2.5-230M hits this with the FP8 filter: it has no ".mlp."
+    # linears, so the run reported 1.00x storage reduction and byte-identical
+    # logits.
+    matched = sum(1 for fqn, module in model.named_modules() if filter_fn(module, fqn))
+    if matched == 0:
+        raise UnsupportedModelError(
+            f"{quantization} matched no quantizable layers in this model, so quantization "
+            "would silently do nothing. The FP8 filter selects only linears whose module "
+            "path contains '.mlp.'; this model does not use that naming. "
+            "Use quantization='none', or int8-weight-only, which selects every linear "
+            "except lm_head."
+        )
     torchao_quantization.quantize_(
         model,
         config,

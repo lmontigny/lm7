@@ -77,15 +77,49 @@ assumed. Add `--json` for structured output.
 ## Scope and caveats
 
 > [!NOTE]
-> This path is validated for exactly one model,
-> `HuggingFaceTB/SmolLM2-135M-Instruct`, and rejects every other model id.
+> This path is validated per **(model, mode)** pair and rejects everything else.
+> Currently validated: `HuggingFaceTB/SmolLM2-135M-Instruct` and
+> `unsloth/Llama-3.2-1B-Instruct`, both modes.
+
+### What "validated" means here
+
+Each pair was run on an NVIDIA RTX 4070 SUPER (Ada, sm89) against an
+unquantized BF16 baseline across four prompts, comparing the top-1 next token
+and the maximum last-token logit difference:
+
+| model | mode | top-1 agreement | max logit diff | storage |
+| --- | --- | --- | --- | --- |
+| SmolLM2-135M | `int8` | 4/4 | 1.14 | 1.65x smaller |
+| SmolLM2-135M | `fp8` | 4/4 | 1.47 | 1.42x smaller |
+| Llama-3.2-1B | `int8` | 4/4 | 0.56 | 1.65x smaller |
+| Llama-3.2-1B | `fp8` | 4/4 | 0.72 | 1.48x smaller |
+| **LFM2.5-230M** | `int8` | **0/4** | **22.41** | 1.55x smaller |
+| **LFM2.5-230M** | `fp8` | 4/4 | 0.00 | **1.00x — no-op** |
+
+The two LFM2.5 rows are why the gate is keyed on the pair rather than the model:
+
+- **INT8 destroys it.** Not one prompt kept its top-1 token, and the logits moved
+  by 22.4. A blanket "NVIDIA is supported" claim would have shipped that.
+- **FP8 does nothing to it.** LFM2.5 has no `.mlp.` module paths, so the FP8
+  filter matched zero layers. TorchAO quantizes nothing and raises nothing, so
+  the run *looked* successful while returning byte-identical logits at 1.00x
+  storage. LM7 now raises `UnsupportedModelError` when a filter matches no
+  layer, instead of reporting a no-op as a success.
+
+`Qwen/Qwen3.5-0.8B` has not been measured yet and is therefore not validated.
 
 - **NVIDIA only.** No CPU, AMD, Apple, or TPU quantization path exists.
 - **It can be slower.** Weight-only quantization trades arithmetic for
   bandwidth. At small batch sizes, where a decode step is already
   memory-bound per token but the dequantization overhead is paid on every
   matmul, the net can go the wrong way. This is why it is opt-in rather than a
-  default, and why the run reports latency alongside footprint.
+  default, and why the run reports latency alongside footprint. Measured on
+  sm89, INT8 was *slower* than BF16 on a single-prompt prefill while FP8 was
+  faster — so treat the footprint saving as the reliable benefit and latency as
+  something to measure per model.
+- **A validated pair is not a general guarantee.** It means those prompts
+  agreed on that GPU. It does not establish behaviour across long contexts,
+  batch sizes, or downstream task accuracy, none of which are measured.
 - **Storage saving is not proportional to bit width.** Only the selected linears
   are converted, so a 4x narrower weight dtype does not mean a 4x smaller model —
   embeddings, norms, `lm_head`, and (for FP8) attention all stay in BF16.
