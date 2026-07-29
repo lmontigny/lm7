@@ -78,6 +78,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Google | TPU | `tpu` | `openxla`, `eager` | Supported |
 | Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` | Supported |
+| Android, iOS, embedded | CPU (ARM64, x86-64) | `cpu` | `executorch` | Export only, [ExecuTorch](docs/executorch.md) |
 | Intel | NPU | — | — | Not supported, [OpenVINO plan](docs/openvino-evaluation.md) |
 | Qualcomm | Hexagon NPU | — | — | Not supported, [Hexagon plan](docs/qualcomm-hexagon.md) |
 | AWS | Trainium | `aws:trainium` | — | Parses only, never executed |
@@ -205,6 +206,7 @@ lm7.compile(model, target="tenstorrent:blackhole")
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
+| `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | — |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
@@ -350,6 +352,24 @@ lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
   --target cpu --backend stablehlo
 ```
 
+`backend="executorch"` is the edge path: it writes a `.pte`, the file Android
+and iOS load, which the ExecuTorch C++ runtime executes with no Python and no
+PyTorch on the device. Like `stablehlo` it is not bound to the machine that
+built it — the XNNPACK delegate covers ARM64 and x86-64 alike, which is also why
+it is the one mobile route this project can validate on ordinary CI:
+
+```bash
+python3 -m venv .venv-et && .venv-et/bin/python -m pip install -e ".[executorch]"
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target cpu --backend executorch
+```
+
+XNNPACK is a CPU delegate, so `--target cpu` is required; reaching phone NPUs
+(Core ML, Qualcomm QNN, MediaTek) means adding those delegates, each needing a
+macOS host or a vendor SDK. See [ExecuTorch](docs/executorch.md) for the measured
+lowering cost, the partition-coverage field in the manifest, and why artifact
+size makes quantization matter more here than elsewhere.
+
 An NVIDIA AOT artifact is the only way to reach the GPU without a compiler in the
 process: both `inductor` and `tensorrt` compile on the first call and keep
 nothing. Packaging one needs a CUDA toolkit, which the PyTorch CUDA wheel does
@@ -473,6 +493,10 @@ for environment checks, GPU integration tests, and compiler IR output, and
   [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) for the WSL linker caveat.
 - AMD ROCm, Apple Silicon (MPS), Intel XPU, OpenXLA TPU, and Tenstorrent support
   are initial single-process integrations without physical-hardware CI.
+- ExecuTorch is export-only and XNNPACK-only, so the edge story is CPU: phone
+  NPUs (Core ML, Qualcomm QNN, MediaTek, Exynos) are not wired up, artifacts are
+  unquantized and static-shape, and validation is host x86-64 rather than a real
+  phone. LM7 writes the `.pte`; deploying it into an app is ExecuTorch's tooling.
 - Tenstorrent is JIT-only and single-card: the compiled flatbuffer does not
   outlive the process, multi-card sharding is not exposed, and model coverage is
   bounded by what tt-mlir lowers — see [Tenstorrent](docs/tenstorrent.md).

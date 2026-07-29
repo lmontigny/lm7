@@ -45,6 +45,10 @@ stablehlo = ["torch_xla==2.9.0"]
 # "--extra-index-url https://pypi.eng.aws.tenstorrent.com/" — see
 # docs/tenstorrent.md.
 tenstorrent = ["pjrt-plugin-tt"]
+# ExecuTorch's prebuilt runtime extension is ABI-linked to libtorch, so this
+# extra needs an environment built around the matching PyTorch rather than the
+# latest one -- see docs/executorch.md.
+executorch = ["executorch>=1.3,<2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -64,6 +68,7 @@ markers = [
     "stablehlo: requires PyTorch/XLA for the StableHLO lowering",
     "tpu: requires PyTorch/XLA on a Google TPU VM",
     "tenstorrent: requires the tt-xla PJRT plugin and a Tenstorrent card",
+    "executorch: requires the ExecuTorch runtime and a matching PyTorch",
 ]
 
 [tool.ruff]

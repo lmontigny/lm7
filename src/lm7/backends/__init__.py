@@ -1,5 +1,6 @@
 from .aot_inductor import AOTInductorBackend
 from .eager import EagerBackend
+from .executorch import ExecuTorchBackend
 from .inductor import InductorBackend
 from .iree_vulkan import IREEVulkanBackend
 from .openvino import OpenVINOBackend
@@ -18,6 +19,7 @@ registry.register(IREEVulkanBackend())
 registry.register(OpenVINOBackend())
 registry.register(OpenXLABackend())
 registry.register(StableHLOBackend())
+registry.register(ExecuTorchBackend())
 registry.register(TenstorrentBackend())
 
 __all__ = ["registry"]

@@ -34,6 +34,15 @@ and `PJRT_DEVICE` is unset or `TT`, and never reassigns a runtime that has
 already come up as `TPU`. It shares the TPU path's `torch.no_grad()` execution
 for the same reason. See [Tenstorrent support](tenstorrent.md).
 
+The optional `executorch` adapter is export-only and targets edge devices. It
+lowers an ExportedProgram through ExecuTorch's XNNPACK partitioner to a `.pte`,
+which the ExecuTorch C++ runtime executes on Android, iOS, or the build host
+with no PyTorch present. Its `supports()` always reports unsupported, so
+`lm7.compile` never selects it — a phone is not reachable from the calling
+process, and the artifact is the deliverable. Because XNNPACK spans ARM64 and
+x86-64, export *and* execution are validated on ordinary CI. See
+[ExecuTorch support](executorch.md).
+
 ## Source artifacts
 
 `lm7.export()` captures an `nn.Module` through `torch.export` or accepts an

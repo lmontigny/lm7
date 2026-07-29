@@ -88,6 +88,13 @@ model = openvino.Core().compile_model("model-ov.lm7/compiled_model.xml", "CPU")
 result = model([numpy.random.rand(8, 16).astype("float32")])[model.outputs[0]]
 ```
 
+`executorch` is the level-3 payload for phones and embedded devices. It adds a
+`compiled_model.pte`, which the ExecuTorch C++ runtime executes on Android, iOS,
+or the build host with no Python and no PyTorch. Unlike the payloads above it is
+not bound to the machine that produced it, because the XNNPACK delegate covers
+ARM64 and x86-64 alike. It is CPU-only and export-only — see
+[ExecuTorch](executorch.md).
+
 ## From the CLI
 
 A Hugging Face model can be exported without writing PyTorch at all:
