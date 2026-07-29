@@ -93,6 +93,13 @@ process without PyTorch installed.
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
 
+`openxla` reaches TPU only, because PyTorch/XLA — LM7's route to OpenXLA — has
+no CUDA or ROCm wheels. OpenXLA itself is not that narrow: the
+[StableHLO and PJRT evaluation](docs/stablehlo-pjrt-evaluation.md) lowers a
+captured graph to StableHLO and runs it on a PJRT client with PyTorch absent,
+which is the first LM7 artifact that is both PyTorch-free and not tied to one
+vendor. It is an evaluation with a harness, not a registered backend.
+
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
 need their optional extra installed — see [backends](#3-compile-a-local-model)
@@ -405,8 +412,8 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - OpenVINO is validated for Intel CPU only, and rejects bfloat16 models because
   its runtime exchanges tensors through NumPy. It returns tensors or tuples, so
   models whose forward returns a dataclass need a wrapper.
-- AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
-  harnesses, not usable backends.
+- AMD MIGraphX, Qualcomm Hexagon, and StableHLO/PJRT are evaluations with
+  measurement harnesses, not usable backends.
 - Quantization is weight-only, NVIDIA-only, and validated per (model, mode)
   pair — see [quantization](docs/quantization.md) for the list and the
   measurements behind it.
