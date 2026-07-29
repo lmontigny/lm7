@@ -31,6 +31,7 @@ Metal (Apple Silicon), CUDA, Vulkan (via WebGPU/spirv),
 use H100 with large HBM >32GB or something to check usual llama model, liquidAI SLM
 IREE vulkan? IREE
 ExecuTorch Vulkan is a separate edge/Android deployment path.
+torch-mlir as the StableHLO lowering path
 
 ** today **
 simplify readme see z, use figure to show all the backend
