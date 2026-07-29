@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from types import ModuleType
 from typing import Any
@@ -11,7 +12,11 @@ import torch
 from .api import compile
 from .detection import resolve_target, torch_device
 from .errors import UnsupportedModelError
+from .exporting import DynamicDimension, ShapeProfile
 from .targets import TargetSpec
+
+# The tensors _LogitsOnly forwards, and therefore the only ones captured.
+_CAPTURED_INPUTS = ("input_ids", "attention_mask")
 
 INT8_WEIGHT_ONLY = "int8-weight-only"
 FP8_WEIGHT_ONLY = "fp8-weight-only"
@@ -153,14 +158,23 @@ class _LogitsOnly(torch.nn.Module):
     "Deserializing transformers.modeling_outputs.CausalLMOutputWithPast in pytree
     is not registered" -- so the artifact would save but never reload. Capturing a
     plain tensor keeps the artifact loadable by anything that can read a ``.pt2``.
+
+    The signature names its inputs rather than taking ``**inputs``. A shape
+    profile is bound with ``inspect.signature(...).bind``, and a ``VAR_KEYWORD``
+    parameter collects every tensor under one argument name, leaving no per-input
+    dimension for a profile to constrain.
     """
 
     def __init__(self, model: torch.nn.Module) -> None:
         super().__init__()
         self.model = model
 
-    def forward(self, **inputs: torch.Tensor) -> torch.Tensor:
-        return self.model(**inputs, use_cache=False).logits
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        return self.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+        ).logits
 
 
 @dataclass(frozen=True)
@@ -177,9 +191,37 @@ class HuggingFaceExportResult:
     export_ms: float
     artifact_bytes: int
     files: tuple[str, ...]
+    sequence_bounds: tuple[int, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# Captured graphs are prefill-only, and a causal LM's own limit is the ceiling
+# worth offering; this caps the default when a config does not report one.
+_DEFAULT_MAX_SEQUENCE = 2048
+
+
+def _sequence_bounds(model: torch.nn.Module, requested: tuple[int, int] | None) -> tuple[int, int]:
+    if requested is not None:
+        minimum, maximum = int(requested[0]), int(requested[1])
+        if minimum < 1:
+            raise ValueError("Dynamic sequence minimum must be at least 1.")
+        if maximum < minimum:
+            raise ValueError("Dynamic sequence maximum must be at least its minimum.")
+        return minimum, maximum
+    positions = getattr(getattr(model, "config", None), "max_position_embeddings", None)
+    maximum = int(positions) if isinstance(positions, int) and positions > 0 else None
+    return 1, min(maximum or _DEFAULT_MAX_SEQUENCE, _DEFAULT_MAX_SEQUENCE)
+
+
+def _sequence_shape_profile(
+    inputs: Mapping[str, torch.Tensor], bounds: tuple[int, int]
+) -> ShapeProfile:
+    """Mark dimension 1 of every captured tensor as one shared sequence length."""
+    minimum, maximum = bounds
+    dimension = DynamicDimension("sequence", min=minimum, max=maximum)
+    return ShapeProfile(inputs={name: {1: dimension} for name in inputs})
 
 
 def export_hf_model(
@@ -190,12 +232,15 @@ def export_hf_model(
     target: str | TargetSpec = "auto",
     backend: str = "export",
     dtype: str = "auto",
+    dynamic_sequence: bool | tuple[int, int] = False,
 ) -> HuggingFaceExportResult:
     """Capture a Hugging Face causal LM into an LM7 artifact.
 
-    The example inputs come from tokenizing ``prompt``, so the artifact is fixed
-    to that input signature — an AOT artifact cannot adapt to new shapes the way
-    a JIT path recompiles.
+    The example inputs come from tokenizing ``prompt``. By default the artifact
+    is fixed to that input signature. Pass ``dynamic_sequence`` to capture the
+    sequence length as a bounded dynamic dimension instead, so one artifact
+    serves prompts of any length inside those bounds — either ``True`` for
+    bounds derived from the model config, or an explicit ``(min, max)``.
     """
     from .exporting import export as export_artifact
 
@@ -203,12 +248,21 @@ def export_hf_model(
     resolved_target = resolve_target(target)
     torch_dtype = _resolve_dtype(dtype, resolved_target)
     transformers = _load_transformers()
+    requested_bounds = dynamic_sequence if isinstance(dynamic_sequence, tuple) else None
+    is_dynamic = dynamic_sequence is not False and dynamic_sequence is not None
 
     try:
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        # The default attention path builds its mask in blocks, which makes
+        # torch.export emit a `sequence % 8` guard it cannot prove over a range:
+        # "Not all values of sequence ... satisfy the generated guard". The eager
+        # attention path has no such guard. Only a dynamic capture asks for it,
+        # so a fixed export keeps the faster default.
+        attention = {"attn_implementation": "eager"} if is_dynamic else {}
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_id,
             dtype=torch_dtype,
+            **attention,
         ).eval()
         inputs = dict(tokenizer(prompt, return_tensors="pt"))
     except Exception as exc:
@@ -223,6 +277,18 @@ def export_hf_model(
             "the tokenizer did not return batched input_ids."
         )
 
+    # _LogitsOnly names the two tensors it forwards, so anything else the
+    # tokenizer produced (token_type_ids, offsets) is not part of the graph.
+    inputs = {name: value for name, value in inputs.items() if name in _CAPTURED_INPUTS}
+    bounds = _sequence_bounds(model, requested_bounds) if is_dynamic else None
+    if bounds is not None and not bounds[0] <= int(input_ids.shape[-1]) <= bounds[1]:
+        raise UnsupportedModelError(
+            f"Hugging Face export stage failed for {model_uri}: the prompt tokenizes to "
+            f"{int(input_ids.shape[-1])} tokens, outside the requested sequence bounds "
+            f"[{bounds[0]}, {bounds[1]}]. torch.export traces the example input, so it "
+            "has to sit inside the range the artifact accepts."
+        )
+
     started = time.perf_counter()
     artifact = export_artifact(
         # _LogitsOnly pins use_cache=False, so the captured graph is a single
@@ -234,6 +300,7 @@ def export_hf_model(
         target=resolved_target,
         backend=backend,
         output=output,
+        shape_profile=_sequence_shape_profile(inputs, bounds) if bounds else None,
     )
     export_ms = (time.perf_counter() - started) * 1000
 
@@ -252,6 +319,7 @@ def export_hf_model(
         export_ms=export_ms,
         artifact_bytes=artifact_bytes,
         files=files,
+        sequence_bounds=bounds,
     )
 
 

@@ -69,6 +69,16 @@ python examples/aot_mlp.py --target nvidia --output artifacts/nvidia.lm7
 python examples/aot_mlp.py --load artifacts/nvidia.lm7
 ```
 
+A dynamic-sequence artifact goes through the same path and is exercised by the
+opt-in Hugging Face suite:
+
+```bash
+LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q \
+  -k dynamic_sequence
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct artifacts/dynamic.lm7 \
+  --target nvidia --backend aot_inductor --dynamic-seq 1:512
+```
+
 LM7 discovers that tree itself and points the wrapper build at it, so no
 `CUDA_HOME` is needed. An explicit `CUDA_HOME` or `CUDA_PATH` still wins, which
 is how a system toolkit (`/usr/local/cuda`) or a CUDA 12 PyTorch build — whose

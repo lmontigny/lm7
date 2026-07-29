@@ -298,8 +298,9 @@ def _exportable_transformers(calls):
 
     class ModelFactory:
         @staticmethod
-        def from_pretrained(model_id, *, dtype):
+        def from_pretrained(model_id, *, dtype, attn_implementation=None):
             calls["model_id"] = model_id
+            calls["attn_implementation"] = attn_implementation
             return ExportableCausalLM()
 
     return SimpleNamespace(AutoTokenizer=TokenizerFactory, AutoModelForCausalLM=ModelFactory)
@@ -339,3 +340,101 @@ def test_export_hf_model_writes_a_loadable_artifact(monkeypatch, tmp_path):
 def test_export_hf_model_rejects_a_non_hf_uri(tmp_path):
     with pytest.raises(UnsupportedModelError, match="expected a Hugging Face URI"):
         huggingface.export_hf_model("./local/model", output=str(tmp_path / "m.lm7"))
+
+
+def test_export_hf_model_is_fixed_shape_by_default(monkeypatch, tmp_path):
+    calls = {}
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers(calls))
+
+    result = huggingface.export_hf_model(
+        "hf://example/tiny-model",
+        output=str(tmp_path / "model.lm7"),
+        prompt="Hello",
+        target="cpu",
+    )
+
+    assert result.sequence_bounds is None
+    # A fixed capture keeps the model's faster default attention.
+    assert calls["attn_implementation"] is None
+
+
+def test_export_hf_model_captures_a_dynamic_sequence(monkeypatch, tmp_path):
+    import lm7
+
+    calls = {}
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers(calls))
+    output = tmp_path / "model.lm7"
+
+    result = huggingface.export_hf_model(
+        "hf://example/tiny-model",
+        output=str(output),
+        prompt="Hello",
+        target="cpu",
+        dynamic_sequence=(1, 12),
+    )
+
+    assert result.sequence_bounds == (1, 12)
+    assert calls["attn_implementation"] == "eager"
+
+    reloaded = lm7.load_artifact(output)
+    # One artifact, captured at 3 tokens, serving other lengths.
+    for length in (1, 3, 7):
+        logits = reloaded(
+            input_ids=torch.ones((1, length), dtype=torch.long),
+            attention_mask=torch.ones((1, length), dtype=torch.long),
+        )
+        assert logits.shape == (1, length, 16)
+
+
+def test_dynamic_artifact_rejects_lengths_outside_its_bounds(monkeypatch, tmp_path):
+    import lm7
+
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers({}))
+    output = tmp_path / "model.lm7"
+    huggingface.export_hf_model(
+        "hf://example/tiny-model",
+        output=str(output),
+        prompt="Hello",
+        target="cpu",
+        dynamic_sequence=(1, 8),
+    )
+
+    reloaded = lm7.load_artifact(output)
+    with pytest.raises(ValueError, match=r"size 9; expected \[1, 8\]"):
+        reloaded(
+            input_ids=torch.ones((1, 9), dtype=torch.long),
+            attention_mask=torch.ones((1, 9), dtype=torch.long),
+        )
+
+
+def test_dynamic_export_rejects_a_prompt_outside_its_bounds(monkeypatch, tmp_path):
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers({}))
+
+    with pytest.raises(UnsupportedModelError, match="outside the requested sequence bounds"):
+        huggingface.export_hf_model(
+            "hf://example/tiny-model",
+            output=str(tmp_path / "model.lm7"),
+            prompt="Hello",
+            target="cpu",
+            dynamic_sequence=(8, 64),
+        )
+
+
+def test_sequence_bounds_default_to_the_model_config():
+    model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=64))
+    assert huggingface._sequence_bounds(model, None) == (1, 64)
+
+    # A model that advertises a huge context is capped, and one that advertises
+    # nothing still gets usable bounds.
+    large = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=131072))
+    assert huggingface._sequence_bounds(large, None) == (1, huggingface._DEFAULT_MAX_SEQUENCE)
+    assert huggingface._sequence_bounds(SimpleNamespace(), None) == (
+        1,
+        huggingface._DEFAULT_MAX_SEQUENCE,
+    )
+
+
+@pytest.mark.parametrize("bounds", [(0, 8), (8, 4)])
+def test_sequence_bounds_reject_impossible_ranges(bounds):
+    with pytest.raises(ValueError):
+        huggingface._sequence_bounds(SimpleNamespace(), bounds)

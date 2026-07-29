@@ -12,6 +12,7 @@ from lm7.huggingface import (
     INT8_WEIGHT_ONLY,
     _apply_quantization,
     _model_storage_bytes,
+    export_hf_model,
     run_hf_model,
 )
 
@@ -153,3 +154,48 @@ def test_weight_only_quantization_matches_bfloat16_logits(
     assert p99_absolute_error.item() <= maximum_p99_error
     assert actual[:, -1].argmax().equal(expected[:, -1].argmax())
     assert quantized_storage < baseline_storage * maximum_storage_ratio
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_dynamic_sequence_artifact_serves_many_prompt_lengths(tmp_path):
+    """One artifact, many prompt lengths, no compiler in the loading process."""
+    transformers = pytest.importorskip("transformers")
+    model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    major, minor = torch.cuda.get_device_capability()
+
+    result = export_hf_model(
+        f"hf://{model_id}",
+        output=str(tmp_path / "dynamic.lm7"),
+        prompt="The capital of France is",
+        target=f"nvidia:sm{major}{minor}",
+        backend="aot_inductor",
+        dtype="float16",
+        dynamic_sequence=(1, 256),
+    )
+    assert result.sequence_bounds == (1, 256)
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+    reference = (
+        transformers.AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch.float16,
+            attn_implementation="eager",
+        )
+        .eval()
+        .cuda()
+    )
+    artifact = lm7.load_artifact(result.output)
+
+    # The capture used a 5-token prompt; none of these are 5 tokens.
+    prompts = ("Hi", "Write a short poem about the sea and the sky on a summer evening")
+    for prompt in prompts:
+        inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+        logits = artifact(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+        with torch.no_grad():
+            expected = reference(**inputs, use_cache=False).logits
+        assert logits.shape == expected.shape
+        assert logits[0, -1].argmax() == expected[0, -1].argmax()
+
+    too_long = torch.ones((1, 257), dtype=torch.long, device="cuda")
+    with pytest.raises(ValueError, match=r"expected \[1, 256\]"):
+        artifact(input_ids=too_long, attention_mask=too_long)

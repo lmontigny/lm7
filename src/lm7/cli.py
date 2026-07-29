@@ -223,13 +223,38 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Next token: {result.next_token_id} ({result.next_token!r})")
 
 
+def _dynamic_sequence(value: str | None) -> bool | tuple[int, int]:
+    """Turn the --dynamic-seq argument into an export_hf_model argument."""
+    if value is None:
+        return False
+    if value == "auto":
+        return True
+    minimum, separator, maximum = value.partition(":")
+    if not separator:
+        raise LM7Error(f"Invalid --dynamic-seq value {value!r}; expected MIN:MAX, such as 1:2048.")
+    try:
+        bounds = (int(minimum), int(maximum))
+    except ValueError:
+        raise LM7Error(
+            f"Invalid --dynamic-seq value {value!r}; MIN and MAX must be integers."
+        ) from None
+    return bounds
+
+
 def _print_model_export(result: HuggingFaceExportResult) -> None:
     print(f"Model: {result.model_uri}")
     print(f"Target: {result.target}")
     print(f"Backend: {result.backend}")
     print(f"Dtype: {result.dtype}")
     print(f"Parameters: {result.parameter_count:,}")
-    print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
+    if result.sequence_bounds is None:
+        print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
+    else:
+        minimum, maximum = result.sequence_bounds
+        print(
+            f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}, "
+            f"sequence dynamic in [{minimum}, {maximum}]"
+        )
     print(f"Export time: {result.export_ms:.2f} ms")
     print(f"Artifact: {result.output} ({result.artifact_bytes / 1024**2:.1f} MiB)")
     print(f"Files: {', '.join(result.files)}")
@@ -300,6 +325,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default="The capital of France is",
         help="prompt whose tokenization fixes the captured input shape",
     )
+    export_parser.add_argument(
+        "--dynamic-seq",
+        nargs="?",
+        const="auto",
+        metavar="MIN:MAX",
+        help=(
+            "capture the sequence length as a bounded dynamic dimension so one "
+            "artifact serves many prompt lengths; bounds default to the model config"
+        ),
+    )
     export_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     export_parser.add_argument(
         "--backend",
@@ -369,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=args.target,
                 backend=args.backend,
                 dtype=args.dtype,
+                dynamic_sequence=_dynamic_sequence(args.dynamic_seq),
             )
             (
                 _emit_json(export_result.to_dict())

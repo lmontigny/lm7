@@ -227,7 +227,8 @@ Use JIT while iterating locally, and AOT when you want the compile cost paid onc
 at build time instead of on every process start.
 
 See [JIT vs. AOT](docs/jit-vs-aot.md) for the two export levels, bundles, and the
-caveats — AOT fixes the input signature, and artifacts are not a stable ABI.
+caveats — an AOT artifact is fixed to its captured input signature unless a
+dimension was captured as dynamic, and artifacts are not a stable ABI.
 
 ## 4. Run a Hugging Face model
 
@@ -298,12 +299,27 @@ lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
   --target cpu --backend aot_inductor
 ```
 
-The example inputs come from tokenizing `--prompt`, so the artifact is pinned to
-that input shape — an AOT artifact does not adapt to new shapes the way a JIT
-path recompiles. LM7 captures a logits-only graph, because a causal LM's
+The example inputs come from tokenizing `--prompt`, so by default the artifact is
+pinned to that many tokens. `--dynamic-seq` captures the sequence length as a
+bounded dynamic dimension instead, and one artifact then serves every prompt
+length inside those bounds:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target nvidia --backend aot_inductor --dynamic-seq        # bounds from the model config
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target nvidia --backend aot_inductor --dynamic-seq 1:512  # or set them
+```
+
+The bounds are recorded in the manifest and enforced on every call, so a prompt
+outside them raises rather than producing quietly wrong output. A dynamic capture
+uses the model's eager attention path — see [JIT vs. AOT](docs/jit-vs-aot.md) for
+why, and for the batch dimension, which stays fixed.
+
+LM7 captures a logits-only graph either way, because a causal LM's
 `CausalLMOutputWithPast` return value cannot be deserialized by
-`torch.export.load`; the reloaded artifact therefore takes tensors and returns a
-logits tensor.
+`torch.export.load`; the reloaded artifact takes `input_ids` and
+`attention_mask` and returns a logits tensor.
 
 Combine per-target artifacts into one bundle and select at load time, from
 Python or the CLI:
@@ -377,6 +393,9 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - JIT compiled callables and TensorRT engines are process-local; only
   `aot_inductor`, `openvino`, and `lm7.export` produce something another process
   can load.
+- Exported causal-LM artifacts capture a prefill-only graph. `--dynamic-seq`
+  makes the sequence length variable within recorded bounds; the batch dimension
+  stays fixed, and a KV-cache decode loop is not captured.
 - AOTInductor is validated for CPU, Apple Silicon (MPS), and NVIDIA GPU, and uses
   Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch
   wheel does not ship — install `".[cuda-aot]"`, and see

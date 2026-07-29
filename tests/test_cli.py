@@ -289,3 +289,68 @@ def test_model_export_json(monkeypatch, capsys):
 def test_model_export_rejects_an_unknown_backend(capsys):
     with pytest.raises(SystemExit):
         cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--backend", "tensorrt"])
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ([], False),
+        (["--dynamic-seq"], True),
+        (["--dynamic-seq", "4:512"], (4, 512)),
+    ],
+)
+def test_model_export_passes_dynamic_sequence(monkeypatch, argument, expected):
+    calls = {}
+
+    def export_model(model_uri, **kwargs):
+        calls.update(kwargs)
+        return HuggingFaceExportResult(
+            model_uri=model_uri,
+            model_id="example/tiny",
+            target="cpu:x86_64",
+            backend="export",
+            dtype="float32",
+            output="/tmp/model.lm7",
+            prompt="Hello",
+            input_tokens=2,
+            parameter_count=10,
+            export_ms=42.0,
+            artifact_bytes=2048,
+            files=("exported_program.pt2", "manifest.json"),
+            sequence_bounds=expected if isinstance(expected, tuple) else None,
+        )
+
+    monkeypatch.setattr(cli, "export_hf_model", export_model)
+    assert cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", *argument]) == 0
+    assert calls["dynamic_sequence"] == expected
+
+
+@pytest.mark.parametrize("value", ["2048", "a:b"])
+def test_model_export_rejects_a_malformed_sequence_range(value, capsys):
+    assert cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--dynamic-seq", value])
+    assert "--dynamic-seq" in capsys.readouterr().err
+
+
+def test_model_export_reports_dynamic_bounds(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "export_hf_model",
+        lambda model_uri, **kwargs: HuggingFaceExportResult(
+            model_uri=model_uri,
+            model_id="example/tiny",
+            target="cpu:x86_64",
+            backend="export",
+            dtype="float32",
+            output="/tmp/model.lm7",
+            prompt="Hello",
+            input_tokens=2,
+            parameter_count=10,
+            export_ms=42.0,
+            artifact_bytes=2048,
+            files=("exported_program.pt2", "manifest.json"),
+            sequence_bounds=(1, 2048),
+        ),
+    )
+
+    assert cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--dynamic-seq"]) == 0
+    assert "sequence dynamic in [1, 2048]" in capsys.readouterr().out
