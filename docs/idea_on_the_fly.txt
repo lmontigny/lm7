@@ -35,7 +35,6 @@ torch-mlir as the StableHLO lowering path
 
 ** today **
 simplify readme see z, use figure to show all the backend
-add examples/ dir
 add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
 
