@@ -20,6 +20,7 @@ from .backends import registry
 from .backends.aot_inductor import SUPPORTED_VENDORS as AOT_INDUCTOR_VENDORS
 from .backends.aot_inductor import AOTInductorBackend
 from .backends.openvino import OpenVINOBackend
+from .backends.stablehlo import StableHLOBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
 from .errors import (
@@ -48,8 +49,9 @@ PROGRAM_NAME = "exported_program.pt2"
 COMPILED_PROGRAM_NAME = "compiled_model.pt2"
 COMPILED_IR_NAME = "compiled_model.xml"
 COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
+COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
 DEBUG_DIR_NAME = "debug"
-EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "openvino"})
+EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "openvino", "stablehlo"})
 
 
 @dataclass(frozen=True)
@@ -260,6 +262,15 @@ def export(
             compiled_sha256 = _file_sha256(staging / COMPILED_IR_NAME)
             compiled_weights_file = COMPILED_IR_WEIGHTS_NAME
             compiled_weights_sha256 = _file_sha256(staging / COMPILED_IR_WEIGHTS_NAME)
+        if backend == "stablehlo":
+            stablehlo_backend = _stablehlo_backend()
+            probe = stablehlo_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            compiled_path = staging / COMPILED_STABLEHLO_NAME
+            stablehlo_backend.compile_exported(exported_program, compiled_path)
+            compiled_file = COMPILED_STABLEHLO_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -303,6 +314,10 @@ def export(
                 # The IR payload executes on the OpenVINO runtime alone; torch is
                 # only needed to read the exported_program.pt2 alongside it.
                 **({"openvino": _openvino_version()} if backend == "openvino" else {}),
+                # The StableHLO payload needs a PJRT plugin, not PyTorch, and the
+                # plugin is chosen at load time -- so unlike every other compiled
+                # payload this one is not pinned to the export-time device.
+                **({"pjrt_plugin": "any", "device_bound": False} if backend == "stablehlo" else {}),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -324,6 +339,8 @@ def export(
         compiled_callable = selected_backend.load_package(destination / COMPILED_PROGRAM_NAME)
     elif backend == "openvino":
         compiled_callable = _openvino_backend().load_ir(destination / COMPILED_IR_NAME)
+    elif backend == "stablehlo":
+        compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -396,6 +413,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_weights_file, manifest.compiled_weights_sha256
         )
         compiled_callable = _openvino_backend().load_ir(compiled_path)
+    elif manifest.backend == "stablehlo":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _stablehlo_backend().load_package(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -426,6 +448,13 @@ def _openvino_backend() -> OpenVINOBackend:
     return backend
 
 
+def _stablehlo_backend() -> StableHLOBackend:
+    backend = registry.get("stablehlo")
+    if not isinstance(backend, StableHLOBackend):
+        raise BackendUnavailableError("The registered stablehlo backend is invalid.")
+    return backend
+
+
 def _openvino_version() -> str | None:
     try:
         return importlib.metadata.version("openvino")
@@ -438,6 +467,8 @@ def _backend_version(backend: str) -> str | None:
         return torch.__version__
     if backend == "openvino":
         return _openvino_version()
+    if backend == "stablehlo":
+        return _stablehlo_backend().probe().version
     return None
 
 

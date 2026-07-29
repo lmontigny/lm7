@@ -11,9 +11,10 @@ definition reaches CPU, NVIDIA, AMD, TPU, and AWS Neuron. PJRT — not
 PyTorch/XLA — is the portable boundary, and a vendor can supply a plugin without
 the frontend changing.
 
-This evaluation asks whether LM7 can reach that same boundary while keeping its
+This evaluation asked whether LM7 can reach that same boundary while keeping its
 PyTorch frontend, by lowering a captured `ExportedProgram` to StableHLO and
-handing the result to a PJRT client.
+handing the result to a PJRT client. It can, and `stablehlo` is now a registered
+export backend on the strength of the measurements below.
 
 ## The question that decides it
 
@@ -69,6 +70,28 @@ returns `None`.
 **The path works.** A model captured from PyTorch ran on a PJRT client with no
 PyTorch present and stayed numerically faithful to eager.
 
+## The same bytes on a second vendor
+
+The vendor-neutrality claim was then tested rather than assumed. The **exact
+same artifact**, unmodified, was handed to the CUDA PJRT plugin on an RTX 4070
+SUPER (sm89), still with PyTorch absent:
+
+| Plugin | Compile | Weight load | First call | Median | Top-1 |
+| --- | --- | --- | --- | --- | --- |
+| CPU | 1.14 s | 581 ms | 646 ms | 77.9 ms | match |
+| CUDA (sm89) | 8.79 s | 3.20 s | 310 ms | **6.0 ms** | match |
+
+One file, two vendors, 13x faster on the GPU with no re-export. That is the
+property no other LM7 artifact has: an AOTInductor package is built for one
+device, and OpenVINO IR is Intel-only.
+
+Numerics differ by device. Against the same CPU eager reference the CPU plugin
+agreed to 9.2e-05 and the CUDA plugin to 2.3e-02 on fp32 logits, with the
+predicted token identical. Forcing `NVIDIA_TF32_OVERRIDE=0` did not close the
+gap (2.5e-02), so this is ordinary cross-device fp32 reassociation rather than
+TF32 — the same order as the 0.059 fp16 difference recorded for the NVIDIA
+AOTInductor path. Validate per target before trusting an artifact.
+
 ## Artifact layout
 
 `save_as_stablehlo` writes a format that is legible without the producing
@@ -90,23 +113,56 @@ argument list with no model definition — that is what
 files also matches the separation LM7's own [ZML notes](ZML_details.md) argue
 for: the symbolic graph does not have to carry materialized weights.
 
-## What blocks a registered backend
+## The registered backend
+
+```python
+lm7.export(model, args=(example,), target="cpu", backend="stablehlo", output="model.lm7")
+```
+
+Three things distinguish it from the other export backends:
+
+- **No vendor gate.** `aot_inductor` and `openvino` reject targets they were not
+  validated for. This payload is target-independent — the PJRT plugin is chosen
+  by whoever loads it — so the backend does not gate, and the manifest records
+  `"device_bound": false`.
+- **Export-only.** `supports()` returns False for compile requests with a
+  message pointing at `lm7.export`. Compiling in-process through PyTorch/XLA is
+  what `openxla` already does.
+- **The payload is a zip.** `save_as_stablehlo` writes a directory of roughly
+  280 files for a 135M model, and an LM7 manifest records one payload name and
+  one checksum, so the tree is stored (uncompressed) as
+  `compiled_model.stablehlo.zip`.
+
+Loading through `lm7.load_artifact` needs PyTorch/XLA, because turning StableHLO
+back into a torch callable is what PyTorch/XLA does. The PyTorch-free route is
+to unpack the zip and hand `functions/forward.bytecode` to a PJRT client, which
+is what `benchmarks/stablehlo_pjrt.py` and the integration test do.
+
+## Constraints and open questions
 
 None of these are fatal, but all of them are real:
 
 - **Version coupling.** `torch_xla` is ABI-tied to a matching PyTorch; 2.9.0
   needs torch 2.9, while LM7 development currently runs torch 2.13. The two
   cannot share an environment, which is why the harness has separate `export`
-  and `execute` commands. This is the same drift that affects the `tensorrt`
-  extra, and it means an `lm7.export(backend="stablehlo")` could not be
-  exercised by the default dev environment today.
+  and `execute` commands, and why the backend's own lowering tests are gated on
+  `torch_xla` being importable. This is the same drift that affects the
+  `tensorrt` extra.
+- **Keyword capture is not lowerable.** `torch_xla` raises "Export to stablehlo
+  doesnt support kwargs yet." for a program captured with keyword inputs, so the
+  backend rejects those up front and `export_hf_model` feeds this backend its
+  tensors positionally.
+- **The payload duplicates the source program.** An `.lm7` holds both
+  `exported_program.pt2` and the StableHLO zip, so a 135M model lands at about
+  1.1 GiB. That is inherent to the current artifact design rather than to this
+  backend.
 - **The conversion still needs PyTorch/XLA.** Path 1 routes *around*
   PyTorch/XLA at run time but still depends on it at build time, so it does not
   escape the dependency that motivated the evaluation. Path 2 (torch-mlir) is
   the way out and is unevaluated.
-- **Only the CPU plugin was exercised.** The claim "vendor-neutral" rests on
-  PJRT plugins this evaluation did not run. A CUDA plugin is installable and
-  testable on the local RTX 4070; ROCm, TPU, and Neuron are not testable here.
+- **Two plugins were exercised, not five.** CPU and CUDA are measured above;
+  ROCm, TPU, and Neuron are not testable on this host, so their support is
+  inferred from PJRT's design rather than observed.
 - **Dynamic shapes were not exercised.** The metadata carries a `dynamic_dims`
   field per input and `torch_xla.stablehlo` exposes
   `exported_program_has_symbolic_input_shape`, so the bounded sequence dimension
@@ -143,16 +199,16 @@ evidence about the artifact rather than about a convenient environment.
 
 ## Status
 
-Evaluated and working on CPU; **not** a registered LM7 backend. The next
-decision-relevant experiments, in order:
+Evaluated, working, and **now a registered export backend** — see
+[`lm7.export(backend="stablehlo")`](../README.md#5-export-an-artifact). What
+remains open:
 
-1. Run the same artifact through the **CUDA PJRT plugin** on the local sm89 GPU.
-   That is the first real test of the vendor-neutrality claim, and it is
-   testable on existing hardware.
-2. Re-run the capture with a **bounded dynamic sequence dimension** to see
+1. Re-run the capture with a **bounded dynamic sequence dimension** to see
    whether it survives the lowering.
-3. Evaluate **torch-mlir** as the lowering path, which is what would let a
-   `stablehlo` export backend live in the normal LM7 environment.
+2. Evaluate **torch-mlir** as the lowering path, which is what would let the
+   backend lower in the normal LM7 environment rather than an ABI-matched one.
+3. Exercise the **ROCm, TPU, and Neuron plugins**, none of which are testable on
+   this host.
 
 ## References
 

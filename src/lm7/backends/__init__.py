@@ -4,6 +4,7 @@ from .inductor import InductorBackend
 from .openvino import OpenVINOBackend
 from .openxla import OpenXLABackend
 from .registry import BackendRegistry
+from .stablehlo import StableHLOBackend
 from .tensorrt import TensorRTBackend
 
 registry = BackendRegistry()
@@ -13,5 +14,6 @@ registry.register(AOTInductorBackend())
 registry.register(TensorRTBackend())
 registry.register(OpenVINOBackend())
 registry.register(OpenXLABackend())
+registry.register(StableHLOBackend())
 
 __all__ = ["registry"]
