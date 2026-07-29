@@ -189,10 +189,20 @@ def run_execute(arguments: argparse.Namespace) -> int:
     backend = jax.extend.backend.get_backend()
     devices = xla_client.DeviceList(tuple(backend.devices()[:1]))
 
+    # torch_xla writes bytecode; the torch-mlir path in
+    # benchmarks/torch_mlir_lowering.py must emit text, because inlining its
+    # resource constants is a textual rewrite. make_hlo_program takes either.
+    bytecode = root / "functions" / "forward.bytecode"
+    assembly = root / "functions" / "forward.mlir"
+    if bytecode.is_file():
+        program_source: bytes | str = bytecode.read_bytes()
+    elif assembly.is_file():
+        program_source = assembly.read_text(encoding="utf-8")
+    else:
+        raise SystemExit(f"{root} holds neither functions/forward.bytecode nor forward.mlir")
+
     started = time.perf_counter()
-    program = jax_internal.ifrt_programs.make_hlo_program(
-        (root / "functions" / "forward.bytecode").read_bytes()
-    )
+    program = jax_internal.ifrt_programs.make_hlo_program(program_source)
     options = jax_internal.ifrt_programs.make_xla_compile_options(
         xla_client.CompileOptions(), devices, []
     )

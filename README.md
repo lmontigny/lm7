@@ -434,7 +434,9 @@ for environment checks, GPU integration tests, and compiler IR output, and
   its runtime exchanges tensors through NumPy. It returns tensors or tuples, so
   models whose forward returns a dataclass need a wrapper.
 - AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
-  harnesses, not usable backends.
+  harnesses, not usable backends. Replacing the `stablehlo` lowering with
+  torch-mlir, which would unpin it from a matching PyTorch, is evaluated in
+  [torch-mlir lowering](docs/torch-mlir-lowering-evaluation.md) and not adopted.
 - Quantization is weight-only, NVIDIA-only, and validated per (model, mode)
   pair — see [quantization](docs/quantization.md) for the list and the
   measurements behind it.
