@@ -1,0 +1,120 @@
+{
+  "backend": "aot_inductor",
+  "backend_version": "2.13.0+cu130",
+  "cache_key": "7c91efdfa4ea6975d77382de1eb40f9bf8a470272395fcb42d5daa4a9c94d7de",
+  "compiled_file": "compiled_model.pt2",
+  "compiled_sha256": "957e34777ec4fc5e0fef9d24b5ada54db80f4f9671a61fbd2e9f9eb602c3540f",
+  "created_at": "2026-07-26T19:59:23.054066+00:00",
+  "debug_artifacts": [
+    {
+      "kind": "graph",
+      "level": "export",
+      "path": "debug/exported_graph.py",
+      "sha256": "d7426ecbe6295c8825ff40734305699e46c2dd4f1a34e1c458abb8183779fc61"
+    },
+    {
+      "kind": "graph",
+      "level": "export",
+      "path": "debug/exported_program.txt",
+      "sha256": "d460663f597249c4fdd34758e815b8acba3898a9634113355394d3dc7fecee33"
+    },
+    {
+      "kind": "graph",
+      "level": "export",
+      "path": "debug/graph_signature.txt",
+      "sha256": "3d839ae8549d9a18ce4ae2afb478f0eff94c0649a143ef877be1ac1d3391fe82"
+    },
+    {
+      "kind": "source",
+      "level": "generated_code",
+      "path": "debug/package/compiled_model__data__aotinductor__model__c4wqmy66imu2rwel25kslobl55e2fp7mtxpupqorurovw32mo5yi.wrapper.cpp",
+      "sha256": "af9aa91875657b7c5e15c871701e7e2a42e7a99f9d11761cc38e58c54734fdc5"
+    },
+    {
+      "kind": "source",
+      "level": "generated_code",
+      "path": "debug/package/compiled_model__data__aotinductor__model__cclnsjb5zbaads6kegi4qy5i2b6ixi2fzz4a3pu4i6qgf6closlx.kernel.cpp",
+      "sha256": "8e3c628af3fbb26fe9b97301fddf88f5fc99a81d68bfbecc7677efd0d6617d2c"
+    },
+    {
+      "kind": "graph",
+      "level": "fx",
+      "path": "debug/torchinductor/model___0.0/fx_graph_readable.py",
+      "sha256": "4f442fb5bf5fa6affb3f274f649ef35e39a2786efe3b651c706557f59ba6dcc7"
+    },
+    {
+      "kind": "graph",
+      "level": "fx",
+      "path": "debug/torchinductor/model___0.0/fx_graph_runnable.py",
+      "sha256": "c279c30bdc05867c3a77582eeeeb68dfa85aacde9bde34d3b95bafac01469c91"
+    },
+    {
+      "kind": "graph",
+      "level": "fx",
+      "path": "debug/torchinductor/model___0.0/fx_graph_transformed.py",
+      "sha256": "4f442fb5bf5fa6affb3f274f649ef35e39a2786efe3b651c706557f59ba6dcc7"
+    },
+    {
+      "kind": "ir",
+      "level": "inductor_ir_post_fusion",
+      "path": "debug/torchinductor/model___0.0/ir_post_fusion.txt",
+      "sha256": "da46ea4848cbcb2d743ef5fadbdac8edbfd0a1c451af42f6643386cd89d7882e"
+    },
+    {
+      "kind": "ir",
+      "level": "inductor_ir_pre_fusion",
+      "path": "debug/torchinductor/model___0.0/ir_pre_fusion.txt",
+      "sha256": "da46ea4848cbcb2d743ef5fadbdac8edbfd0a1c451af42f6643386cd89d7882e"
+    },
+    {
+      "kind": "source",
+      "level": "generated_code",
+      "path": "debug/torchinductor/model___0.0/output_code.cpp",
+      "sha256": "f90ba50bb44c3b34954c5a643c2d91be2f12f8ce817d8c1de4e153b5ebc392b9"
+    }
+  ],
+  "debug_requested": true,
+  "format_version": 1,
+  "input_signature": [
+    [
+      "tuple",
+      [
+        [
+          "tensor",
+          [
+            2,
+            16
+          ],
+          "torch.float32",
+          [
+            16,
+            1
+          ],
+          "cpu"
+        ]
+      ]
+    ],
+    [
+      "dict",
+      []
+    ]
+  ],
+  "lm7_version": "0.1.0",
+  "model_graph_hash": "2cfb3e90343c93c6c81cfa6466d94a45be4cb338051950a76a520c4a040b4fef",
+  "program_file": "exported_program.pt2",
+  "program_sha256": "a30b850d825e3065f7242a9c5232b8be7fb3df00913be3d0c83bc9c4935d9f1f",
+  "runtime_requirements": {
+    "api_status": "beta",
+    "device": "cpu",
+    "torch": "2.13.0+cu130"
+  },
+  "target": {
+    "architecture": null,
+    "kind": "cpu",
+    "model": null,
+    "ordinal": null,
+    "remote": false,
+    "vendor": "cpu"
+  },
+  "torch_version": "2.13.0+cu130"
+}

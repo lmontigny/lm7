@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -17,6 +18,7 @@ import torch
 
 from .backends import registry
 from .backends.aot_inductor import AOTInductorBackend
+from .backends.openvino import OpenVINOBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
 from .errors import (
@@ -43,8 +45,10 @@ FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
 PROGRAM_NAME = "exported_program.pt2"
 COMPILED_PROGRAM_NAME = "compiled_model.pt2"
+COMPILED_IR_NAME = "compiled_model.xml"
+COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
 DEBUG_DIR_NAME = "debug"
-EXPORT_BACKENDS = frozenset({"export", "aot_inductor"})
+EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "openvino"})
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,9 @@ class ArtifactManifest:
     backend_version: str | None = None
     compiled_file: str | None = None
     compiled_sha256: str | None = None
+    # OpenVINO IR is two files: the graph and its weight sibling.
+    compiled_weights_file: str | None = None
+    compiled_weights_sha256: str | None = None
     runtime_requirements: Mapping[str, Any] | None = None
     debug_requested: bool = False
     debug_artifacts: tuple[Mapping[str, str], ...] = ()
@@ -167,6 +174,10 @@ def export(
             "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU and "
             "Apple Silicon targets."
         )
+    if backend == "openvino" and resolved_target.vendor not in {"cpu", "intel"}:
+        raise BackendUnavailableError(
+            "OpenVINO artifacts are validated for Intel CPU targets only."
+        )
     if isinstance(model, torch.export.ExportedProgram):
         if args is not None or kwargs:
             raise ValueError("args and kwargs cannot be supplied with an ExportedProgram.")
@@ -225,9 +236,29 @@ def export(
         program_sha256 = _file_sha256(program_path)
         compiled_file = None
         compiled_sha256 = None
+        compiled_weights_file = None
+        compiled_weights_sha256 = None
         debug_dir = staging / DEBUG_DIR_NAME
         if debug:
             _write_export_debug_files(exported_program, debug_dir)
+        if backend == "openvino":
+            openvino_backend = _openvino_backend()
+            probe = openvino_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            compiler_options = dict(options or {})
+            openvino_backend.compile_exported(
+                exported_program,
+                staging / COMPILED_IR_NAME,
+                static_shapes=_flat_tensors(args, kwargs)
+                if compiler_options.get("static_shapes", True)
+                else None,
+                compress_to_fp16=bool(compiler_options.get("compress_to_fp16", False)),
+            )
+            compiled_file = COMPILED_IR_NAME
+            compiled_sha256 = _file_sha256(staging / COMPILED_IR_NAME)
+            compiled_weights_file = COMPILED_IR_WEIGHTS_NAME
+            compiled_weights_sha256 = _file_sha256(staging / COMPILED_IR_WEIGHTS_NAME)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -257,13 +288,18 @@ def export(
             program_file=PROGRAM_NAME,
             program_sha256=program_sha256,
             backend=backend,
-            backend_version=torch.__version__ if backend == "aot_inductor" else None,
+            backend_version=_backend_version(backend),
             compiled_file=compiled_file,
             compiled_sha256=compiled_sha256,
+            compiled_weights_file=compiled_weights_file,
+            compiled_weights_sha256=compiled_weights_sha256,
             runtime_requirements={
                 "torch": torch.__version__,
                 "device": resolved_target.vendor,
-                "api_status": "beta" if backend == "aot_inductor" else "stable",
+                "api_status": "stable" if backend == "export" else "beta",
+                # The IR payload executes on the OpenVINO runtime alone; torch is
+                # only needed to read the exported_program.pt2 alongside it.
+                **({"openvino": _openvino_version()} if backend == "openvino" else {}),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -283,6 +319,8 @@ def export(
         selected_backend = registry.get("aot_inductor")
         assert isinstance(selected_backend, AOTInductorBackend)
         compiled_callable = selected_backend.load_package(destination / COMPILED_PROGRAM_NAME)
+    elif backend == "openvino":
+        compiled_callable = _openvino_backend().load_ir(destination / COMPILED_IR_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -345,9 +383,76 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
         if not isinstance(backend, AOTInductorBackend):
             raise ArtifactLoadError("The registered aot_inductor backend is invalid.")
         compiled_callable = backend.load_package(compiled_path)
+    elif manifest.backend == "openvino":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        # The weights sibling is verified too: OpenVINO reads it implicitly when
+        # compiling the graph, so a corrupt .bin would otherwise pass unnoticed.
+        _verify_payload(
+            artifact_path, manifest.compiled_weights_file, manifest.compiled_weights_sha256
+        )
+        compiled_callable = _openvino_backend().load_ir(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
+
+
+def _verify_payload(artifact_path: Path, name: str | None, expected_sha256: str | None) -> Path:
+    if not name or not expected_sha256:
+        raise ArtifactLoadError(
+            f"Artifact manifest for {artifact_path} is missing compiled payload metadata."
+        )
+    payload_path = artifact_path / name
+    if not payload_path.is_file():
+        raise ArtifactLoadError(
+            f"Artifact load stage failed for {artifact_path}: {name} is missing."
+        )
+    if _file_sha256(payload_path) != expected_sha256:
+        raise ArtifactLoadError(
+            f"Artifact load stage failed for {artifact_path}: {name} checksum does not match "
+            "the manifest. Re-export the model."
+        )
+    return payload_path
+
+
+def _openvino_backend() -> OpenVINOBackend:
+    backend = registry.get("openvino")
+    if not isinstance(backend, OpenVINOBackend):
+        raise BackendUnavailableError("The registered openvino backend is invalid.")
+    return backend
+
+
+def _openvino_version() -> str | None:
+    try:
+        return importlib.metadata.version("openvino")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _backend_version(backend: str) -> str | None:
+    if backend == "aot_inductor":
+        return torch.__version__
+    if backend == "openvino":
+        return _openvino_version()
+    return None
+
+
+def _flat_tensors(args: tuple[Any, ...] | None, kwargs: Mapping[str, Any]) -> list[torch.Tensor]:
+    found: list[torch.Tensor] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, torch.Tensor):
+            found.append(item)
+        elif isinstance(item, (tuple, list)):
+            for entry in item:
+                walk(entry)
+        elif isinstance(item, dict):
+            for entry in item.values():
+                walk(entry)
+
+    walk((args or (), dict(kwargs)))
+    return found
 
 
 def artifact_cache_key(model_graph_hash: str, signature: Any, target: TargetSpec) -> str:

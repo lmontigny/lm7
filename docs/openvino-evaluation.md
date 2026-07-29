@@ -110,9 +110,66 @@ causal-LM ids as `benchmarks/gpu.py`: `smollm2`, `lfm25`, `llama32-1b`, and
 and one logits tensor out, with `use_cache=False`, which measures a single
 prefill forward pass rather than a decode loop.
 
-Only add `backend="openvino"` after the evaluation shows a clear advantage for
-Intel CPU, GPU, NPU, or IR-based deployment. Keep it lower priority than
-Inductor until model coverage and artifact behavior are proven.
+## The registered backend
+
+The evaluation met its bar on Intel CPU, so `backend="openvino"` now exists as a
+registered backend in `src/lm7/backends/openvino.py`.
+
+```python
+model = lm7.compile(model, target="cpu", backend="openvino")
+```
+
+It implements **the IR path only**, because that is the path the measurements
+justify: `openvino_ir` beat eager on every workload on both hosts and beat
+Inductor on all six Intel workloads, while the `torch.compile` path lost to
+eager on two and never beat Inductor. LM7 exports with `torch.export`, converts
+with `convert_model`, saves IR with `save_model`, and executes through
+`Core().compile_model()`.
+
+It is **opt-in**. `supports()` reports priority 80, below Inductor (100) and
+AOTInductor (90), so `backend="auto"` never selects it. The latency case is
+made; broad operator coverage is not, which is what would justify raising it.
+
+The pitfalls in the section above are encoded as behaviour rather than left to
+the caller:
+
+| Pitfall | What the backend does |
+| --- | --- |
+| Reduced default precision | Pins `INFERENCE_PRECISION_HINT` to `f32`; override with `options={"inference_precision": ...}` |
+| FP16 weight compression | Passes `compress_to_fp16=False` |
+| Dynamically shaped export | Reshapes IR to the example input shapes; disable with `options={"static_shapes": False}` |
+| Output buffer aliasing | Clones every returned tensor |
+| No bfloat16 | Rejects bfloat16 models in `supports()` with an actionable reason |
+| Silent device fallback | Raises if the requested device is absent from `Core().available_devices` instead of quietly using CPU |
+
+Two limits worth knowing. The callable returns a tensor or a tuple of tensors,
+so a model whose `forward` returns a dataclass (a Hugging Face `ModelOutput`,
+for example) needs the same wrapper the benchmark harness uses. And only the
+`cpu` and `intel` target vendors are accepted; Intel GPU and NPU are untested
+because no such device was available.
+
+### Artifacts
+
+`lm7.export(..., backend="openvino")` writes the IR into an `.lm7` artifact
+alongside the `ExportedProgram`, with both `compiled_model.xml` and
+`compiled_model.bin` checksummed in the manifest:
+
+```python
+lm7.export(model, args=(example,), target="cpu", backend="openvino", output="model.lm7")
+```
+
+`load_artifact()` verifies both files and returns a callable backed by the IR.
+In a bundle the OpenVINO entry ranks at 80, below `aot_inductor` and above a bare
+`export`.
+
+This is the payload that answers the evaluation's deployment criterion: the IR
+runs on a machine with no PyTorch installed, through
+`openvino.Core().compile_model()` alone.
+
+`tests/test_openvino_integration.py` covers eager parity, the planner ranking,
+the bfloat16 and device guards, FP32 weight preservation, the export round trip,
+weight-checksum validation, and loading the saved IR in a subprocess that never
+imports `torch`.
 
 ## Validation commands
 
@@ -159,13 +216,61 @@ automatically.
 
 ## Status
 
-Measured on an Apple M4 Pro, `openvino` 2026.2.1, PyTorch 2.13, FP32,
-`--inference-precision f32`, 30 warmup calls, all paths within the FP32
-tolerance and all reported steady-state. This is an ARM host, so it says nothing
-about Intel deployment speed; it establishes the harness and the shape of the
-result.
+Measured on two hosts. The Intel run is the one that bears on the decision; the
+Apple run established the harness and is kept because it is what the pitfalls
+above were found on.
+
+### Intel CPU (the decision-relevant host)
+
+Intel Core i7-8086K (Coffee Lake, 6 cores / 6 threads, AVX2, **no AVX-512 and no
+AMX**), Linux on WSL2, `openvino` 2026.2.1, PyTorch 2.13, FP32,
+`--inference-precision f32`, 60 warmup calls. Every path was within the FP32
+tolerance, and every run reported `ov_compiled_models == 1` with
+`ov_runtime_fallbacks == 0`, so no result here is a disguised Inductor or eager
+run.
 
 Median latency in ms, lower is better:
+
+| workload | eager | inductor | openvino | openvino_ir | IR vs eager |
+| --- | --- | --- | --- | --- | --- |
+| `mlp`, batch 4 | 2.52 | 2.67 | 5.24 | **1.78** | 1.4x |
+| `mobilenet_v3_small`, batch 4 | 16.79 | 10.08 | 13.93 | **4.12** | 4.1x |
+| `resnet18`, batch 4 | 81.63 | 66.55 | 68.80 | **50.52** | 1.6x |
+| `resnet50`, batch 4 | 231.78 | 168.82 | 151.12 | **105.25** | 2.2x |
+| `smollm2`, batch 1, 5 tokens | 50.02 | 36.62 | 52.43 | **22.80** | 2.2x |
+| `lfm25`, batch 1, 5 tokens | 66.49 | 58.77 | 61.99 | **34.75** | 1.9x |
+
+- **`openvino_ir` won every workload measured, on both hosts.** On Intel it beat
+  eager by 1.4-4.1x and beat Inductor on all six. This is a stronger and more
+  uniform result than the Apple run, and it is the central finding: the artifact
+  path is where OpenVINO's value is, and it is also the path that fits
+  `exporting.py` and `bundles.py`.
+- **The `torch.compile` path is not worth adopting on this evidence.** It was
+  slower than eager on `mlp` (5.24 vs 2.52) and on SmolLM2 (52.43 vs 50.02), and
+  never beat Inductor on any workload. Both hosts agree.
+- **The reduced-precision pitfall does not fire on pre-AMX Intel.** The doc
+  above warns that `INFERENCE_PRECISION_HINT` defaults to BF16 on x86 with AMX.
+  This CPU reports `optimization_capabilities: ['FP32', 'INT8', 'BIN',
+  'EXPORT_IMPORT']` — no BF16 entry — and an `inference_precision_hint` that is
+  already `float32`. So on Coffee Lake the default and `f32` are the same thing,
+  and the accuracy trap the Apple host hit is AMX-gated rather than x86-wide.
+  It will reappear on Sapphire Rapids or newer, so the flag stays necessary.
+- **`mlp` never reached steady state**, even at 60 warmup calls: the harness
+  still reported an early/late median ratio above its threshold on some runs.
+  Its 1.4x is therefore the softest number in the table. Every other workload
+  reported steady-state cleanly.
+- Time to first inference still favours the JIT paths, and by a wider margin
+  than on Apple: `openvino_ir` needs 20.3 s for SmolLM2 (5.5 s export, 11.9 s
+  convert, 0.8 s save, 1.8 s compile) and writes a 540 MB FP32 IR, against
+  43.8 s for Inductor — though for `resnet50` the IR path is *fastest* to first
+  inference at 3.96 s against Inductor's 7.52 s. That cost is paid once per
+  artifact rather than per process, which is the point of the IR path.
+
+### Apple M4 Pro (harness reference)
+
+`openvino` 2026.2.1, PyTorch 2.13, FP32, `--inference-precision f32`, 30 warmup
+calls, all paths within the FP32 tolerance and all reported steady-state. This
+is an ARM host, so it says nothing about Intel deployment speed.
 
 | workload | eager | inductor | openvino | openvino_ir |
 | --- | --- | --- | --- | --- |
@@ -173,27 +278,14 @@ Median latency in ms, lower is better:
 | `resnet18`, batch 4 | 17.8 | 18.8 | 17.1 | **13.8** |
 | `smollm2`, batch 1, 5 tokens | 17.4 | 17.3 | 29.8 | **7.8** |
 
-- **The IR path is the promising one, not `torch.compile`.** `openvino_ir` was
-  1.3x faster than eager on `resnet18` and 2.2x faster on SmolLM2 prefill, while
-  the dynamo backend was at best level with eager and clearly worse on the two
-  larger models. If OpenVINO earns a place in LM7, the evidence points at the
-  artifact path, which is also the one that fits `exporting.py` and `bundles.py`.
-- **OpenVINO loses on trivial graphs.** On `mlp` it is slower than eager because
-  the per-call NumPy round-trip and infer-request overhead dominate three
-  layers of work. Model size, not just vendor, decides whether it helps.
 - **An earlier version of this document reported OpenVINO as uniformly slower.
   That was a measurement error**, not a property of OpenVINO: the 5-call warmup
   in the first version of the harness left OpenVINO's median 4-5x too high. The
   numbers above use 30 warmup calls and a steady-state check.
-- Time to first inference (build plus first call) still favours the JIT paths for
-  large models: `openvino_ir` needs ~7.1 s for SmolLM2 (1.3 s export, 4.1 s
-  convert, 1.3 s save, 3.0 s compile) and writes a 540 MB FP32 IR, against
-  ~2.5 s for Inductor. That cost is paid once per artifact rather than per
-  process, which is the point of the IR path.
 - At the plugin default precision, both OpenVINO paths differed from eager by
   ~1.5e-2, far outside the FP32 tolerance; `--inference-precision f32` dropped
   that to ~9e-7 (`torch.compile`) and ~2e-7 (IR), confirming reduced precision
-  as the cause.
+  as the cause. See the Intel note above for why this is AMX-gated.
 - `--device NPU` on a host without an NPU reproduced the silent compile-time
   fallback: identical accuracy and eager-level latency, caught only by
   `ov_compiled_models == 0`.
@@ -203,13 +295,20 @@ Median latency in ms, lower is better:
 
 Remaining work:
 
-- Run the same matrix on an Intel CPU host, which is the only place the latency
-  numbers mean anything for the decision, then on Intel GPU and NPU.
-- Extend coverage to `resnet50`, `mobilenet_v3_small`, and the remaining
-  causal-LM ids, which the script already accepts but which have not been run.
+- Run `llama32-1b` and `qwen35-0.8b`, the two causal-LM ids still uncovered. The
+  Intel host used here is a WSL2 VM capped at 15 GB of RAM, which is tight for a
+  1B-class FP32 model held resident during IR conversion; raise the cap before
+  attempting them.
+- Measure Intel GPU and NPU. Neither exists on this host —
+  `Core().available_devices` reports `['CPU']` only — so the `--device GPU` and
+  `--device NPU` criteria remain untested on real hardware.
 - Decide whether a decode loop with a KV cache is in scope. The current harness
   measures a single `use_cache=False` prefill, and a stateful decode path is a
   materially different OpenVINO integration.
+- Decide whether the IR path graduates into a registered backend. The
+  performance case is now made on Intel; what is not yet established is
+  operator coverage across a wider model set and the artifact-lifecycle work in
+  `bundles.py`.
 
 ## References
 

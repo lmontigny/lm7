@@ -55,13 +55,23 @@ comparable. Production GPU inference will often use FP16 or BF16 instead.
 No. TorchInductor already provides the generic CPU compiler path used by LM7,
 and PyTorch can generate optimized C++ CPU kernels without OpenVINO.
 
-OpenVINO may be useful as a future optional backend when LM7 specifically
-targets Intel CPU, GPU, or NPU deployment, needs OpenVINO IR artifacts, or wants
-to measure OpenVINO quantization and serving behavior. It should be evaluated
-against eager and Inductor on representative models before becoming an
-automatic choice. Adding it to generic CPU support would otherwise introduce a
-large optional runtime and another model-coverage surface without being needed
-for correctness.
+OpenVINO is now available as an **opt-in** backend for Intel CPU deployment and
+for OpenVINO IR artifacts:
 
-See the [OpenVINO evaluation plan](openvino-evaluation.md) for the proposed
-acceptance criteria and first implementation slice.
+```bash
+uv pip install -e ".[openvino]"
+```
+
+```python
+model = lm7.compile(model, target="cpu", backend="openvino")
+```
+
+It is not an automatic choice. It ranks below Inductor and AOTInductor, so
+`backend="auto"` never selects it — the evaluation established a latency win on
+Intel but not broad operator coverage, and pulling a large optional runtime into
+generic CPU support is not needed for correctness.
+
+Reach for it when you want an artifact that runs without PyTorch, or when you
+are deploying to Intel hardware specifically. See the
+[OpenVINO evaluation](openvino-evaluation.md) for the measurements behind that
+and for the backend's documented limits.
