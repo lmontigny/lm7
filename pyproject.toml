@@ -18,6 +18,18 @@ lm7 = "lm7.cli:main"
 dev = ["pytest>=8", "ruff>=0.6"]
 hf = ["transformers>=4.52.3", "safetensors>=0.4"]
 torchao = ["torchao==0.17.0"]
+onnxruntime = [
+    "onnxruntime>=1.23,<2",
+    "onnx>=1.19,<2",
+    "onnxscript>=0.5,<1",
+    "numpy>=1.26,<2.5",
+]
+onnxruntime-gpu = [
+    "onnxruntime-gpu>=1.27,<2",
+    "onnx>=1.19,<2",
+    "onnxscript>=0.5,<1",
+    "numpy>=1.26,<2.5",
+]
 tensorrt = ["torch-tensorrt==2.12.1"]
 openvino = ["openvino>=2025.0"]
 iree-vulkan = [
@@ -64,6 +76,7 @@ markers = [
     "hf: requires Hugging Face model downloads and a CUDA GPU",
     "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
     "openvino: requires the OpenVINO runtime",
+    "onnxruntime: requires ONNX exporter packages and ONNX Runtime",
     "iree_vulkan: requires IREE compiler/runtime packages; execution also requires Vulkan",
     "stablehlo: requires PyTorch/XLA for the StableHLO lowering",
     "tpu: requires PyTorch/XLA on a Google TPU VM",

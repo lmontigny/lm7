@@ -71,8 +71,8 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 | Vendor | Hardware | `target` | Backends | Status |
 | --- | --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `eager` | Supported |
-| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` | Supported |
+| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `onnxruntime`, `iree_vulkan`, `eager` | Supported; ORT/Vulkan experimental |
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` | Supported |
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `iree_vulkan`, `eager` | Supported; Vulkan AOT experimental |
@@ -97,6 +97,12 @@ compiles to Intel's IR format, which runs in a process without PyTorch installed
 NVIDIA, AMD, and Intel GPUs. It lowers fixed-shape tensor graphs to a persistent
 VMFB containing Vulkan/SPIR-V code. It is not considered by `backend="auto"`,
 and full Hugging Face model coverage is not claimed yet.
+
+[ONNX Runtime](docs/onnxruntime.md) is an opt-in backend for CPU and NVIDIA. It
+uses PyTorch's `torch.export`-based ONNX exporter and an explicit execution
+provider, and supports both lazy compilation and persistent `.onnx` artifacts.
+Fixed-shape SmolLM2 logits, bounded dynamic MLP batches, CPU, and CUDA have been
+validated locally.
 
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
@@ -204,6 +210,7 @@ lm7.compile(model, target="tenstorrent:blackhole")
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
+| `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | — |
@@ -225,11 +232,14 @@ for the resolved target, so CPU, NVIDIA, AMD, Intel, and Apple default to
 `tenstorrent`. `eager` wins only when nothing else supports the target, or when
 a compile fails and `fallback="warn"` takes over.
 
-`tensorrt`, `openxla`, `openvino`, and `iree_vulkan` need extras and must be selected
-explicitly: `uv pip install -e ".[tensorrt]"` (Torch-TensorRT 2.12.1 / PyTorch
-2.12 / CUDA 13), `uv pip install -e ".[openvino]"` on an Intel CPU,
-`uv pip install -e ".[iree-vulkan]"` for Vulkan AOT, or, on a TPU VM,
-`uv pip install -e ".[openxla]"`. The Tenstorrent plugin is not on PyPI:
+`tensorrt`, `openxla`, `openvino`, `onnxruntime`, and `iree_vulkan` need extras
+and must be selected explicitly: `uv pip install -e ".[tensorrt]"`
+(Torch-TensorRT 2.12.1 / PyTorch 2.12 / CUDA 13),
+`uv pip install -e ".[openvino]"` on an Intel CPU, or choose exactly one of
+`".[onnxruntime]"` for CPU and `".[onnxruntime-gpu]"` for CUDA 13. Use
+`uv pip install -e ".[iree-vulkan]"` for Vulkan AOT or, on a TPU VM,
+`uv pip install -e ".[openxla]"`. The two ONNX Runtime wheels expose the same
+module and must not be installed together. The Tenstorrent plugin is not on PyPI:
 
 ```bash
 uv pip install pjrt-plugin-tt --extra-index-url https://pypi.eng.aws.tenstorrent.com/
@@ -243,8 +253,8 @@ The environment variables `LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and
 The difference is *when* compilation happens and *whether the result outlives the
 process*.
 
-- **JIT** (`inductor`, `tensorrt`, `openxla`) compiles inside your process, on
-  the first call, once per input signature. Nothing is written that another
+- **JIT** (`inductor`, `tensorrt`, `onnxruntime`, `openxla`) compiles inside your
+  process, on the first call, once per input signature. Nothing is written that another
   process can use, so restarting recompiles.
 - **AOT** (`lm7.export`) compiles up front and writes an `.lm7` directory another
   process loads with no compile step. Use `backend="aot_inductor"` to bake in
@@ -318,10 +328,29 @@ output = loaded(example_input)
 An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
 PyTorch `.pt2` program. Use `backend="aot_inductor"` for the persistent CPU,
 Apple, and NVIDIA AOT prototype, or `backend="openvino"` on Intel CPU to add
-OpenVINO IR (`compiled_model.xml` + `.bin`). Use `backend="iree_vulkan"` to add
-a Vulkan VMFB (`compiled_model.vmfb`) for an NVIDIA, AMD, or Intel GPU. Artifacts
-stay specific to compatible compiler, runtime, and hardware versions — they are
-not a stable cross-version ABI.
+OpenVINO IR (`compiled_model.xml` + `.bin`). `backend="onnxruntime"` adds an ONNX
+model, and `backend="iree_vulkan"` adds a Vulkan VMFB for an NVIDIA, AMD, or
+Intel GPU. Artifacts stay specific to compatible compiler, runtime, and hardware
+versions — they are not a stable cross-version ABI.
+
+The ONNX Runtime path writes `compiled_model.onnx` and records its execution
+provider in the manifest:
+
+```python
+artifact = lm7.export(
+    model,
+    args=(example_input,),
+    target="cpu",
+    backend="onnxruntime",
+    output="model-onnx.lm7",
+)
+```
+
+Use `target="nvidia:sm89"` with the GPU wheel to select
+`CUDAExecutionProvider`; LM7 disables CPU provider fallback by default for that
+target. See the [ONNX Runtime guide](docs/onnxruntime.md) for dynamic shapes,
+provider options, CUDA compatibility, SmolLM2 coverage, and the initial 2 GiB
+embedded-weight limit.
 
 The IREE Vulkan path compiles without a local GPU and loads the runtime lazily:
 
@@ -370,10 +399,10 @@ macOS host or a vendor SDK. See [ExecuTorch](docs/executorch.md) for the measure
 lowering cost, the partition-coverage field in the manifest, and why artifact
 size makes quantization matter more here than elsewhere.
 
-An NVIDIA AOT artifact is the only way to reach the GPU without a compiler in the
-process: both `inductor` and `tensorrt` compile on the first call and keep
-nothing. Packaging one needs a CUDA toolkit, which the PyTorch CUDA wheel does
-not include, so install the extra first:
+An NVIDIA AOTInductor artifact packages native GPU code, while ONNX Runtime
+packages a provider-neutral ONNX graph. `inductor` and `tensorrt` compile on the
+first call and keep nothing. Packaging AOTInductor needs a CUDA toolkit, which
+the PyTorch CUDA wheel does not include, so install the extra first:
 
 ```bash
 uv pip install -e ".[cuda-aot]"
@@ -482,8 +511,8 @@ for environment checks, GPU integration tests, and compiler IR output, and
 - Only local PyTorch devices are detected, and only the hardware listed under
   [supported hardware](#supported-hardware).
 - JIT compiled callables and TensorRT engines are process-local; only
-  `aot_inductor`, `openvino`, `iree_vulkan`, and `lm7.export` produce something
-  another process can load.
+  `aot_inductor`, `openvino`, `onnxruntime`, `iree_vulkan`, and `lm7.export`
+  produce something another process can load.
 - Exported causal-LM artifacts capture a prefill-only graph. `--dynamic-seq`
   makes the sequence length variable within recorded bounds; the batch dimension
   stays fixed, and a KV-cache decode loop is not captured.
@@ -507,6 +536,11 @@ for environment checks, GPU integration tests, and compiler IR output, and
   and FP32 MLP execution are the validated scope. Full causal LMs, dynamic
   sequences, KV caches, and WebGPU/browser execution remain future work; see
   the [IREE Vulkan guide](docs/iree-vulkan.md).
+- ONNX Runtime is validated for CPU and NVIDIA CUDA. It returns CPU tensors even
+  after CUDA execution because the initial adapter uses NumPy rather than I/O
+  binding. Tensor-only inputs and flat outputs are supported; external-data ONNX
+  packaging for models above the 2 GiB protobuf limit remains future work. See
+  the [ONNX Runtime guide](docs/onnxruntime.md).
 - AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
   harnesses, not usable backends. Replacing the `stablehlo` lowering with
   torch-mlir, which would unpin it from a matching PyTorch, is evaluated in

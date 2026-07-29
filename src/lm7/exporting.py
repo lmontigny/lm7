@@ -25,6 +25,8 @@ from .backends.iree_vulkan import (
     SUPPORTED_TARGET_VENDORS as IREE_VULKAN_VENDORS,
 )
 from .backends.iree_vulkan import IREEVulkanBackend
+from .backends.onnxruntime import ONNXRuntimeBackend
+from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
 from .backends.stablehlo import StableHLOBackend
 from .cache import input_signature
@@ -57,10 +59,19 @@ COMPILED_IR_NAME = "compiled_model.xml"
 COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
 COMPILED_VMFB_NAME = "compiled_model.vmfb"
 COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
+COMPILED_ONNX_NAME = "compiled_model.onnx"
 COMPILED_PTE_NAME = "compiled_model.pte"
 DEBUG_DIR_NAME = "debug"
 EXPORT_BACKENDS = frozenset(
-    {"export", "aot_inductor", "executorch", "iree_vulkan", "openvino", "stablehlo"}
+    {
+        "export",
+        "aot_inductor",
+        "executorch",
+        "iree_vulkan",
+        "onnxruntime",
+        "openvino",
+        "stablehlo",
+    }
 )
 
 
@@ -200,6 +211,10 @@ def export(
         raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
     if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
         raise BackendUnavailableError("IREE Vulkan artifacts currently require static shapes.")
+    if backend == "onnxruntime" and resolved_target.vendor not in {"cpu", "nvidia"}:
+        raise BackendUnavailableError(
+            "ONNX Runtime artifacts are initially validated for CPU and NVIDIA targets only."
+        )
     if isinstance(model, torch.export.ExportedProgram):
         if args is not None or kwargs:
             raise ValueError("args and kwargs cannot be supplied with an ExportedProgram.")
@@ -208,9 +223,9 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
-        if backend == "iree_vulkan":
-            # IREE owns device placement. Capture a host ExportedProgram even
-            # when the VMFB targets a discrete GPU, so export does not require
+        if backend in {"iree_vulkan", "onnxruntime"}:
+            # These runtimes own device placement. Capture a host ExportedProgram
+            # even when the artifact targets a discrete GPU, so export needs no
             # CUDA, ROCm, or XPU to be available on the compiler host.
             model = model.to("cpu")
             args = _map_tensors(args, lambda tensor: tensor.detach().cpu())
@@ -231,7 +246,7 @@ def export(
             else dynamic_shapes
         )
         try:
-            if backend == "iree_vulkan":
+            if backend in {"iree_vulkan", "onnxruntime"}:
                 with torch.no_grad():
                     exported_program = torch.export.export(
                         model,
@@ -282,6 +297,7 @@ def export(
         executorch_delegated = None
         executorch_total = None
         debug_dir = staging / DEBUG_DIR_NAME
+        onnxruntime_settings = None
         if debug:
             _write_export_debug_files(exported_program, debug_dir)
         if backend == "openvino":
@@ -357,6 +373,20 @@ def export(
             )
             compiled_file = COMPILED_VMFB_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+        if backend == "onnxruntime":
+            onnxruntime_backend = _onnxruntime_backend()
+            probe = onnxruntime_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            onnxruntime_settings = parse_onnxruntime_options(resolved_target, options)
+            compiled_path = staging / COMPILED_ONNX_NAME
+            onnxruntime_backend.compile_exported(
+                exported_program,
+                compiled_path,
+                options=onnxruntime_settings.compiler_options,
+            )
+            compiled_file = COMPILED_ONNX_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         debug_artifacts = _index_debug_artifacts(staging, debug_dir) if debug else ()
         manifest = ArtifactManifest(
             format_version=FORMAT_VERSION,
@@ -389,6 +419,17 @@ def export(
                         "vulkan_target": iree_vulkan_target,
                     }
                     if backend == "iree_vulkan"
+                    else {}
+                ),
+                **(
+                    {
+                        "onnxruntime": _onnxruntime_version(),
+                        "execution_provider": onnxruntime_settings.provider,
+                        "provider_options": dict(onnxruntime_settings.provider_options),
+                        "disable_cpu_fallback": onnxruntime_settings.disable_cpu_fallback,
+                        "opset_version": onnxruntime_settings.opset_version,
+                    }
+                    if backend == "onnxruntime" and onnxruntime_settings is not None
                     else {}
                 ),
                 # The StableHLO payload needs a PJRT plugin, not PyTorch, and the
@@ -436,6 +477,14 @@ def export(
         compiled_callable = _iree_vulkan_backend().load_vmfb(
             destination / COMPILED_VMFB_NAME,
             device_uri=iree_device_uri,
+        )
+    elif backend == "onnxruntime":
+        assert onnxruntime_settings is not None
+        compiled_callable = _onnxruntime_backend().load_onnx(
+            destination / COMPILED_ONNX_NAME,
+            provider=onnxruntime_settings.provider,
+            provider_options=onnxruntime_settings.provider_options,
+            disable_cpu_fallback=onnxruntime_settings.disable_cpu_fallback,
         )
     elif backend == "stablehlo":
         compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
@@ -522,6 +571,17 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             compiled_path,
             device_uri=requirements.get("vulkan_device_uri"),
         )
+    elif manifest.backend == "onnxruntime":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        requirements = manifest.runtime_requirements or {}
+        compiled_callable = _onnxruntime_backend().load_onnx(
+            compiled_path,
+            provider=str(requirements.get("execution_provider", "CPUExecutionProvider")),
+            provider_options=requirements.get("provider_options"),
+            disable_cpu_fallback=bool(requirements.get("disable_cpu_fallback", True)),
+        )
     elif manifest.backend == "stablehlo":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
@@ -576,6 +636,13 @@ def _iree_vulkan_backend() -> IREEVulkanBackend:
     return backend
 
 
+def _onnxruntime_backend() -> ONNXRuntimeBackend:
+    backend = registry.get("onnxruntime")
+    if not isinstance(backend, ONNXRuntimeBackend):
+        raise BackendUnavailableError("The registered onnxruntime backend is invalid.")
+    return backend
+
+
 def _stablehlo_backend() -> StableHLOBackend:
     backend = registry.get("stablehlo")
     if not isinstance(backend, StableHLOBackend):
@@ -597,6 +664,15 @@ def _iree_runtime_version() -> str | None:
         return None
 
 
+def _onnxruntime_version() -> str | None:
+    for distribution in ("onnxruntime", "onnxruntime-gpu"):
+        try:
+            return importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return None
+
+
 def _backend_version(backend: str) -> str | None:
     if backend == "aot_inductor":
         return torch.__version__
@@ -604,6 +680,8 @@ def _backend_version(backend: str) -> str | None:
         return _openvino_version()
     if backend == "iree_vulkan":
         return _iree_runtime_version()
+    if backend == "onnxruntime":
+        return _onnxruntime_version()
     if backend == "stablehlo":
         return _stablehlo_backend().probe().version
     if backend == "executorch":
