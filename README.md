@@ -87,8 +87,8 @@ and that is the only path with CI coverage. A vendor listed twice has an
 [OpenVINO](docs/openvino-evaluation.md) is a registered backend for the `cpu`
 target, but it is opt-in: it ranks below Inductor and AOTInductor, so
 `backend="auto"` never selects it. Ask for it with `backend="openvino"`. It
-compiles to Intel's IR format, which is the only LM7 artifact that runs in a
-process without PyTorch installed.
+compiles to Intel's IR format, which runs in a process without PyTorch installed
+— as does `stablehlo` below, on any hardware with a PJRT plugin.
 
 [IREE Vulkan](docs/iree-vulkan.md) is an explicit, export-only backend for
 NVIDIA, AMD, and Intel GPUs. It lowers fixed-shape tensor graphs to a persistent
@@ -97,13 +97,6 @@ and full Hugging Face model coverage is not claimed yet.
 
 [MIGraphX](docs/amd-migraphx.md) on AMD GPU is still under evaluation — it has a
 benchmark harness but no registered backend.
-
-`openxla` reaches TPU only, because PyTorch/XLA — LM7's route to OpenXLA — has
-no CUDA or ROCm wheels. OpenXLA itself is not that narrow: the
-[StableHLO and PJRT evaluation](docs/stablehlo-pjrt-evaluation.md) lowers a
-captured graph to StableHLO and runs it on a PJRT client with PyTorch absent,
-which is the first LM7 artifact that is both PyTorch-free and not tied to one
-vendor. It is an evaluation with a harness, not a registered backend.
 
 Backends are listed highest priority first, so the leftmost is what
 `backend="auto"` picks and `eager` is the fallback. `tensorrt` and `openxla` also
@@ -198,6 +191,7 @@ lm7.compile(model, target="tpu", backend="openxla")
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT export only** | nvidia, amd, intel | explicit |
+| `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | — |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 On NVIDIA both GPU paths are available and `inductor` is the default: TorchInductor
@@ -324,6 +318,19 @@ artifact = lm7.export(
 It currently requires fixed shapes and tensor-only I/O. See the
 [IREE Vulkan guide](docs/iree-vulkan.md), including the validated WSL compile →
 native Windows RTX 4070 SUPER execution workflow and why WebGPU is separate.
+
+`backend="stablehlo"` writes a third kind of payload: portable StableHLO plus
+one `.npy` per weight, executed by a PJRT plugin chosen at load time. The same
+artifact bytes have been measured on a CPU and an NVIDIA sm89 plugin with no
+PyTorch installed, so unlike every other compiled payload it is not bound to the
+device it was exported for. It needs PyTorch/XLA to lower, which pins PyTorch, so
+install it into its own environment:
+
+```bash
+uv pip install -e ".[stablehlo]"   # torch_xla, ABI-tied to a matching PyTorch
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target cpu --backend stablehlo
+```
 
 An NVIDIA AOT artifact is the only way to reach the GPU without a compiler in the
 process: both `inductor` and `tensorrt` compile on the first call and keep
@@ -454,8 +461,8 @@ for environment checks, GPU integration tests, and compiler IR output, and
   and FP32 MLP execution are the validated scope. Full causal LMs, dynamic
   sequences, KV caches, and WebGPU/browser execution remain future work; see
   the [IREE Vulkan guide](docs/iree-vulkan.md).
-- AMD MIGraphX, Qualcomm Hexagon, and StableHLO/PJRT are evaluations with
-  measurement harnesses, not usable backends.
+- AMD MIGraphX and Qualcomm Hexagon are evaluation plans with measurement
+  harnesses, not usable backends.
 - Quantization is weight-only, NVIDIA-only, and validated per (model, mode)
   pair — see [quantization](docs/quantization.md) for the list and the
   measurements behind it.

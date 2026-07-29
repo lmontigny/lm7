@@ -24,6 +24,7 @@ from .backends.iree_vulkan import (
 )
 from .backends.iree_vulkan import IREEVulkanBackend
 from .backends.openvino import OpenVINOBackend
+from .backends.stablehlo import StableHLOBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
 from .errors import (
@@ -53,8 +54,9 @@ COMPILED_PROGRAM_NAME = "compiled_model.pt2"
 COMPILED_IR_NAME = "compiled_model.xml"
 COMPILED_IR_WEIGHTS_NAME = "compiled_model.bin"
 COMPILED_VMFB_NAME = "compiled_model.vmfb"
+COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
 DEBUG_DIR_NAME = "debug"
-EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "iree_vulkan", "openvino"})
+EXPORT_BACKENDS = frozenset({"export", "aot_inductor", "iree_vulkan", "openvino", "stablehlo"})
 
 
 @dataclass(frozen=True)
@@ -288,6 +290,15 @@ def export(
             compiled_sha256 = _file_sha256(staging / COMPILED_IR_NAME)
             compiled_weights_file = COMPILED_IR_WEIGHTS_NAME
             compiled_weights_sha256 = _file_sha256(staging / COMPILED_IR_WEIGHTS_NAME)
+        if backend == "stablehlo":
+            stablehlo_backend = _stablehlo_backend()
+            probe = stablehlo_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            compiled_path = staging / COMPILED_STABLEHLO_NAME
+            stablehlo_backend.compile_exported(exported_program, compiled_path)
+            compiled_file = COMPILED_STABLEHLO_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -356,6 +367,10 @@ def export(
                     if backend == "iree_vulkan"
                     else {}
                 ),
+                # The StableHLO payload needs a PJRT plugin, not PyTorch, and the
+                # plugin is chosen at load time -- so unlike every other compiled
+                # payload this one is not pinned to the export-time device.
+                **({"pjrt_plugin": "any", "device_bound": False} if backend == "stablehlo" else {}),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -382,6 +397,8 @@ def export(
             destination / COMPILED_VMFB_NAME,
             device_uri=iree_device_uri,
         )
+    elif backend == "stablehlo":
+        compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -463,6 +480,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             compiled_path,
             device_uri=requirements.get("vulkan_device_uri"),
         )
+    elif manifest.backend == "stablehlo":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _stablehlo_backend().load_package(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -500,6 +522,13 @@ def _iree_vulkan_backend() -> IREEVulkanBackend:
     return backend
 
 
+def _stablehlo_backend() -> StableHLOBackend:
+    backend = registry.get("stablehlo")
+    if not isinstance(backend, StableHLOBackend):
+        raise BackendUnavailableError("The registered stablehlo backend is invalid.")
+    return backend
+
+
 def _openvino_version() -> str | None:
     try:
         return importlib.metadata.version("openvino")
@@ -521,6 +550,8 @@ def _backend_version(backend: str) -> str | None:
         return _openvino_version()
     if backend == "iree_vulkan":
         return _iree_runtime_version()
+    if backend == "stablehlo":
+        return _stablehlo_backend().probe().version
     return None
 
 

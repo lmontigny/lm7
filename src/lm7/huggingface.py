@@ -425,14 +425,20 @@ def export_hf_model(
             "has to sit inside the range the artifact accepts."
         )
 
+    # PyTorch/XLA cannot lower a program captured with keyword inputs to
+    # StableHLO, so that backend is fed the same tensors positionally. The order
+    # is _LogitsOnly.forward's, and the reloaded artifact takes them the same way.
+    positional = backend == "stablehlo"
+    capture_args = tuple(inputs[name] for name in _CAPTURED_INPUTS if name in inputs)
+
     started = time.perf_counter()
     artifact = export_artifact(
         # _LogitsOnly pins use_cache=False, so the captured graph is a single
         # prefill forward pass; a KV-cache decode loop is a different graph and is
         # not supported here.
         _LogitsOnly(model).eval(),
-        args=(),
-        kwargs=inputs,
+        args=capture_args if positional else (),
+        kwargs={} if positional else inputs,
         target=resolved_target,
         backend=backend,
         output=output,
