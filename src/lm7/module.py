@@ -137,9 +137,11 @@ class CompiledModule(torch.nn.Module):
                 if variant is None:
                     variant = self._compile_variant(signature, args, kwargs)
         prepared_args, prepared_kwargs = self._prepare_inputs(args, kwargs)
+        # PyTorch/XLA — the route to both TPU and Tenstorrent — needs the tensor
+        # version counters that torch.inference_mode() disables.
         context = (
             torch.no_grad()
-            if self.target is not None and self.target.vendor == "tpu"
+            if self.target is not None and self.target.vendor in {"tpu", "tenstorrent"}
             else torch.inference_mode()
         )
         with context:

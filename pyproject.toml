@@ -40,6 +40,11 @@ openxla = ["torch_xla[tpu]==2.9.0"]
 # PyTorch, so this extra needs an environment built around that pair rather
 # than the latest torch -- see docs/stablehlo-pjrt-evaluation.md.
 stablehlo = ["torch_xla==2.9.0"]
+# pjrt-plugin-tt ships from Tenstorrent's own index, not PyPI, and pulls in the
+# matching torch-xla, tt-mlir, and tt-metal payload. Installing this extra needs
+# "--extra-index-url https://pypi.eng.aws.tenstorrent.com/" — see
+# docs/tenstorrent.md.
+tenstorrent = ["pjrt-plugin-tt"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -58,6 +63,7 @@ markers = [
     "iree_vulkan: requires IREE compiler/runtime packages; execution also requires Vulkan",
     "stablehlo: requires PyTorch/XLA for the StableHLO lowering",
     "tpu: requires PyTorch/XLA on a Google TPU VM",
+    "tenstorrent: requires the tt-xla PJRT plugin and a Tenstorrent card",
 ]
 
 [tool.ruff]

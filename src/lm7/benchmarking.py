@@ -107,7 +107,7 @@ def _synchronize(target: TargetSpec | None) -> None:
         torch.cuda.synchronize(target.ordinal or 0)
     elif target.vendor == "apple":
         torch.mps.synchronize()
-    elif target.vendor == "tpu":
+    elif target.vendor in {"tpu", "tenstorrent"}:
         torch_xla = importlib.import_module("torch_xla")
         torch_xla.sync(wait=True)
 
@@ -147,18 +147,26 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
         )
     elif target.vendor == "apple":
         value.update({"device_name": "Apple Metal GPU", "mps_built": torch.backends.mps.is_built()})
-    elif target.vendor == "tpu":
+    elif target.vendor in {"tpu", "tenstorrent"}:
+        device_name = "Google TPU" if target.vendor == "tpu" else "Tenstorrent device"
         try:
             xr = importlib.import_module("torch_xla.runtime")
             value.update(
                 {
-                    "device_name": "Google TPU",
+                    "device_name": device_name,
                     "pjrt_device": xr.device_type(),
                     "addressable_device_count": xr.addressable_device_count(),
                 }
             )
         except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as exc:
-            value.update({"device_name": "Google TPU", "pjrt_error": str(exc)})
+            value.update({"device_name": device_name, "pjrt_error": str(exc)})
+        if target.vendor == "tenstorrent":
+            value.update(
+                {
+                    "pjrt_plugin_tt": _package_version("pjrt-plugin-tt"),
+                    "torch_xla": _package_version("torch-xla"),
+                }
+            )
     if backend == "tensorrt":
         value.update(
             {

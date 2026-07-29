@@ -25,6 +25,15 @@ hardware. LM7 uses `torch.no_grad()` for TPU execution because PyTorch/XLA
 tracing requires tensor version counters that `torch.inference_mode()` removes.
 See [Google TPU support](google-tpu.md) for setup and current scope.
 
+The optional `tenstorrent` adapter reaches Tenstorrent Wormhole and Blackhole
+cards through the same PyTorch/XLA seam, but with tt-xla's PJRT plugin instead
+of libtpu: it registers the `tt` `torch.compile` backend, which lowers the FX
+graph to StableHLO and hands it to tt-mlir and tt-metal. PJRT serves one device
+type per process, so discovery selects `TT` only when the plugin is installed
+and `PJRT_DEVICE` is unset or `TT`, and never reassigns a runtime that has
+already come up as `TPU`. It shares the TPU path's `torch.no_grad()` execution
+for the same reason. See [Tenstorrent support](tenstorrent.md).
+
 ## Source artifacts
 
 `lm7.export()` captures an `nn.Module` through `torch.export` or accepts an

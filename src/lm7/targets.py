@@ -31,7 +31,12 @@ class DeviceInfo:
     capabilities: Mapping[str, Any] = field(default_factory=dict)
 
 
-_VENDORS = {"cpu", "nvidia", "amd", "intel", "apple", "tpu", "aws"}
+_VENDORS = {"cpu", "nvidia", "amd", "intel", "apple", "tpu", "tenstorrent", "aws"}
+
+# Tenstorrent qualifiers split into an architecture generation and a board
+# model, so `tenstorrent:blackhole` pins the silicon and `tenstorrent:p150`
+# pins the card.
+_TENSTORRENT_ARCHITECTURES = frozenset({"wormhole", "blackhole"})
 
 
 def parse_target(value: str | TargetSpec) -> TargetSpec:
@@ -57,6 +62,10 @@ def parse_target(value: str | TargetSpec) -> TargetSpec:
         return TargetSpec("aws", "accelerator", model="trainium", remote=True)
     if vendor == "tpu":
         return TargetSpec("tpu", "accelerator", model=qualifier)
+    if vendor == "tenstorrent":
+        if qualifier in _TENSTORRENT_ARCHITECTURES:
+            return TargetSpec("tenstorrent", "accelerator", architecture=qualifier)
+        return TargetSpec("tenstorrent", "accelerator", model=qualifier)
     if vendor in {"nvidia", "amd"}:
         architecture_prefixes = ("sm", "gfx")
         if qualifier and qualifier.startswith(architecture_prefixes):

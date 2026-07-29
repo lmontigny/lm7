@@ -5,9 +5,10 @@ Two things distinguish LM7's compilation paths: *when* compilation happens, and
 
 ## JIT: compiled in-process, on the first call
 
-`inductor`, `tensorrt`, and `openxla` are all JIT backends. `lm7.compile()` does
-no work — it validates options and returns a `CompiledModule`. Compilation
-happens on the first call with a given input signature.
+`inductor`, `tensorrt`, `openxla`, and `tenstorrent` are all JIT backends.
+`lm7.compile()` does no work — it validates options and returns a
+`CompiledModule`. Compilation happens on the first call with a given input
+signature.
 
 ```python
 compiled = lm7.compile(model, target="cpu")  # returns immediately, compiles nothing
