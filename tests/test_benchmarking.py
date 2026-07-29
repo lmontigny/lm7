@@ -123,6 +123,8 @@ def test_tpu_environment_reports_pjrt_metadata(monkeypatch):
 
 def test_tensorrt_environment_reports_compiler_versions(monkeypatch):
     versions = {"torch-tensorrt": "2.12.1", "tensorrt": "10.16.1.11"}
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda _ordinal: "Fake NVIDIA GPU")
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _ordinal: (8, 9))
     monkeypatch.setattr(
         "lm7.benchmarking.importlib.metadata.version",
         lambda distribution: versions[distribution],
