@@ -80,6 +80,16 @@ compiled = lm7.compile(
 ```
 
 Engine construction occurs on the first call and can take tens of seconds.
+The [RTX 4070 evaluation](nvidia-tensorrt-evaluation.md) records a real
+fixed-shape win for SmolLM2 alongside MLP regressions, which is why TensorRT
+remains opt-in rather than replacing Inductor as the automatic NVIDIA backend.
+
+Run the opt-in Hugging Face accuracy regression with:
+
+```bash
+LM7_RUN_HF_TESTS=1 .venv-trt/bin/python -m pytest \
+  tests/test_tensorrt_integration.py -q
+```
 
 ## Hugging Face integration
 

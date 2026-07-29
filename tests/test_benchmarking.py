@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib.metadata
+
 import pytest
 import torch
 
 import lm7
-from lm7.benchmarking import _environment, _percentile, _synchronize
+from lm7.benchmarking import _environment, _package_version, _percentile, _synchronize
 from lm7.targets import TargetSpec
 
 
@@ -117,3 +119,25 @@ def test_tpu_environment_reports_pjrt_metadata(monkeypatch):
     assert environment["device_name"] == "Google TPU"
     assert environment["pjrt_device"] == "TPU"
     assert environment["addressable_device_count"] == 8
+
+
+def test_tensorrt_environment_reports_compiler_versions(monkeypatch):
+    versions = {"torch-tensorrt": "2.12.1", "tensorrt": "10.16.1.11"}
+    monkeypatch.setattr(
+        "lm7.benchmarking.importlib.metadata.version",
+        lambda distribution: versions[distribution],
+    )
+
+    environment = _environment(TargetSpec("nvidia", "gpu", "sm89"), "tensorrt")
+
+    assert environment["torch_tensorrt"] == "2.12.1"
+    assert environment["tensorrt"] == "10.16.1.11"
+
+
+def test_missing_optional_package_version_is_none(monkeypatch):
+    def missing(_distribution):
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr("lm7.benchmarking.importlib.metadata.version", missing)
+
+    assert _package_version("torch-tensorrt") is None
