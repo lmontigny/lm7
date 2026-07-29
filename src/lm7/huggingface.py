@@ -135,6 +135,116 @@ def run_hf_model(
     )
 
 
+class _LogitsOnly(torch.nn.Module):
+    """Expose a causal LM as tensors in, one logits tensor out.
+
+    Hugging Face models return a ``CausalLMOutputWithPast`` dataclass. torch.export
+    captures that in the output pytree, and ``torch.export.load`` then fails with
+    "Deserializing transformers.modeling_outputs.CausalLMOutputWithPast in pytree
+    is not registered" -- so the artifact would save but never reload. Capturing a
+    plain tensor keeps the artifact loadable by anything that can read a ``.pt2``.
+    """
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, **inputs: torch.Tensor) -> torch.Tensor:
+        return self.model(**inputs, use_cache=False).logits
+
+
+@dataclass(frozen=True)
+class HuggingFaceExportResult:
+    model_uri: str
+    model_id: str
+    target: str
+    backend: str
+    dtype: str
+    output: str
+    prompt: str
+    input_tokens: int
+    parameter_count: int
+    export_ms: float
+    artifact_bytes: int
+    files: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def export_hf_model(
+    model_uri: str,
+    *,
+    output: str,
+    prompt: str = "The capital of France is",
+    target: str | TargetSpec = "auto",
+    backend: str = "export",
+    dtype: str = "auto",
+) -> HuggingFaceExportResult:
+    """Capture a Hugging Face causal LM into an LM7 artifact.
+
+    The example inputs come from tokenizing ``prompt``, so the artifact is fixed
+    to that input signature — an AOT artifact cannot adapt to new shapes the way
+    a JIT path recompiles.
+    """
+    from .exporting import export as export_artifact
+
+    model_id = _model_id(model_uri)
+    resolved_target = resolve_target(target)
+    torch_dtype = _resolve_dtype(dtype, resolved_target)
+    transformers = _load_transformers()
+
+    try:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch_dtype,
+        ).eval()
+        inputs = dict(tokenizer(prompt, return_tensors="pt"))
+    except Exception as exc:
+        raise UnsupportedModelError(
+            f"Hugging Face load stage failed for {model_uri}: {exc}."
+        ) from exc
+
+    input_ids = inputs.get("input_ids")
+    if not isinstance(input_ids, torch.Tensor) or input_ids.ndim < 2:
+        raise UnsupportedModelError(
+            f"Hugging Face tokenization stage failed for {model_uri}: "
+            "the tokenizer did not return batched input_ids."
+        )
+
+    started = time.perf_counter()
+    artifact = export_artifact(
+        # _LogitsOnly pins use_cache=False, so the captured graph is a single
+        # prefill forward pass; a KV-cache decode loop is a different graph and is
+        # not supported here.
+        _LogitsOnly(model).eval(),
+        args=(),
+        kwargs=inputs,
+        target=resolved_target,
+        backend=backend,
+        output=output,
+    )
+    export_ms = (time.perf_counter() - started) * 1000
+
+    files = tuple(sorted(item.name for item in artifact.path.iterdir() if item.is_file()))
+    artifact_bytes = sum(item.stat().st_size for item in artifact.path.rglob("*") if item.is_file())
+    return HuggingFaceExportResult(
+        model_uri=model_uri,
+        model_id=model_id,
+        target=str(resolved_target),
+        backend=backend,
+        dtype=str(torch_dtype).removeprefix("torch."),
+        output=str(artifact.path),
+        prompt=prompt,
+        input_tokens=int(input_ids.shape[-1]),
+        parameter_count=sum(parameter.numel() for parameter in model.parameters()),
+        export_ms=export_ms,
+        artifact_bytes=artifact_bytes,
+        files=files,
+    )
+
+
 def _model_id(model_uri: str) -> str:
     if not isinstance(model_uri, str) or not model_uri.startswith("hf://"):
         raise UnsupportedModelError(

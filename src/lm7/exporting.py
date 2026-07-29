@@ -44,6 +44,7 @@ MANIFEST_NAME = "manifest.json"
 PROGRAM_NAME = "exported_program.pt2"
 COMPILED_PROGRAM_NAME = "compiled_model.pt2"
 DEBUG_DIR_NAME = "debug"
+EXPORT_BACKENDS = frozenset({"export", "aot_inductor"})
 
 
 @dataclass(frozen=True)
@@ -155,9 +156,10 @@ def export(
     kwargs = dict(kwargs or {})
     if dynamic_shapes is not None and shape_profile is not None:
         raise ValueError("dynamic_shapes and shape_profile cannot be supplied together.")
-    if backend not in {"export", "aot_inductor"}:
+    if backend not in EXPORT_BACKENDS:
+        choices = ", ".join(repr(name) for name in sorted(EXPORT_BACKENDS))
         raise BackendUnavailableError(
-            f"Export backend {backend!r} is not supported; choose 'export' or 'aot_inductor'."
+            f"Export backend {backend!r} is not supported; choose one of {choices}."
         )
     resolved_target = _artifact_target(target)
     if backend == "aot_inductor" and resolved_target.vendor not in {"cpu", "apple"}:

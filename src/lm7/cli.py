@@ -17,7 +17,13 @@ from .bundles import create_bundle, load_bundle
 from .cache import cache_dir
 from .detection import detect_targets, resolve_target
 from .errors import LM7Error
-from .huggingface import HuggingFaceRunResult, run_hf_model
+from .exporting import EXPORT_BACKENDS
+from .huggingface import (
+    HuggingFaceExportResult,
+    HuggingFaceRunResult,
+    export_hf_model,
+    run_hf_model,
+)
 from .planner import Plan, plan
 from .targets import DeviceInfo, TargetSpec
 
@@ -217,6 +223,18 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Next token: {result.next_token_id} ({result.next_token!r})")
 
 
+def _print_model_export(result: HuggingFaceExportResult) -> None:
+    print(f"Model: {result.model_uri}")
+    print(f"Target: {result.target}")
+    print(f"Backend: {result.backend}")
+    print(f"Dtype: {result.dtype}")
+    print(f"Parameters: {result.parameter_count:,}")
+    print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
+    print(f"Export time: {result.export_ms:.2f} ms")
+    print(f"Artifact: {result.output} ({result.artifact_bytes / 1024**2:.1f} MiB)")
+    print(f"Files: {', '.join(result.files)}")
+
+
 def _emit_json(data: Any) -> None:
     print(json.dumps(data, indent=2, sort_keys=True, default=str))
 
@@ -272,6 +290,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_json_argument(run_parser)
 
+    export_parser = model_subparsers.add_parser(
+        "export", help="capture a model into an LM7 artifact"
+    )
+    export_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    export_parser.add_argument("output", help="output artifact directory, for example model.lm7")
+    export_parser.add_argument(
+        "--prompt",
+        default="The capital of France is",
+        help="prompt whose tokenization fixes the captured input shape",
+    )
+    export_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    export_parser.add_argument(
+        "--backend",
+        choices=tuple(sorted(EXPORT_BACKENDS)),
+        default="export",
+        help="export backend (default: export)",
+    )
+    export_parser.add_argument(
+        "--dtype",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        default="auto",
+        help="model dtype (default: auto)",
+    )
+    _add_json_argument(export_parser)
+
     bundle_parser = subparsers.add_parser("bundle", help="create and inspect LM7 bundles")
     bundle_subparsers = bundle_parser.add_subparsers(dest="bundle_command", required=True)
     bundle_create_parser = bundle_subparsers.add_parser(
@@ -318,6 +361,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 quantization=args.quantization,
             )
             _emit_json(result.to_dict()) if args.json else _print_model_run(result)
+        elif args.command == "model" and args.model_command == "export":
+            export_result = export_hf_model(
+                args.model_uri,
+                output=args.output,
+                prompt=args.prompt,
+                target=args.target,
+                backend=args.backend,
+                dtype=args.dtype,
+            )
+            (
+                _emit_json(export_result.to_dict())
+                if args.json
+                else _print_model_export(export_result)
+            )
         elif args.command == "bundle" and args.bundle_command == "create":
             bundle = create_bundle(args.artifacts, output=args.output)
             data = _bundle_data(str(bundle.path))

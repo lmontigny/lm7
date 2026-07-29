@@ -61,6 +61,23 @@ version and the checksums before loading anything.
 `aot_inductor` is validated for CPU and Apple Silicon only, and uses Beta PyTorch
 APIs. On other targets, export still works at level 1.
 
+## From the CLI
+
+A Hugging Face model can be exported without writing PyTorch at all:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
+  --target cpu --backend aot_inductor
+```
+
+Two things to know about the captured graph. The shape comes from tokenizing
+`--prompt`, so the artifact is fixed to that many tokens. And LM7 captures a
+**logits-only** graph: a causal LM returns a `CausalLMOutputWithPast` dataclass,
+`torch.export` records it in the output pytree, and `torch.export.load` then
+fails with "Deserializing transformers.modeling_outputs.CausalLMOutputWithPast
+in pytree is not registered" — the artifact would save but never reload. The
+reloaded artifact takes tensors and returns one logits tensor.
+
 ## Bundles
 
 Several single-target artifacts can be combined, with the choice made at load

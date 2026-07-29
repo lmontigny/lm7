@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from lm7 import cli
-from lm7.huggingface import HuggingFaceRunResult
+from lm7.huggingface import HuggingFaceExportResult, HuggingFaceRunResult
 from lm7.targets import DeviceInfo, TargetSpec
 
 
@@ -235,3 +235,57 @@ def test_bundle_create_text(monkeypatch, capsys, tmp_path):
     output = capsys.readouterr().out
     assert "Bundle:" in output
     assert "cpu-x86_64--aot_inductor: cpu:x86_64 / aot_inductor" in output
+
+
+def test_model_export_json(monkeypatch, capsys):
+    calls = {}
+    result = HuggingFaceExportResult(
+        model_uri="hf://example/tiny",
+        model_id="example/tiny",
+        target="cpu:x86_64",
+        backend="aot_inductor",
+        dtype="float32",
+        output="/tmp/model.lm7",
+        prompt="Hello",
+        input_tokens=2,
+        parameter_count=10,
+        export_ms=42.0,
+        artifact_bytes=2048,
+        files=("compiled_model.pt2", "exported_program.pt2", "manifest.json"),
+    )
+
+    def export_model(model_uri, **kwargs):
+        calls["model_uri"] = model_uri
+        calls.update(kwargs)
+        return result
+
+    monkeypatch.setattr(cli, "export_hf_model", export_model)
+
+    assert (
+        cli.main(
+            [
+                "model",
+                "export",
+                "hf://example/tiny",
+                "/tmp/model.lm7",
+                "--target",
+                "cpu",
+                "--backend",
+                "aot_inductor",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["model_id"] == "example/tiny"
+    assert payload["backend"] == "aot_inductor"
+    assert calls["model_uri"] == "hf://example/tiny"
+    assert calls["output"] == "/tmp/model.lm7"
+    assert calls["backend"] == "aot_inductor"
+
+
+def test_model_export_rejects_an_unknown_backend(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--backend", "tensorrt"])
