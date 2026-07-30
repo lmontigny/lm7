@@ -32,6 +32,8 @@ from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
 from .backends.openvino import device_for_target as openvino_device_for_target
 from .backends.stablehlo import StableHLOBackend
+from .backends.tensorrt import SUPPORTED_VENDORS as TENSORRT_VENDORS
+from .backends.tensorrt import TensorRTBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
 from .errors import (
@@ -65,6 +67,9 @@ COMPILED_STABLEHLO_NAME = "compiled_model.stablehlo.zip"
 COMPILED_ONNX_NAME = "compiled_model.onnx"
 COMPILED_PTE_NAME = "compiled_model.pte"
 COMPILED_TFLITE_NAME = "compiled_model.tflite"
+# Torch-TensorRT serializes the engine into a .pt2 archive; the infix keeps
+# it distinct from the AOTInductor package, which uses the same extension.
+COMPILED_TRT_NAME = "compiled_model.trt.pt2"
 DEBUG_DIR_NAME = "debug"
 EXPORT_BACKENDS = frozenset(
     {
@@ -76,6 +81,7 @@ EXPORT_BACKENDS = frozenset(
         "onnxruntime",
         "openvino",
         "stablehlo",
+        "tensorrt",
     }
 )
 
@@ -217,6 +223,15 @@ def export(
             "artifact cannot carry dynamic_shapes or a shape profile. Export one "
             "artifact per shape, or target='cpu'."
         )
+    if backend == "tensorrt" and resolved_target.vendor not in TENSORRT_VENDORS:
+        raise BackendUnavailableError("TensorRT artifacts target NVIDIA GPUs only.")
+    if backend == "tensorrt" and (dynamic_shapes is not None or shape_profile is not None):
+        # A dynamically shaped engine needs min/opt/max Input specs rather than
+        # example tensors, and picking those well is its own evaluation.
+        raise BackendUnavailableError(
+            "TensorRT artifacts currently require static shapes. Export one artifact "
+            "per shape, or use the JIT path with lm7.compile(backend='tensorrt')."
+        )
     if backend == "executorch" and resolved_target.vendor != "cpu":
         raise BackendUnavailableError(
             "ExecuTorch artifacts use the XNNPACK delegate, which is a CPU target. "
@@ -355,6 +370,24 @@ def export(
             compiled_sha256 = _file_sha256(staging / COMPILED_IR_NAME)
             compiled_weights_file = COMPILED_IR_WEIGHTS_NAME
             compiled_weights_sha256 = _file_sha256(staging / COMPILED_IR_WEIGHTS_NAME)
+        if backend == "tensorrt":
+            tensorrt_backend = _tensorrt_backend()
+            probe = tensorrt_backend.probe()
+            if not probe.available:
+                # Unlike the other export backends, this one cannot be produced
+                # on a build host without the GPU: TensorRT profiles real kernels
+                # on the device to pick tactics.
+                raise BackendUnavailableError(probe.reason)
+            trt_args, trt_kwargs = _tensorrt_example_inputs(exported_program, args, kwargs)
+            tensorrt_backend.compile_exported(
+                exported_program,
+                staging / COMPILED_TRT_NAME,
+                arg_inputs=trt_args,
+                kwarg_inputs=trt_kwargs,
+                options=options,
+            )
+            compiled_file = COMPILED_TRT_NAME
+            compiled_sha256 = _file_sha256(staging / COMPILED_TRT_NAME)
         if backend == "stablehlo":
             stablehlo_backend = _stablehlo_backend()
             probe = stablehlo_backend.probe()
@@ -475,6 +508,20 @@ def export(
                     if backend == "openvino"
                     else {}
                 ),
+                # A TensorRT engine is the least portable payload LM7 writes: it
+                # is tuned for one GPU architecture by profiling real kernels,
+                # and its format is tied to the TensorRT and Torch-TensorRT that
+                # built it. Record all three so a failed load is diagnosable.
+                **(
+                    {
+                        "torch-tensorrt": _torch_tensorrt_version(),
+                        "tensorrt": _tensorrt_runtime_version(),
+                        "device_bound": True,
+                        **_cuda_device_requirements(),
+                    }
+                    if backend == "tensorrt"
+                    else {}
+                ),
                 **(
                     {
                         "iree-base-runtime": _iree_runtime_version(),
@@ -555,6 +602,8 @@ def export(
             destination / COMPILED_IR_NAME,
             device=openvino_device or "CPU",
         )
+    elif backend == "tensorrt":
+        compiled_callable = _tensorrt_backend().load_engine(destination / COMPILED_TRT_NAME)
     elif backend == "iree_vulkan":
         compiled_callable = _iree_vulkan_backend().load_vmfb(
             destination / COMPILED_VMFB_NAME,
@@ -650,6 +699,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             compiled_path,
             device=str(requirements.get("openvino_device") or "CPU"),
         )
+    elif manifest.backend == "tensorrt":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _tensorrt_backend().load_engine(compiled_path)
     elif manifest.backend == "iree_vulkan":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
@@ -715,6 +769,35 @@ def _openvino_backend() -> OpenVINOBackend:
     return backend
 
 
+def _tensorrt_example_inputs(
+    exported_program: torch.export.ExportedProgram,
+    args: tuple[Any, ...] | None,
+    kwargs: Mapping[str, Any] | None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Example inputs a TensorRT engine is built against.
+
+    TensorRT profiles real kernels, so unlike the other export backends it needs
+    the inputs themselves, and it needs positional and keyword ones kept apart
+    so the saved artifact is called the way the source module was.
+    """
+    if args is not None:
+        return tuple(args), dict(kwargs or {})
+    captured = getattr(exported_program, "example_inputs", None)
+    if captured:
+        return tuple(captured[0]), dict(captured[1])
+    raise BackendUnavailableError(
+        "A TensorRT engine is built against example inputs, and this ExportedProgram "
+        "carries none. Export from an nn.Module with args=... instead."
+    )
+
+
+def _tensorrt_backend() -> TensorRTBackend:
+    backend = registry.get("tensorrt")
+    if not isinstance(backend, TensorRTBackend):
+        raise BackendUnavailableError("The registered tensorrt backend is invalid.")
+    return backend
+
+
 def _executorch_backend() -> ExecuTorchBackend:
     backend = registry.get("executorch")
     if not isinstance(backend, ExecuTorchBackend):
@@ -773,6 +856,37 @@ def _onnxruntime_version() -> str | None:
     return None
 
 
+def _torch_tensorrt_version() -> str | None:
+    try:
+        return importlib.metadata.version("torch-tensorrt")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _tensorrt_runtime_version() -> str | None:
+    # The TensorRT wheel is CUDA-major-versioned, so the plain name is not
+    # always the one that is installed.
+    for distribution in ("tensorrt", "tensorrt-cu13", "tensorrt-cu12"):
+        try:
+            return importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return None
+
+
+def _cuda_device_requirements() -> dict[str, Any]:
+    """The GPU an engine was tuned for, as recorded in the manifest."""
+    try:
+        major, minor = torch.cuda.get_device_capability()
+        return {
+            "cuda": torch.version.cuda,
+            "compute_capability": f"sm{major}{minor}",
+            "device_name": torch.cuda.get_device_name(),
+        }
+    except (AssertionError, RuntimeError):
+        return {}
+
+
 def _litert_version() -> str | None:
     try:
         return importlib.metadata.version("litert-torch")
@@ -791,6 +905,8 @@ def _backend_version(backend: str) -> str | None:
         return _onnxruntime_version()
     if backend == "litert":
         return _litert_version()
+    if backend == "tensorrt":
+        return _torch_tensorrt_version()
     if backend == "stablehlo":
         return _stablehlo_backend().probe().version
     if backend == "executorch":

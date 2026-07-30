@@ -417,7 +417,7 @@ def test_model_export_passes_int8_quantization(monkeypatch):
 
 def test_model_export_rejects_an_unknown_backend(capsys):
     with pytest.raises(SystemExit):
-        cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--backend", "tensorrt"])
+        cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--backend", "nosuchthing"])
 
 
 @pytest.mark.parametrize(

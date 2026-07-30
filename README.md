@@ -181,7 +181,7 @@ print(compiled.target, compiled.selected_backend)
 | `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
 | `tenstorrent` | tt-xla + tt-mlir + tt-metal | StableHLO, then a TT-NN flatbuffer | JIT | tenstorrent | 100 |
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
-| `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
+| `tensorrt` | Torch-TensorRT | TensorRT engine | JIT + **AOT** | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel), intel:npu | 80 |
 | `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel | export only |
@@ -300,6 +300,7 @@ PyTorch `.pt2` program. Pick a backend to add a compiled payload beside it:
 | `export` (default) | portable `ExportedProgram` only | no | [JIT vs. AOT](docs/jit-vs-aot.md) |
 | `aot_inductor` | `.pt2` with kernels baked in | no | [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) |
 | `openvino` | OpenVINO IR (`.xml` + `.bin`) | yes, Intel CPU or NPU | [OpenVINO](docs/openvino-evaluation.md), [Intel NPU](docs/intel-npu.md) |
+| `tensorrt` | serialized TensorRT engine (`.trt.pt2`) | no | [TensorRT](docs/nvidia-tensorrt-evaluation.md) |
 | `onnxruntime` | `.onnx` plus its execution provider | yes | [ONNX Runtime](docs/onnxruntime.md) |
 | `iree_vulkan` | Vulkan VMFB with SPIR-V | yes, GPU | [IREE Vulkan](docs/iree-vulkan.md) |
 | `litert` | `.tflite` flatbuffer | yes, CPU | [LiteRT](docs/litert.md) |

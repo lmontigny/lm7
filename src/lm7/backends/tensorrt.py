@@ -3,14 +3,17 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import importlib.util
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, cast
 
 import torch
 
 from ..detection import torch_device
-from ..errors import CompilationError
+from ..errors import ArtifactLoadError, CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
+
+SUPPORTED_VENDORS = frozenset({"nvidia"})
 
 
 class TensorRTBackend:
@@ -109,9 +112,87 @@ class TensorRTBackend:
                 f"{exc}. Try backend='inductor', backend='eager', or fallback='warn'."
             ) from exc
 
+    def compile_exported(
+        self,
+        exported_program: torch.export.ExportedProgram,
+        output_path: Path,
+        *,
+        arg_inputs: Sequence[Any] = (),
+        kwarg_inputs: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> Path:
+        """Build a TensorRT engine from an ExportedProgram and serialize it.
+
+        This is the AOT half of the backend. The engine build is the expensive
+        part -- 54 s for SmolLM2-135M on an Ada GPU, against 4 s to load the
+        result -- and the JIT path pays it again in every process. Writing the
+        engine to ``output_path`` moves that cost to build time.
+
+        The saved payload is a ``.pt2`` archive holding the engine plus its
+        weights, and it is bound to the GPU architecture, TensorRT version, and
+        Torch-TensorRT version that produced it.
+
+        ``arg_inputs`` and ``kwarg_inputs`` are kept apart rather than flattened
+        into one list: saving re-exports the module against them, so collapsing
+        keyword inputs into positional ones would change how the *reloaded*
+        artifact must be called.
+        """
+        probe = self.probe()
+        if not probe.available:
+            raise CompilationError(probe.reason)
+        torch_tensorrt = importlib.import_module("torch_tensorrt")
+        settings = dict(options or {})
+        positional = list(arg_inputs)
+        keyword = dict(kwarg_inputs or {})
+        try:
+            trt_module = torch_tensorrt.dynamo.compile(
+                exported_program, arg_inputs=positional, kwarg_inputs=keyword, **settings
+            )
+            torch_tensorrt.save(
+                trt_module,
+                str(output_path),
+                output_format="exported_program",
+                arg_inputs=positional,
+                kwarg_inputs=keyword,
+            )
+        except Exception as exc:
+            hint = ""
+            if "use_explicit_typing" in str(exc):
+                # Torch-TensorRT 2.12 turns explicit typing on by default, and
+                # then rejects enabled_precisions outright. The graph's own
+                # dtypes select the precision, so the option is redundant.
+                hint = (
+                    " Drop options={'enabled_precisions': ...}: this Torch-TensorRT "
+                    "takes the precision from the exported graph's dtypes instead."
+                )
+            raise CompilationError(
+                f"TensorRT engine build failed for {output_path}: {exc}.{hint}"
+            ) from exc
+        return output_path
+
+    def load_engine(self, path: Path) -> Callable[..., Any]:
+        """Load a serialized TensorRT engine without rebuilding it."""
+        probe = self.probe()
+        if not probe.available:
+            raise ArtifactLoadError(probe.reason)
+        torch_tensorrt = importlib.import_module("torch_tensorrt")
+        try:
+            loaded = torch_tensorrt.load(str(path))
+            module = loaded.module() if hasattr(loaded, "module") else loaded
+        except Exception as exc:
+            raise ArtifactLoadError(
+                f"Loading the TensorRT artifact at {path} failed: {exc}. A serialized "
+                "engine is tied to the GPU architecture, TensorRT version, and "
+                "Torch-TensorRT version that built it -- re-export on this machine."
+            ) from exc
+        return cast(Callable[..., Any], module)
+
     def load(self, artifact: Artifact) -> Callable[..., Any]:
-        assert artifact.callable is not None
-        return artifact.callable
+        if artifact.callable is not None:
+            return artifact.callable
+        if artifact.path is None:
+            raise ArtifactLoadError("TensorRT artifact has no engine path.")
+        return self.load_engine(artifact.path)
 
 
 def _map_tensors(value: Any, fn: Any) -> Any:
