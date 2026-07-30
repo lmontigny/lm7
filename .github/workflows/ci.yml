@@ -118,7 +118,11 @@ jobs:
 
       - name: Install LM7 and TorchBench runtime dependencies
         run: |
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # torchvision is installed here, matched to the CPU torch build, so
+          # that timm (which depends on torchvision) doesn't pull in a
+          # PyPI default build with a mismatched ABI (torch/torchvision must
+          # come from the same build).
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[dev]"
           python -m pip install psutil pyyaml transformers==4.57.3 timm==1.0.19
 
