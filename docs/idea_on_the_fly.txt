@@ -37,6 +37,8 @@ torch-mlir as the StableHLO lowering path
 ### Now ###
 add more model support from HF
 add sparse model support (MoE) w/ EP (and EP+TP on local)?
+quantize activations
+add 1 more HW support
 -> HackerNews feedback on 7 days
 
 ### Done ###
