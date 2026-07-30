@@ -44,6 +44,9 @@ jobs:
       - name: Check formatting
         run: python -m ruff format --check .
 
+      - name: Type check
+        run: python -m mypy src/lm7
+
   torchbench-compile:
     name: TorchBench CPU torch.compile
     runs-on: ubuntu-24.04

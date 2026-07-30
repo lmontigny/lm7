@@ -146,6 +146,7 @@ def _cuda_build_environment(target: TargetSpec) -> Iterator[None]:
     try:
         os.environ.update(overrides)
         if patch_module and not previous_module_home:
+            assert cpp_extension is not None
             cpp_extension.CUDA_HOME = str(cuda_home)
         yield
     finally:
@@ -155,6 +156,7 @@ def _cuda_build_environment(target: TargetSpec) -> Iterator[None]:
             else:
                 os.environ[name] = value
         if patch_module and not previous_module_home:
+            assert cpp_extension is not None
             cpp_extension.CUDA_HOME = previous_module_home
 
 

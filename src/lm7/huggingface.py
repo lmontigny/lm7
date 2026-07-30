@@ -389,8 +389,8 @@ def _sequence_bounds(model: torch.nn.Module, requested: tuple[int, int] | None) 
             raise ValueError("Dynamic sequence maximum must be at least its minimum.")
         return minimum, maximum
     positions = getattr(getattr(model, "config", None), "max_position_embeddings", None)
-    maximum = int(positions) if isinstance(positions, int) and positions > 0 else None
-    return 1, min(maximum or _DEFAULT_MAX_SEQUENCE, _DEFAULT_MAX_SEQUENCE)
+    configured_maximum = int(positions) if isinstance(positions, int) and positions > 0 else None
+    return 1, min(configured_maximum or _DEFAULT_MAX_SEQUENCE, _DEFAULT_MAX_SEQUENCE)
 
 
 def _sequence_shape_profile(
