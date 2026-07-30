@@ -141,7 +141,7 @@ jobs:
           TORCHINDUCTOR_CACHE_DIR: ${{ runner.temp }}/torchinductor-cache
         run: |
           python benchmarks/torchbench_compile.py \
-            hf_Bert timm_vision_transformer
+            hf_Bert timm_vision_transformer mixtral_moe_tiny
 
   aot-inductor:
     name: Linux CPU AOTInductor
