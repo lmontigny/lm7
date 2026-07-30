@@ -39,6 +39,8 @@ add more model support from HF
 add sparse model support (MoE) w/ EP (and EP+TP on local)?
 quantize activations
 add 1 more HW support
+KV-cache opt for long task
+multi-turn agentic + long context 
 -> HackerNews feedback on 7 days
 
 ### Done ###
