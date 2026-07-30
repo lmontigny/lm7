@@ -1,3 +1,4 @@
+### Backlog ###
 amd graphx to test on mi300x
 codex to check the codex biref for next PR
 vllm/llm-d/sglang to clarify for this repo
@@ -32,7 +33,10 @@ use H100 with large HBM >32GB or something to check usual llama model, liquidAI 
 IREE vulkan? IREE
 ExecuTorch Vulkan is a separate edge/Android deployment path.
 torch-mlir as the StableHLO lowering path
+
+### Now ###
 add more model support from HF
+add sparse model support (MoE) w/ EP (and EP+TP on local)?
 -> HackerNews feedback on 7 days
 
 ### Done ###
