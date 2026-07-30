@@ -36,6 +36,8 @@ torch-mlir as the StableHLO lowering path
 GPTQ, AWQ 
 Intel Advanced Matrix Extensions (AMX)
 
+-> HackerNews feedback on 7 days
+
 ### Now ###
 add more model support from HF
 add sparse model support (MoE) w/ EP (and EP+TP on local)?
@@ -45,7 +47,7 @@ KV-cache opt for long task
 multi-turn agentic + long context 
 Qualcomm Hexagon NPU via ExecuTorch's QNN delegate 
 optimizer Adam, SGD?
--> HackerNews feedback on 7 days
+test on saturnCloud, AWS, lightningAI
 
 ### Done ###
 simplify readme see z, use figure to show all the backend
