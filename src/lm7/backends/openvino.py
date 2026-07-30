@@ -36,10 +36,11 @@ _DEFAULT_STATIC_SHAPES = True
 # save_model. Only weight-only INT8 is wired up: full post-training
 # quantization (nncf.quantize, which also quantizes activations) measured a
 # 11.9 max logit difference against FP32 on SmolLM2-135M and was *slower* than
-# weight-only, because INT8 activations want VNNI. That VNNI argument is specific
-# to activation quantization -- the weight-only path never issues an INT8 GEMM at
-# all, which is why measuring it on a VNNI part changed nothing. See
-# docs/quantization.md.
+# weight-only, because INT8 activations want VNNI. Re-checked on a VNNI Xeon with
+# a representative 32-sample calibration set: full PTQ is 13% faster there rather
+# than slower, but still lands 2/4 top-1 at a 11.55 max logit difference against
+# weight-only's 4/4 at 1.11, and its IR is marginally larger. Rejected on accuracy,
+# which is the hardware-independent half. See docs/quantization.md.
 _QUANTIZATIONS = frozenset({"none", "int8"})
 
 
