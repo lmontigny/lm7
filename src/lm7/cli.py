@@ -207,8 +207,19 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
     print(f"Parameters: {result.parameter_count:,}")
     baseline_mib = result.baseline_model_storage_bytes / 1024**2
     storage_mib = result.model_storage_bytes / 1024**2
+    compiled_bytes = result.compiled_weight_bytes
     if result.quantization == "none":
         print(f"Model storage: {storage_mib:.1f} MiB")
+    elif compiled_bytes is not None:
+        # The backend compressed its own artifact, so the torch module is unchanged
+        # and the saving has to be read off the compiled weights instead.
+        compiled_mib = compiled_bytes / 1024**2
+        reduction = 1 - compiled_bytes / result.baseline_model_storage_bytes
+        print(f"Model storage: {storage_mib:.1f} MiB (unchanged; quantized by the backend)")
+        print(
+            f"Compiled weights: {baseline_mib:.1f} -> {compiled_mib:.1f} MiB "
+            f"({reduction:.1%} reduction)"
+        )
     else:
         reduction = 1 - result.model_storage_bytes / result.baseline_model_storage_bytes
         print(

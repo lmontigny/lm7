@@ -4,6 +4,7 @@ import importlib
 import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -73,6 +74,11 @@ WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 # compresses the IR's weights with NNCF and needs no calibration.
 QUANTIZING_EXPORT_BACKENDS = frozenset({"executorch", "openvino"})
 
+# Backends `lm7 model run` reaches through torch.export rather than through a
+# torch-level compile. They need the _LogitsOnly wrapper, because a captured graph
+# cannot take `use_cache=False` as a call kwarg -- see run_hf_model.
+_EXPORTING_RUN_BACKENDS = frozenset({"openvino"})
+
 # Transformers decides for itself whether to compile a decode step, and only these
 # torch device types satisfy it -- see `_valid_auto_compile_criteria` in
 # transformers/generation/utils.py. Anywhere else it logs "Compilation will be
@@ -134,6 +140,11 @@ class HuggingFaceRunResult:
     peak_memory_bytes: int | None
     next_token_id: int
     next_token: str
+    # Set only when the backend owns the quantization rather than TorchAO. The
+    # OpenVINO path leaves the torch module alone and compresses its own IR, so
+    # `model_storage_bytes` cannot show the saving and this reports the weights the
+    # backend actually executes.
+    compiled_weight_bytes: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -321,27 +332,49 @@ def run_hf_model(
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     baseline_model_storage_bytes = _model_storage_bytes(model)
     _reset_peak_memory(resolved_target)
-    quantization_ms, quantized_modules = _apply_quantization(model, resolved_target, quantization)
+    # Who applies the quantization depends on the backend. TorchAO converts torch
+    # modules before compiling; NNCF compresses the OpenVINO IR during the compile,
+    # so that request is forwarded as a backend option and the torch module is left
+    # untouched. The saving then lives in the IR, not in `_model_storage_bytes`.
+    backend_quantizes = backend == "openvino" and quantization != NO_QUANTIZATION
+    quantization_ms, quantized_modules = (
+        (0.0, 0) if backend_quantizes else _apply_quantization(model, resolved_target, quantization)
+    )
     model_storage_bytes = _model_storage_bytes(model)
+    # A backend that runs through torch.export cannot take `use_cache=False` as a
+    # call kwarg: it becomes a graph input, and OpenVINO's CPU plugin rejects it
+    # with "Parameter operation with dynamic rank. Operation name: use_cache".
+    # _LogitsOnly pins use_cache internally and takes tensors positionally, which is
+    # why the export path already wraps in it.
+    wrap_for_export = backend in _EXPORTING_RUN_BACKENDS
+    call_args: tuple[torch.Tensor, ...] = ()
+    call_kwargs: dict[str, Any] = {**inputs, "use_cache": False}
+    if wrap_for_export:
+        call_args = tuple(inputs[name] for name in _CAPTURED_INPUTS if name in inputs)
+        call_kwargs = {}
     wrapped = compile(
-        model,
+        _LogitsOnly(model).eval() if wrap_for_export else model,
         target=resolved_target,
         backend=backend,
         transfers="automatic",
         fallback="error",
         cache=False,
+        options={"quantization": quantization} if backend_quantizes else None,
     )
     _synchronize(resolved_target)
     started = time.perf_counter()
-    output = wrapped(**inputs, use_cache=False)
+    output = wrapped(*call_args, **call_kwargs)
     _synchronize(wrapped.target)
     first_call_ms = (time.perf_counter() - started) * 1000
     started = time.perf_counter()
-    output = wrapped(**inputs, use_cache=False)
+    output = wrapped(*call_args, **call_kwargs)
     _synchronize(wrapped.target)
     latency_ms = (time.perf_counter() - started) * 1000
 
-    logits = getattr(output, "logits", None)
+    # _LogitsOnly returns the tensor directly; a bare model returns a dataclass.
+    if isinstance(output, tuple):
+        output = output[0]
+    logits = output if isinstance(output, torch.Tensor) else getattr(output, "logits", None)
     if not isinstance(logits, torch.Tensor) or logits.ndim < 2:
         raise UnsupportedModelError(
             f"Hugging Face execution stage failed for {model_uri}: "
@@ -353,6 +386,7 @@ def run_hf_model(
     assert wrapped.target is not None
     assert wrapped.selected_backend is not None
     return HuggingFaceRunResult(
+        compiled_weight_bytes=_compiled_weight_bytes(wrapped),
         model_uri=model_uri,
         model_id=model_id,
         prompt=prompt,
@@ -620,6 +654,27 @@ def _resolve_dtype(
     return values[value]
 
 
+def _validate_openvino_quantization(quantization: str, model_id: str | None) -> None:
+    """Gate the NNCF path, which is a different mechanism from TorchAO's.
+
+    Narrower than the TorchAO gate on purpose: NNCF only implements INT8 here, and
+    the per-model list is the export path's, because it is the same compression
+    applied to the same IR.
+    """
+    if quantization != INT8:
+        raise UnsupportedModelError(
+            f"The openvino backend implements {INT8!r} only; got {quantization!r}. "
+            "The narrower formats are TorchAO's and need backend='inductor'."
+        )
+    if model_id is not None and model_id not in VALIDATED_OPENVINO_INT8:
+        validated = ", ".join(sorted(VALIDATED_OPENVINO_INT8))
+        raise UnsupportedModelError(
+            f"INT8 OpenVINO quantization is not validated for {model_id!r}. Currently "
+            f"validated: {validated}. NNCF compresses the vocabulary projection too, so "
+            "the gate is per model exactly as it is for export."
+        )
+
+
 def _validate_quantization(
     quantization: str,
     target: TargetSpec,
@@ -634,6 +689,16 @@ def _validate_quantization(
         raise UnsupportedModelError(
             f"Unsupported quantization {quantization!r}; expected one of: {choices}."
         )
+    # The OpenVINO backend compresses the IR with NNCF instead of converting torch
+    # modules with TorchAO, so it answers to its own gate and skips the checks below
+    # -- vendor, dtype and FP8 hardware are all TorchAO's constraints.
+    if backend == "openvino":
+        if target.vendor not in {"cpu", "intel"}:
+            raise UnsupportedModelError(
+                "The openvino backend quantizes for Intel CPU and NPU targets only."
+            )
+        _validate_openvino_quantization(quantization, model_id)
+        return
     label = _QUANTIZATION_LABELS[quantization]
     if target.vendor not in _QUANTIZATION_VENDORS[quantization]:
         raise UnsupportedModelError(
@@ -760,6 +825,22 @@ def _supports_fp8(target: TargetSpec) -> bool:
     except ValueError:
         return True
     return capability >= 89
+
+
+def _compiled_weight_bytes(wrapped: Any) -> int | None:
+    """Weight bytes of a backend-owned artifact, when the backend wrote one.
+
+    OpenVINO saves an ``.xml`` graph beside a ``.bin`` of weights, and the ``.bin``
+    is where NNCF compression shows up. Returns None for backends that keep their
+    weights in the torch module, where ``_model_storage_bytes`` is already the
+    answer.
+    """
+    artifact = getattr(wrapped, "artifact", None)
+    path = getattr(artifact, "path", None)
+    if path is None:
+        return None
+    weights = Path(path).with_suffix(".bin")
+    return weights.stat().st_size if weights.is_file() else None
 
 
 def _model_storage_bytes(model: torch.nn.Module) -> int:

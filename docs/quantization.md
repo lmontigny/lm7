@@ -32,10 +32,18 @@ inside each matmul, stay in BF16.
 
 Quantization pins the compute dtype so measurements stay comparable, and the
 dtype is target-specific: BF16 on NVIDIA, FP32 on CPU. `--dtype` must be `auto`
-or that target's dtype, and `auto` resolves to it. `--backend` must be `auto` or
-`inductor`. Anything else raises `UnsupportedModelError` rather than silently
-degrading — including a mode on a target it was not measured on, an FP8 request
-on pre-Ada hardware, and any (model, mode) pair outside the validated list.
+or that target's dtype, and `auto` resolves to it. For the TorchAO path
+`--backend` must be `auto` or `inductor`. Anything else raises
+`UnsupportedModelError` rather than silently degrading — including a mode on a
+target it was not measured on, an FP8 request on pre-Ada hardware, and any
+(model, mode) pair outside the validated list.
+
+**`--backend openvino --quantize int8` is a second, faster route on Intel CPU**,
+and it is not the TorchAO path — NNCF compresses the OpenVINO IR instead of
+converting torch modules. It accepts `int8` only, gates on
+`VALIDATED_OPENVINO_INT8`, and reports its saving as *compiled weights* because
+the torch module is left untouched. See
+[the comparison below](#int8-on-cpu-has-two-mechanisms-and-they-differ-by-4x).
 
 CPU uses FP32 rather than BF16 because x86-64 without AVX-512 has no native BF16
 path, so forcing BF16 there would measure emulation rather than the format.
@@ -238,6 +246,34 @@ modestly.
 
 DeepSeek-Coder-1.3B passes this path with the smallest logit movement of the
 three, so it is admitted alongside SmolLM2.
+
+### INT8 on CPU has two mechanisms, and they differ by 4x
+
+Both are reachable from `lm7 model run` on an Intel CPU, and they are not
+interchangeable:
+
+```bash
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu --quantize int8
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu \
+  --backend openvino --quantize int8
+```
+
+SmolLM2-135M, 5-token prompt, each mechanism against its own FP32 baseline on the
+same host:
+
+| mechanism | i7-8086K (AVX2) | Cascade Lake Xeon (VNNI) |
+| --- | --- | --- |
+| TorchAO weight-only (`inductor`) | 1.5x **slower** | 1.4x **slower** |
+| NNCF (`openvino`) | 1.83x faster | **2.53x faster** |
+
+So on Intel CPU the OpenVINO route is the one to reach for, and the gap widens with
+VNNI. Absolute INT8 times were 16.0 ms on the i7 and 16.2 ms on the Xeon — the
+2.6 GHz part matches the 4.0 GHz one, which is VNNI closing a 1.5x clock deficit.
+
+The saving is reported differently for the two, because the OpenVINO path never
+modifies the torch module: it prints `Compiled weights: 513.1 -> 129.0 MiB (74.9%
+reduction)` measured off the IR that actually executes, while TorchAO prints
+`Model storage`.
 
 ### VNNI *does* help this path, unlike the TorchAO one
 
