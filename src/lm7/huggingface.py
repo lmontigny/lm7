@@ -84,6 +84,16 @@ QUANTIZING_EXPORT_BACKENDS = frozenset({"executorch", "openvino"})
 # docs/huggingface-generation.md.
 _COMPILED_DECODE_DEVICE_TYPES = frozenset({"cuda", "xpu", "neuron", "tpu"})
 
+
+def compiles_decode(device: torch.device) -> bool:
+    """Whether Transformers will compile a decode step on this torch device.
+
+    LM7's own target mapping decides the answer: `nvidia` and `amd` land on
+    `cuda` and an Intel GPU on `xpu`, so those compile, while `apple` (`mps`),
+    `tpu`/`tenstorrent` (`xla`), `intel:npu` (`cpu`) and plain `cpu` do not.
+    """
+    return device.type in _COMPILED_DECODE_DEVICE_TYPES
+
 # NNCF compresses every eligible layer, the vocabulary projection included, so
 # it is checked per model like the runtime path. SmolLM2-135M held 4/4 top-1
 # tokens at a 1.20 max logit difference and DeepSeek-Coder-1.3B 4/4 at 0.79;
@@ -214,7 +224,7 @@ def generate_hf_model(
         for name, value in inputs.items()
     }
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
-    compiles_decode = device.type in _COMPILED_DECODE_DEVICE_TYPES
+    decode_is_compiled = compiles_decode(device)
     # These are also CompileConfig's own defaults, so this pins the behaviour
     # against a future change in that default rather than requesting anything new.
     compile_config = compile_config_type(
@@ -257,7 +267,7 @@ def generate_hf_model(
         model_id=model_id,
         prompt=prompt,
         target=str(resolved_target),
-        backend="inductor" if compiles_decode else "eager",
+        backend="inductor" if decode_is_compiled else "eager",
         dtype=str(torch_dtype).removeprefix("torch."),
         parameter_count=parameter_count,
         input_tokens=prompt_tokens,

@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from lm7 import huggingface
+from lm7.detection import torch_device
 from lm7.errors import UnsupportedModelError
 from lm7.targets import TargetSpec
 
@@ -196,28 +197,29 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert result.latency_ms >= 0
 
 
-def test_generate_hf_model_reports_inductor_where_transformers_compiles(monkeypatch):
-    """A CUDA target does meet the criteria, so the same call reports inductor.
+@pytest.mark.parametrize(
+    ("target", "compiled"),
+    [
+        (TargetSpec("nvidia", "gpu"), True),
+        (TargetSpec("amd", "gpu"), True),
+        (TargetSpec("intel", "gpu"), True),
+        (TargetSpec("intel", "npu"), False),
+        (TargetSpec("apple", "gpu"), False),
+        (TargetSpec("tpu", "accelerator"), False),
+        (TargetSpec("tenstorrent", "accelerator"), False),
+        (TargetSpec("cpu", "cpu"), False),
+    ],
+)
+def test_compiled_decode_follows_the_target_device_type(target, compiled):
+    """Which targets Transformers will compile a decode step on.
 
-    The pair of tests is the point: the reported backend has to follow what
-    Transformers actually did, not what LM7 asked for.
+    Transformers gates compiled generation on the torch device type, so LM7's own
+    target mapping decides this: `apple` reaches `mps` and `tpu` reaches `xla`,
+    neither of which is on the upstream list, and generation there decodes eagerly
+    no matter what `compile_config` says. Constructing the device is enough to
+    check it, which keeps this runnable on a CPU-only build.
     """
-    calls = {}
-    monkeypatch.setattr(
-        huggingface, "_load_transformers", lambda: _fake_generation_transformers(calls)
-    )
-    monkeypatch.setattr(huggingface, "resolve_target", lambda target: TargetSpec("nvidia", "gpu"))
-    monkeypatch.setattr(huggingface, "torch_device", lambda target: torch.device("cuda", 0))
-
-    result = huggingface.generate_hf_model(
-        "hf://example/tiny-model",
-        prompt="Hello",
-        max_new_tokens=4,
-        target="nvidia",
-    )
-
-    assert result.backend == "inductor"
-    assert result.cache_implementation == "static"
+    assert huggingface.compiles_decode(torch_device(target)) is compiled
 
 
 @pytest.mark.parametrize(
