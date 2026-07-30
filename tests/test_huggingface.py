@@ -50,6 +50,26 @@ class FakeTokenizer:
         return f"token-{token_ids[0]}"
 
 
+class _FakeCompiled:
+    """Stands in for CompiledModule so a backend's artifact can be faked.
+
+    run_hf_model reads `target`, `selected_backend` and `artifact` off whatever
+    lm7.compile returns, so a test that needs a specific artifact path supplies
+    this instead of compiling for real.
+    """
+
+    def __init__(self, model: torch.nn.Module, backend: str) -> None:
+        self.model = model
+        self.target = TargetSpec("cpu", "cpu")
+        self.selected_backend = backend
+        self.artifact = None
+
+    def __call__(self, *args, **kwargs):
+        # The export-backed path calls positionally through _LogitsOnly, the
+        # torch-level path calls with keywords; both have to reach the fake model.
+        return self.model(*args, **kwargs)
+
+
 def _fake_transformers(calls):
     class TokenizerFactory:
         @staticmethod
@@ -102,6 +122,97 @@ def test_run_hf_model_uses_lm7_and_reports_next_token(monkeypatch):
     assert result.peak_memory_bytes is None
     assert result.next_token_id == 5
     assert result.next_token == "token-5"
+    assert result.compiled_weight_bytes is None
+
+
+def test_openvino_quantization_goes_to_the_backend_not_torchao(monkeypatch, tmp_path):
+    """`--backend openvino --quantize int8` must compress the IR, not the module.
+
+    The two mechanisms are unrelated: TorchAO swaps torch Linear weights before
+    compiling, NNCF compresses the IR during it. Routing this request through
+    TorchAO would quantize twice and report the wrong saving, so the torch module
+    has to come out untouched and the request has to arrive as a backend option.
+    """
+    calls: dict = {}
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _fake_transformers(calls))
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("TorchAO must not run for the openvino backend")
+
+    monkeypatch.setattr(huggingface, "_apply_quantization", fail_if_called)
+
+    # A stand-in for the IR the backend would have written, so the reported saving
+    # comes from a real file rather than a hard-coded number.
+    weights = tmp_path / "compiled_model.bin"
+    weights.write_bytes(b"x" * 4096)
+
+    recorded: dict = {}
+
+    def fake_compile(model, **kwargs):
+        recorded.update(kwargs)
+        wrapped = _FakeCompiled(model, "openvino")
+        wrapped.artifact = SimpleNamespace(path=tmp_path / "compiled_model.xml")
+        return wrapped
+
+    monkeypatch.setattr(huggingface, "compile", fake_compile)
+    monkeypatch.setattr(huggingface, "VALIDATED_OPENVINO_INT8", frozenset({"example/tiny-model"}))
+
+    result = huggingface.run_hf_model(
+        "hf://example/tiny-model",
+        prompt="Hello",
+        target="cpu",
+        backend="openvino",
+        quantization="int8",
+    )
+
+    assert recorded["options"] == {"quantization": "int8"}
+    assert result.quantization == "int8"
+    assert result.quantized_modules == 0
+    assert result.quantization_ms == 0.0
+    # The torch module is untouched, so the saving is only visible in the artifact.
+    assert result.baseline_model_storage_bytes == result.model_storage_bytes
+    assert result.compiled_weight_bytes == 4096
+
+
+def test_openvino_quantization_rejects_unvalidated_models():
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        huggingface.run_hf_model(
+            "hf://example/never-measured",
+            prompt="Hello",
+            target="cpu",
+            backend="openvino",
+            quantization="int8",
+        )
+
+
+@pytest.mark.parametrize("quantization", [huggingface.FP8, huggingface.NVFP4])
+def test_openvino_quantization_rejects_torchao_only_formats(quantization):
+    """NNCF implements INT8 here; the narrower formats belong to TorchAO."""
+    with pytest.raises(UnsupportedModelError, match="implements 'int8' only"):
+        huggingface.run_hf_model(
+            "hf://HuggingFaceTB/SmolLM2-135M-Instruct",
+            prompt="Hello",
+            target="cpu",
+            backend="openvino",
+            quantization=quantization,
+        )
+
+
+def test_openvino_quantization_rejects_non_intel_targets():
+    """Checked against the validator directly, not through resolve_target.
+
+    Asking run_hf_model for target="nvidia" fails for lack of a GPU long before it
+    reaches this rule, so routing through it would make the test pass or fail on
+    host hardware rather than on the rule.
+    """
+    with pytest.raises(UnsupportedModelError, match="Intel CPU and NPU"):
+        huggingface._validate_quantization(
+            "int8",
+            TargetSpec("nvidia", "gpu"),
+            "openvino",
+            "auto",
+            "HuggingFaceTB/SmolLM2-135M-Instruct",
+        )
 
 
 class FakeGenerationTokenizer:
