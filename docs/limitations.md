@@ -51,7 +51,7 @@ coverage is CPU.
 
 | Backend | Scope and caveats |
 | --- | --- |
-| `inductor` | The default and the best-covered path. CPU is the only target with CI. |
+| `inductor` | The default and the best-covered path. CPU is the only target with CI. On an Intel GPU it needs Triton's out-of-tree XPU backend (`pytorch-triton-xpu`) and declines with an actionable reason without it — see the [guide](intel-gpu.md). |
 | `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). |
 | `tensorrt` | NVIDIA only, JIT only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). |
 | `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on export, validated for one model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |

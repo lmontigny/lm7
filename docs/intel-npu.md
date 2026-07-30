@@ -119,9 +119,11 @@ table alone will understate it.
 
 ## What is not implemented
 
-- **Intel GPU through OpenVINO.** `intel:gpu` still compiles on the CPU plugin
-  and reaches the GPU through TorchInductor's XPU path instead. Mapping it to
-  the OpenVINO `GPU` device is a separate change with its own evaluation.
+- **Intel GPU through OpenVINO.** The `openvino` backend declines Intel GPU
+  targets rather than running them on the CPU plugin; the GPU in the same
+  package is reached through TorchInductor's XPU path instead
+  ([intel-gpu.md](intel-gpu.md)). Mapping `intel` to the OpenVINO `GPU` device
+  is a separate change with its own evaluation.
 - **NPU-specific plugin tuning.** `NPU_COMPILATION_MODE_PARAMS`, tiling hints,
   and the compiled-blob cache are reachable through
   `options={"config": {...}}` but have no LM7 defaults.

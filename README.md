@@ -96,7 +96,10 @@ Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
 
 `intel:npu` is the one target with no PyTorch device behind it: OpenVINO owns
 the NPU, so `inductor` and `eager` decline it, `target="auto"` never picks it,
-and it has [its own guide](docs/intel-npu.md).
+and it has [its own guide](docs/intel-npu.md). The Intel GPU in the same
+package is the separate `intel` target — TorchInductor reaches it through
+Triton's out-of-tree XPU backend, which is a second install
+([guide](docs/intel-gpu.md)).
 
 Run `lm7 targets` to see what is actually present on your machine.
 
