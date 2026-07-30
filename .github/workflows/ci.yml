@@ -90,6 +90,52 @@ jobs:
           python benchmarks/torchbench_compile.py \
             resnet18 mobilenet_v2
 
+  torchbench-transformer-compile:
+    name: TorchBench CPU torch.compile (transformers, slow)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pin TorchBench so upstream model or dependency changes cannot silently
+      # change the workloads exercised by this test.
+      - name: Check out TorchBench
+        uses: actions/checkout@v6
+        with:
+          repository: pytorch/benchmark
+          ref: 5e0d57f8a121fd3922ae4613cf19b269ed5aee99
+          path: .torchbench
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Verify C++ compiler
+        run: c++ --version
+
+      - name: Install LM7 and TorchBench runtime dependencies
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+          python -m pip install psutil pyyaml transformers==4.57.3 timm==1.0.19
+
+      - name: Cache TorchBench model weights
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub
+          key: torchbench-weights-vit-small-patch16-224
+
+      - name: Compile TorchBench models and compare with eager
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.torchbench
+          TORCHINDUCTOR_CACHE_DIR: ${{ runner.temp }}/torchinductor-cache
+        run: |
+          python benchmarks/torchbench_compile.py \
+            hf_Bert timm_vision_transformer
+
   aot-inductor:
     name: Linux CPU AOTInductor
     runs-on: ubuntu-24.04
