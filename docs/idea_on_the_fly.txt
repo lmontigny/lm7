@@ -42,6 +42,8 @@ quantize activations
 add 1 more HW support
 KV-cache opt for long task
 multi-turn agentic + long context 
+Qualcomm Hexagon NPU via ExecuTorch's QNN delegate 
+optimizer Adam, SGD?
 -> HackerNews feedback on 7 days
 
 ### Done ###
