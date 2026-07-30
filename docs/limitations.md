@@ -75,5 +75,9 @@ These have measurement harnesses or written plans, and no registered backend:
 ## Quantization
 
 Weight-only, NVIDIA-only, and validated per (model, mode) pair. Activation
-quantization is not implemented. See [quantization](quantization.md) for which
-layers each mode converts and the measurements behind it.
+quantization is not implemented. Every mode measured *slower* than the BF16
+baseline on sm89 once compiled, so the reliable benefit is footprint, not speed.
+`nvfp4` gives the smallest footprint and the largest accuracy loss — it clears
+the validation bar for one model out of three tried. See
+[quantization](quantization.md) for which layers each mode converts and the
+measurements behind it.
