@@ -48,6 +48,7 @@ multi-turn agentic + long context
 Qualcomm Hexagon NPU via ExecuTorch's QNN delegate 
 optimizer Adam, SGD?
 test on saturnCloud, AWS, lightningAI
+add prompt size>1 for decode - unclear
 
 ### Done ###
 simplify readme see z, use figure to show all the backend
