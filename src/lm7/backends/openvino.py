@@ -44,9 +44,9 @@ def device_for_target(target: TargetSpec) -> str:
     """The OpenVINO device string LM7 compiles an ``.xml`` for.
 
     ``intel:npu`` is the only non-CPU mapping. ``intel`` on its own means the
-    Intel GPU, which keeps running on the CPU plugin until the GPU plugin has
-    been evaluated the way ``docs/openvino-evaluation.md`` describes -- mapping
-    it to ``"GPU"`` here would change what that target executes today.
+    Intel GPU, which this backend declines rather than quietly compiling for
+    the CPU plugin; the OpenVINO GPU plugin is unevaluated, so no ``"GPU"``
+    mapping exists yet. See ``docs/openvino-evaluation.md``.
     """
     if target.vendor == "intel" and target.kind == "npu":
         return "NPU"
@@ -101,6 +101,18 @@ class OpenVINOBackend:
             return Support(False, probe.reason)
         if request.target.vendor not in {"cpu", "intel"}:
             return Support(False, "OpenVINO supports Intel CPU and NPU targets only in LM7 v0.1.")
+        if request.target.vendor == "intel" and request.target.kind == "gpu":
+            # LM7 maps every non-NPU OpenVINO target to the CPU plugin, so
+            # claiming an Intel GPU target would run the model on the CPU under
+            # a GPU label -- the silent device mismatch this backend refuses to
+            # make elsewhere. Declining keeps `inductor` (or `eager`) on the GPU.
+            return Support(
+                False,
+                "LM7 has not evaluated the OpenVINO GPU plugin, and compiling an "
+                "Intel GPU target here would execute on the CPU plugin instead. Use "
+                "backend='inductor' for the Intel GPU, target='cpu' for the CPU "
+                "plugin, or target='intel:npu' for the NPU.",
+            )
         # The OpenVINO runtime exchanges tensors through NumPy, which has no
         # bfloat16 dtype, so a bfloat16 model cannot round-trip.
         dtype = _model_dtype(request.model)

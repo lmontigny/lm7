@@ -207,6 +207,14 @@ def export(
         raise BackendUnavailableError(
             "OpenVINO artifacts are validated for Intel CPU and NPU targets only."
         )
+    if backend == "openvino" and resolved_target.kind == "gpu":
+        # The IR would be compiled by the CPU plugin on load, so an artifact
+        # labelled with a GPU target would not run where its target says.
+        raise BackendUnavailableError(
+            "LM7 has not evaluated the OpenVINO GPU plugin, so an Intel GPU target "
+            "cannot produce an OpenVINO artifact. Export with target='cpu' or "
+            "target='intel:npu'."
+        )
     if (
         backend == "openvino"
         and openvino_device_for_target(resolved_target) == "NPU"

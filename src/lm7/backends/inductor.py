@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -8,6 +10,68 @@ import torch
 from ..detection import torch_device
 from ..errors import CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
+
+# TorchInductor generates GPU kernels with Triton, and Triton's Intel GPU code
+# generator is out-of-tree: it ships as the separate `pytorch-triton-xpu` wheel
+# and registers itself as the "intel" entry in Triton's backend registry. A
+# stock `triton` has no such entry, so torch.compile raises inside the first
+# call -- which the default fallback="warn" turns into a quiet eager run on a
+# machine the user picked for its GPU. LM7 checks up front instead.
+_XPU_TRITON_BACKEND = "intel"
+
+
+def triton_backends() -> frozenset[str] | None:
+    """Vendor keys Triton has a code generator for, or ``None`` if unreadable.
+
+    ``None`` means "cannot tell", which is deliberately different from an empty
+    set: an unreadable registry must never be reported as a missing backend.
+    """
+    try:
+        registry = importlib.import_module("triton.backends").backends
+        return frozenset(registry)
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _triton_version() -> str | None:
+    try:
+        return str(importlib.import_module("triton").__version__)
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
+        return None
+
+
+def _triton_summary() -> str:
+    """One sentence on Triton's state, for `lm7 doctor`."""
+    version = _triton_version()
+    if version is None:
+        return "Triton is not installed, so GPU kernel generation is unavailable."
+    names = triton_backends()
+    if names is None:
+        return f"Triton {version} is installed."
+    return f"Triton {version} generates for {', '.join(sorted(names)) or 'nothing'}."
+
+
+def _xpu_triton_reason() -> str | None:
+    """Why Inductor cannot reach an Intel GPU here, or ``None`` if it can."""
+    try:
+        installed = importlib.util.find_spec("triton") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return None
+    if not installed:
+        return (
+            "TorchInductor generates Intel GPU kernels with Triton, and no triton "
+            "package is installed. Install the Intel build with "
+            '"pip install pytorch-triton-xpu", or use backend="eager".'
+        )
+    names = triton_backends()
+    if names is None or _XPU_TRITON_BACKEND in names:
+        return None
+    return (
+        "The installed Triton has no Intel GPU code generator (it registers: "
+        f"{', '.join(sorted(names)) or 'none'}). That backend is out-of-tree and "
+        'ships as pytorch-triton-xpu; install it with "pip install '
+        'pytorch-triton-xpu", or use backend="eager". See docs/intel-gpu.md.'
+    )
 
 
 class InductorBackend:
@@ -20,6 +84,10 @@ class InductorBackend:
             if available
             else "This PyTorch build has no torch.compile."
         )
+        if available:
+            # `lm7 doctor` is where someone looks after a fallback warning, so
+            # the kernel generator's own state belongs in the report.
+            reason += f" {_triton_summary()}"
         return BackendInfo(self.name, torch.__version__, available, reason)
 
     def supports(self, request: CompileRequest) -> Support:
@@ -36,6 +104,10 @@ class InductorBackend:
                 "PyTorch has no NPU device for TorchInductor to lower to; "
                 f"{request.target} is reached through backend='openvino'.",
             )
+        if request.target.vendor == "intel" and request.target.kind == "gpu":
+            xpu_reason = _xpu_triton_reason()
+            if xpu_reason is not None:
+                return Support(False, xpu_reason)
         return Support(
             True, f"torch.compile supports {request.target.kind} execution.", priority=100
         )

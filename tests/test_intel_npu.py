@@ -62,7 +62,8 @@ def test_npu_target_round_trips_through_its_string():
 def test_device_for_target_maps_only_the_npu_off_the_cpu_plugin():
     assert device_for_target(parse_target("intel:npu")) == "NPU"
     assert device_for_target(parse_target("cpu")) == "CPU"
-    # Unevaluated: the Intel GPU still runs on the CPU plugin.
+    # No "GPU" mapping exists; the backend declines Intel GPU targets outright
+    # rather than reaching this default. See tests/test_intel_gpu.py.
     assert device_for_target(parse_target("intel:gpu")) == "CPU"
 
 

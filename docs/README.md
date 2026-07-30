@@ -21,6 +21,7 @@ This index covers everything else.
 | NVIDIA GPU | [development.md#nvidia-cuda](development.md#nvidia-cuda) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
+| Intel GPU (Arc, XPU) | [intel-gpu.md](intel-gpu.md) |
 | Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
 | Google TPU | [google-tpu.md](google-tpu.md) |
 | Tenstorrent | [tenstorrent.md](tenstorrent.md) |
