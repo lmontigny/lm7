@@ -78,6 +78,61 @@ def test_causal_lm_inductor_logits_and_generation(model_id):
     assert prompt_length < generated.shape[1] <= prompt_length + 4
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_compiled_decode_generates_the_same_tokens_as_eager_decode():
+    """The decode loop has to agree with an uncompiled baseline, token for token.
+
+    This is the check that catches a compiler mangling the KV cache. Torch-TensorRT
+    fails exactly here on DeepSeek-Coder-1.3B: it compiles the decode step, reports
+    one graph, runs 3.17x faster than eager, and emits fluent-looking text that
+    diverges after three tokens and then repeats a single newline forever. Nothing
+    raises, and a prefill-only logits test passes the same backend. See
+    docs/huggingface-generation.md.
+
+    `disable_compile=True` is load-bearing: Transformers compiles a static cache by
+    default, so without it the "baseline" would be the same compiled graph and this
+    test would compare a thing against itself.
+    """
+    transformers = pytest.importorskip("transformers")
+    model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+    model = (
+        transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float16)
+        .eval()
+        .cuda()
+    )
+    inputs = {
+        name: value.cuda()
+        for name, value in tokenizer("The capital of France is", return_tensors="pt").items()
+    }
+    shared = {**inputs, "max_new_tokens": 16, "do_sample": False, "cache_implementation": "static"}
+    prompt_tokens = int(inputs["input_ids"].shape[-1])
+
+    with torch.inference_mode():
+        expected = model.generate(**shared, disable_compile=True)
+
+    torch._dynamo.reset()
+    counters = torch._dynamo.utils.counters
+    counters.clear()
+    with torch.inference_mode():
+        actual = model.generate(
+            **shared,
+            compile_config=transformers.CompileConfig(
+                backend="inductor", mode="reduce-overhead", fullgraph=False, dynamic=None
+            ),
+        )
+
+    expected_ids = expected[0, prompt_tokens:].tolist()
+    actual_ids = actual[0, prompt_tokens:].tolist()
+    assert actual_ids == expected_ids, (
+        f"compiled decode diverged: {tokenizer.decode(actual_ids)!r} "
+        f"against {tokenizer.decode(expected_ids)!r}"
+    )
+    # One decode graph for the whole loop is the point of the static cache; a
+    # per-token graph would still produce correct tokens while being useless.
+    assert counters["stats"].get("unique_graphs") == 1
+
+
 @pytest.mark.skipif(not HAS_ACCELERATOR, reason="CUDA or MPS GPU is unavailable")
 def test_hf_model_runner_on_accelerator():
     result = run_hf_model(
