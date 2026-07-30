@@ -98,6 +98,22 @@ Not supported, with written plans: [Intel NPU](docs/openvino-evaluation.md),
 [Qualcomm Hexagon NPU](docs/qualcomm-hexagon.md), and
 [AMD MIGraphX](docs/amd-migraphx.md).
 
+## Tested model coverage
+
+Smoke-test coverage, not a model zoo — LM7 doesn't allowlist models, so other
+Hugging Face checkpoints will likely *run*, just without this validation. See
+[limitations](docs/limitations.md) and [quantization](docs/quantization.md)
+for details.
+
+| Model | Tested for |
+| --- | --- |
+| `resnet18`, `mobilenet_v2` | `torch.compile` parity (CI) |
+| `hf_Bert` (BERT) | `torch.compile` parity (CI) |
+| `timm_vision_transformer` (ViT) | `torch.compile` parity (CI) |
+| Mixtral, tiny (sparse MoE) | `torch.compile` parity, CPU + NVIDIA (CI) |
+| [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
+| [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization |
+
 ## 1. Install
 
 LM7 needs Python 3.10+ and a PyTorch build matching the target machine. It does
