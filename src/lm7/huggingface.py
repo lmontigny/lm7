@@ -57,13 +57,14 @@ _QUANTIZED_COMPUTE_DTYPE = {"nvidia": "bfloat16", "cpu": "float32"}
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
 # (0/4 prompts agreed with BF16, max logit difference 22.4 on NVIDIA sm89). A
 # model earns an entry here only after its outputs have been compared against an
-# unquantized baseline on real hardware. Both INT8 entries were measured on
-# NVIDIA sm89 *and* on x86-64 CPU; the narrower formats are NVIDIA-only, so
+# unquantized baseline on real hardware. Every INT8 entry was measured on NVIDIA
+# sm89 *and* on x86-64 CPU; the narrower formats are NVIDIA-only, so
 # _QUANTIZATION_VENDORS carries the target half of the gate. See
 # docs/quantization.md.
 VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
     "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8, FP8}),
     "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8, FP8, NVFP4}),
+    "deepseek-ai/deepseek-coder-1.3b-instruct": frozenset({INT8, FP8}),
 }
 WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 
@@ -74,10 +75,15 @@ QUANTIZING_EXPORT_BACKENDS = frozenset({"executorch", "openvino"})
 
 # NNCF compresses every eligible layer, the vocabulary projection included, so
 # it is checked per model like the runtime path. SmolLM2-135M held 4/4 top-1
-# tokens at a 1.20 max logit difference; Llama-3.2-1B managed only 3/4, and
-# excluding lm_head did not recover it because its embedding is tied. See
-# docs/quantization.md.
-VALIDATED_OPENVINO_INT8 = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
+# tokens at a 1.20 max logit difference and DeepSeek-Coder-1.3B 4/4 at 0.79;
+# Llama-3.2-1B managed only 3/4, and excluding lm_head did not recover it because
+# its embedding is tied. See docs/quantization.md.
+VALIDATED_OPENVINO_INT8 = frozenset(
+    {
+        "HuggingFaceTB/SmolLM2-135M-Instruct",
+        "deepseek-ai/deepseek-coder-1.3b-instruct",
+    }
+)
 
 
 def normalize_quantization(value: str) -> str:

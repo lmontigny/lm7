@@ -233,10 +233,14 @@ local full-logit validation showed unacceptable divergence.
 The examples use `HuggingFaceTB/SmolLM2-135M-Instruct`, `LiquidAI/LFM2.5-230M`,
 `unsloth/Llama-3.2-1B-Instruct` (an ungated mirror of Meta's
 Llama-3.2-1B-Instruct, which itself requires accepting a license and an
-authenticated token), and `Qwen/Qwen3.5-0.8B`. Qwen3.5 is also a hybrid
+authenticated token), `Qwen/Qwen3.5-0.8B`, and
+`deepseek-ai/deepseek-coder-1.3b-instruct`. Qwen3.5 is also a hybrid
 linear-attention/convolution architecture like LFM2.5, and its Inductor
 compilation is noticeably slower (roughly a minute for the first call
-locally) than the other three models.
+locally) than the other three models. DeepSeek-Coder-1.3B is the one checked
+against every backend installable on a single host rather than Inductor alone —
+[deepseek.md](deepseek.md) records that matrix, including which backend's
+existing test threshold it misses.
 
 Exercise the user-facing compiled model command on the local GPU:
 

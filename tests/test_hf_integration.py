@@ -21,6 +21,7 @@ MODEL_IDS = (
     "LiquidAI/LFM2.5-230M",
     "unsloth/Llama-3.2-1B-Instruct",
     "Qwen/Qwen3.5-0.8B",
+    "deepseek-ai/deepseek-coder-1.3b-instruct",
 )
 RUN_HF_TESTS = os.environ.get("LM7_RUN_HF_TESTS") == "1"
 HAS_ACCELERATOR = torch.cuda.is_available() or torch.backends.mps.is_available()

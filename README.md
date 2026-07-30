@@ -119,6 +119,7 @@ for details.
 | Mixtral, tiny (sparse MoE) | `torch.compile` parity, CPU + NVIDIA (CI) |
 | [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization |
+| [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
 
 ## 1. Install
 
@@ -265,9 +266,12 @@ forward pass, and reports the selected target and backend, first-call and
 steady-call time, and the predicted next token (`--json` for structured output).
 
 Validated compact, ungated models: `HuggingFaceTB/SmolLM2-135M-Instruct`,
-`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct`, and `Qwen/Qwen3.5-0.8B`
-(hybrid architecture; noticeably slower first call). All four also compile on
-Apple Silicon, with slightly wider float16 tolerance on MPS than CUDA.
+`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct`, `Qwen/Qwen3.5-0.8B`
+(hybrid architecture; noticeably slower first call), and
+`deepseek-ai/deepseek-coder-1.3b-instruct`. The first four also compile on Apple
+Silicon, with slightly wider float16 tolerance on MPS than CUDA; DeepSeek was
+validated on CPU and NVIDIA only, across every backend installable on one host —
+see [DeepSeek coverage](docs/deepseek.md).
 
 For greedy token generation, use the static KV-cache path:
 
@@ -374,8 +378,8 @@ outputs have not been compared against an unquantized baseline on real hardware.
 `int8` is the only mode measured off NVIDIA; on CPU it cuts a model to 2.44x
 smaller at no measured accuracy cost, with a latency effect that depends on model
 size. `nvfp4` buys the smallest footprint and costs the most accuracy; it clears
-the bar for one model so far. Both `--quantize` and the older `--quantization`
-spelling work.
+the bar for one model out of four tried. Both `--quantize` and the older
+`--quantization` spelling work.
 
 This runtime path does not quantize activations. Two export paths quantize the
 *artifact* instead, each with its own mechanism:

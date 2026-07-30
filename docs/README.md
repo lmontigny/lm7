@@ -41,6 +41,8 @@ This index covers everything else.
 ## Features
 
 - [Quantization](quantization.md) — weight-only modes, validation gates, caveats.
+- [DeepSeek coverage](deepseek.md) — one model measured across every locally
+  installable backend.
 - [Compiled Hugging Face generation](huggingface-generation.md) — the static
   KV-cache decode path.
 
