@@ -94,6 +94,7 @@ def compiles_decode(device: torch.device) -> bool:
     """
     return device.type in _COMPILED_DECODE_DEVICE_TYPES
 
+
 # NNCF compresses every eligible layer, the vocabulary projection included, so
 # it is checked per model like the runtime path. SmolLM2-135M held 4/4 top-1
 # tokens at a 1.20 max logit difference and DeepSeek-Coder-1.3B 4/4 at 0.79;
