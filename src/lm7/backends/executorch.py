@@ -27,6 +27,25 @@ class LoweredProgram:
     path: Path
     delegated_calls: int
     total_calls: int
+    quantization: str
+    quantized_ops: int
+
+
+@dataclass(frozen=True)
+class ExecuTorchOptions:
+    quantization: str
+
+
+def parse_options(options: Mapping[str, Any] | None) -> ExecuTorchOptions:
+    values = dict(options or {})
+    quantization = values.pop("quantization", "none")
+    if quantization not in {"none", "int8"}:
+        raise CompilationError(
+            f"ExecuTorch quantization must be 'none' or 'int8'; got {quantization!r}."
+        )
+    if values:
+        raise CompilationError(f"Unsupported ExecuTorch options: {', '.join(sorted(values))}.")
+    return ExecuTorchOptions(quantization)
 
 
 _INSTALL_HINT = (
@@ -143,7 +162,14 @@ class ExecuTorchBackend:
         except ImportError as exc:  # pragma: no cover - probe already guards this
             raise CompilationError(f"ExecuTorch could not be imported: {exc}.") from exc
 
-        del options  # No XNNPACK partitioner options are exposed yet.
+        settings = parse_options(options)
+        quantized_ops = 0
+        if settings.quantization == "int8":
+            if exported_program.range_constraints:
+                raise CompilationError(
+                    "ExecuTorch INT8 quantization requires a fixed-shape exported program."
+                )
+            exported_program, quantized_ops = _quantize_int8(exported_program)
         try:
             with _flatc_on_path():
                 lowered = exir.to_edge_transform_and_lower(
@@ -158,7 +184,13 @@ class ExecuTorchBackend:
                 f"ExecuTorch lowering failed for {program_path}: {exc}. Verify the "
                 "ExecuTorch installation matches this PyTorch build."
             ) from exc
-        return LoweredProgram(program_path, delegated, total)
+        return LoweredProgram(
+            program_path,
+            delegated,
+            total,
+            settings.quantization,
+            quantized_ops,
+        )
 
     def load_pte(self, program_path: Path) -> Callable[..., Any]:
         """Return a torch-callable backed by the ExecuTorch runtime.
@@ -215,6 +247,51 @@ def _delegate_counts(lowered: Any) -> tuple[int, int]:
     calls = [node for node in graph.nodes if node.op == "call_function"]
     delegated = [node for node in calls if "executorch_call_delegate" in str(node.target)]
     return len(delegated), len(calls)
+
+
+def _quantize_int8(
+    exported_program: torch.export.ExportedProgram,
+) -> tuple[torch.export.ExportedProgram, int]:
+    """Apply calibrated XNNPACK PT2E INT8 quantization to a captured graph."""
+    try:
+        quantizer_module = importlib.import_module(
+            "executorch.backends.xnnpack.quantizer.xnnpack_quantizer"
+        )
+        quantize_module = importlib.import_module("torchao.quantization.pt2e.quantize_pt2e")
+    except ImportError as exc:
+        raise CompilationError(
+            "ExecuTorch INT8 quantization requires the XNNPACK quantizer and "
+            "TorchAO PT2E APIs shipped with ExecuTorch."
+        ) from exc
+
+    try:
+        example_args, example_kwargs = exported_program.example_inputs
+        quantizer = quantizer_module.XNNPACKQuantizer().set_global(
+            quantizer_module.get_symmetric_quantization_config(is_per_channel=True)
+        )
+        prepared = quantize_module.prepare_pt2e(exported_program.module(), quantizer)
+        with torch.no_grad():
+            prepared(*example_args, **example_kwargs)
+        quantized = quantize_module.convert_pt2e(prepared)
+        quantized_ops = sum(
+            node.op == "call_function" and "quantized_decomposed.quantize" in str(node.target)
+            for node in quantized.graph.nodes
+        )
+        if quantized_ops == 0:
+            raise CompilationError(
+                "XNNPACK INT8 quantization matched no operators in the exported graph."
+            )
+        return (
+            torch.export.export(quantized, example_args, example_kwargs),
+            quantized_ops,
+        )
+    except CompilationError:
+        raise
+    except Exception as exc:
+        raise CompilationError(
+            "ExecuTorch INT8 prepare/calibrate/convert failed: "
+            f"{exc}. The captured example inputs are used as the calibration sample."
+        ) from exc
 
 
 def _executorch_version() -> str | None:

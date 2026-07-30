@@ -477,6 +477,50 @@ def test_export_hf_model_writes_a_loadable_artifact(monkeypatch, tmp_path):
     assert logits.shape == (1, 3, 16)
 
 
+def test_export_hf_model_passes_int8_to_executorch(monkeypatch, tmp_path):
+    import lm7.exporting
+
+    calls = {}
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers({}))
+    output = tmp_path / "model.lm7"
+    output.mkdir()
+    (output / "manifest.json").write_text("{}", encoding="utf-8")
+
+    def export_artifact(*args, **kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(path=output)
+
+    monkeypatch.setattr(lm7.exporting, "export", export_artifact)
+    result = huggingface.export_hf_model(
+        "hf://example/tiny-model",
+        output=str(output),
+        target="cpu",
+        backend="executorch",
+        quantization="int8",
+    )
+
+    assert calls["options"] == {"quantization": "int8"}
+    assert result.quantization == "int8"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"backend": "export", "quantization": "int8"}, "only by the ExecuTorch"),
+        (
+            {"backend": "executorch", "quantization": "int8", "dynamic_sequence": True},
+            "requires a fixed input shape",
+        ),
+        ({"backend": "executorch", "quantization": "int4"}, "expected 'none' or 'int8'"),
+    ],
+)
+def test_export_hf_model_rejects_invalid_quantization(tmp_path, kwargs, message):
+    with pytest.raises(UnsupportedModelError, match=message):
+        huggingface.export_hf_model(
+            "hf://example/tiny-model", output=str(tmp_path / "m.lm7"), **kwargs
+        )
+
+
 def test_export_hf_model_rejects_a_non_hf_uri(tmp_path):
     with pytest.raises(UnsupportedModelError, match="expected a Hugging Face URI"):
         huggingface.export_hf_model("./local/model", output=str(tmp_path / "m.lm7"))

@@ -266,6 +266,7 @@ def _print_model_export(result: HuggingFaceExportResult) -> None:
     print(f"Target: {result.target}")
     print(f"Backend: {result.backend}")
     print(f"Dtype: {result.dtype}")
+    print(f"Quantization: {result.quantization}")
     print(f"Parameters: {result.parameter_count:,}")
     if result.sequence_bounds is None:
         print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
@@ -399,6 +400,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="model dtype (default: auto)",
     )
+    export_parser.add_argument(
+        "--quantize",
+        dest="quantization",
+        choices=("none", "int8"),
+        default="none",
+        help="calibrated XNNPACK INT8 quantization for ExecuTorch (default: none)",
+    )
     _add_json_argument(export_parser)
 
     bundle_parser = subparsers.add_parser("bundle", help="create and inspect LM7 bundles")
@@ -469,6 +477,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=args.target,
                 backend=args.backend,
                 dtype=args.dtype,
+                quantization=args.quantization,
                 dynamic_sequence=_dynamic_sequence(args.dynamic_seq),
             )
             (

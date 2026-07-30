@@ -375,6 +375,46 @@ def test_model_export_json(monkeypatch, capsys):
     assert calls["backend"] == "aot_inductor"
 
 
+def test_model_export_passes_int8_quantization(monkeypatch):
+    calls = {}
+
+    def export_model(model_uri, **kwargs):
+        calls.update(kwargs)
+        return HuggingFaceExportResult(
+            model_uri=model_uri,
+            model_id="example/tiny",
+            target="cpu:x86_64",
+            backend="executorch",
+            dtype="float32",
+            output="/tmp/model.lm7",
+            prompt="Hello",
+            input_tokens=2,
+            parameter_count=10,
+            export_ms=42.0,
+            artifact_bytes=2048,
+            files=("model.pte", "manifest.json"),
+            quantization="int8",
+        )
+
+    monkeypatch.setattr(cli, "export_hf_model", export_model)
+    assert (
+        cli.main(
+            [
+                "model",
+                "export",
+                "hf://example/tiny",
+                "/tmp/m.lm7",
+                "--backend",
+                "executorch",
+                "--quantize",
+                "int8",
+            ]
+        )
+        == 0
+    )
+    assert calls["quantization"] == "int8"
+
+
 def test_model_export_rejects_an_unknown_backend(capsys):
     with pytest.raises(SystemExit):
         cli.main(["model", "export", "hf://example/tiny", "/tmp/m.lm7", "--backend", "tensorrt"])

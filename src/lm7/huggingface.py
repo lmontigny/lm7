@@ -345,6 +345,7 @@ class HuggingFaceExportResult:
     export_ms: float
     artifact_bytes: int
     files: tuple[str, ...]
+    quantization: str = NO_QUANTIZATION
     sequence_bounds: tuple[int, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -386,6 +387,7 @@ def export_hf_model(
     target: str | TargetSpec = "auto",
     backend: str = "export",
     dtype: str = "auto",
+    quantization: str = NO_QUANTIZATION,
     dynamic_sequence: bool | tuple[int, int] = False,
 ) -> HuggingFaceExportResult:
     """Capture a Hugging Face causal LM into an LM7 artifact.
@@ -399,6 +401,19 @@ def export_hf_model(
     from .exporting import export as export_artifact
 
     model_id = _model_id(model_uri)
+    if quantization not in {NO_QUANTIZATION, "int8"}:
+        raise UnsupportedModelError(
+            f"Unsupported export quantization {quantization!r}; expected 'none' or 'int8'."
+        )
+    if quantization != NO_QUANTIZATION and backend != "executorch":
+        raise UnsupportedModelError(
+            "Export quantization is currently supported only by the ExecuTorch backend."
+        )
+    if quantization != NO_QUANTIZATION and dynamic_sequence:
+        raise UnsupportedModelError(
+            "ExecuTorch INT8 export currently requires a fixed input shape because the "
+            "captured example is also its calibration sample."
+        )
     resolved_target = resolve_target(target)
     torch_dtype = _resolve_dtype(dtype, resolved_target)
     transformers = _load_transformers()
@@ -461,6 +476,7 @@ def export_hf_model(
         backend=backend,
         output=output,
         shape_profile=_sequence_shape_profile(inputs, bounds) if bounds else None,
+        options={"quantization": quantization} if backend == "executorch" else None,
     )
     export_ms = (time.perf_counter() - started) * 1000
 
@@ -479,6 +495,7 @@ def export_hf_model(
         export_ms=export_ms,
         artifact_bytes=artifact_bytes,
         files=files,
+        quantization=quantization,
         sequence_bounds=bounds,
     )
 

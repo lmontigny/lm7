@@ -46,6 +46,31 @@ def test_export_and_reload_matches_eager(tmp_path):
     torch.testing.assert_close(reloaded(*example), expected, rtol=1e-4, atol=1e-4)
 
 
+def test_int8_export_and_reload_matches_eager(tmp_path):
+    source = model()
+    example = (torch.randn(8, 16),)
+    with torch.no_grad():
+        expected = source(*example)
+
+    artifact = lm7.export(
+        source,
+        args=example,
+        target="cpu",
+        backend="executorch",
+        output=tmp_path / "model-int8.lm7",
+        options={"quantization": "int8"},
+    )
+
+    requirements = artifact.manifest.runtime_requirements
+    assert requirements["quantization"] == "int8"
+    assert requirements["quantized_ops"] > 0
+    assert requirements["calibration_samples"] == 1
+    torch.testing.assert_close(artifact(*example), expected, rtol=2e-2, atol=2e-2)
+
+    reloaded = lm7.load_artifact(artifact.path)
+    torch.testing.assert_close(reloaded(*example), expected, rtol=2e-2, atol=2e-2)
+
+
 def test_manifest_records_delegate_partition(tmp_path):
     artifact = lm7.export(
         model(),
@@ -60,6 +85,9 @@ def test_manifest_records_delegate_partition(tmp_path):
     # A plain MLP is fully fusible, so XNNPACK must take at least one partition.
     assert requirements["delegated_calls"] >= 1
     assert requirements["total_calls"] >= requirements["delegated_calls"]
+    assert requirements["quantization"] == "none"
+    assert requirements["quantized_ops"] == 0
+    assert requirements["calibration_samples"] == 0
     assert requirements["device_bound"] is False
 
 
