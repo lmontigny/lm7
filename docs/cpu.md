@@ -90,6 +90,13 @@ That cuts SmolLM2-135M from 513 MiB to 210 MiB with the same next token on every
 prompt tried. Compute stays FP32, because x86-64 without AVX-512 has no native
 BF16 path.
 
+> [!TIP]
+> On Intel CPU, `--backend openvino --quantize int8` is the faster INT8 route and
+> uses a different mechanism (NNCF on the IR, not TorchAO on the modules). Measured
+> on SmolLM2-135M it is 1.83x faster than FP32 on an AVX2 part and 2.53x faster on
+> an AVX-512 + VNNI Xeon, where the TorchAO path below is *slower* than FP32 on
+> both. See [quantization](quantization.md).
+
 The footprint saving is reliable; the latency effect is not, and depends mostly on
 model size. Measured at sequence length 16, INT8 was 1.5x slower for
 SmolLM2-135M and 2.3x slower for Llama-3.2-1B on an AVX2-only part — and
