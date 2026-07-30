@@ -100,20 +100,19 @@ Not supported, with written plans: [Intel NPU](docs/openvino-evaluation.md),
 
 ## Tested model coverage
 
-LM7 is an early prototype: this is smoke-test coverage, not a model zoo. LM7
-doesn't allowlist models — any other Hugging Face causal LM is likely to
-*run* — but only the rows below have had their outputs actually compared
-against an unquantized baseline. See [limitations](docs/limitations.md) and
-[quantization](docs/quantization.md) for the caveats behind every row.
+Smoke-test coverage, not a model zoo — LM7 doesn't allowlist models, so other
+Hugging Face checkpoints will likely *run*, just without this validation. See
+[limitations](docs/limitations.md) and [quantization](docs/quantization.md)
+for details.
 
-| Model / architecture | Example | Tested for |
-| --- | --- | --- |
-| Dense CNN (vision) | `resnet18`, `mobilenet_v2` | `torch.compile` parity — CI, every push |
-| Transformer encoder (BERT) | `hf_Bert` | `torch.compile` parity — CI, every push |
-| Vision Transformer | `timm_vision_transformer` | `torch.compile` parity — CI, every push |
-| Sparse Mixture-of-Experts | Mixtral (tiny, random init) | `torch.compile` parity via `inductor` (CPU, NVIDIA) — CI, every push; export-based backends can't capture its data-dependent expert routing, see [limitations](docs/limitations.md#compilation-and-artifacts) |
-| [`HuggingFaceTB/SmolLM2-135M-Instruct`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | real pretrained checkpoint | Generation on every backend and hardware target in this README; INT8 and FP8 weight-only quantization; OpenVINO NNCF INT8; ExecuTorch XNNPACK export |
-| [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | real pretrained checkpoint | INT8, FP8, and NVFP4 weight-only quantization |
+| Model | Tested for |
+| --- | --- |
+| `resnet18`, `mobilenet_v2` | `torch.compile` parity (CI) |
+| `hf_Bert` (BERT) | `torch.compile` parity (CI) |
+| `timm_vision_transformer` (ViT) | `torch.compile` parity (CI) |
+| Mixtral, tiny (sparse MoE) | `torch.compile` parity, CPU + NVIDIA (CI) |
+| [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
+| [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization |
 
 ## 1. Install
 
