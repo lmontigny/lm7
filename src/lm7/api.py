@@ -12,11 +12,12 @@ from .cache import clear_cache
 from .detection import detect_targets, resolve_target
 from .module import CompiledModule
 from .planner import plan
+from .targets import TargetSpec
 
 
 def compile(
     model: torch.nn.Module,
-    target: str | None = None,
+    target: str | TargetSpec | None = None,
     *,
     backend: str | None = None,
     mode: str = "lazy",

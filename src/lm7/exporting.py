@@ -283,7 +283,7 @@ def export(
                 f"Model export stage failed for target {target}: {exc}. "
                 "Check that the model is export-compatible and provide representative inputs."
             ) from exc
-        signature = input_signature(args, kwargs)
+        signature = input_signature(args, dict(kwargs))
     else:
         raise TypeError("model must be an nn.Module or torch.export.ExportedProgram.")
     if isinstance(model, torch.export.ExportedProgram):
@@ -874,7 +874,7 @@ def _shape_profile_metadata(
     return {"argument_order": list(bound.arguments), "inputs": inputs}
 
 
-def _torch_dynamic_shapes(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+def _torch_dynamic_shapes(profile: Mapping[str, Any]) -> dict[str, Any]:
     inputs = profile["inputs"]
     return {
         input_name: {
