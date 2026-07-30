@@ -90,11 +90,13 @@ That cuts SmolLM2-135M from 513 MiB to 210 MiB with the same next token on every
 prompt tried. Compute stays FP32, because x86-64 without AVX-512 has no native
 BF16 path.
 
-The footprint saving is reliable; the latency effect is not, and depends on both
-model size and CPU. On an AVX2-only part INT8 was at parity for SmolLM2-135M and
-2.6x slower for Llama-3.2-1B — INT8 GEMM wants VNNI, which that machine lacks.
-Measure it for your model rather than assuming. See
-[quantization](quantization.md).
+The footprint saving is reliable; the latency effect is not, and depends mostly on
+model size. Measured at sequence length 16, INT8 was 1.5x slower for
+SmolLM2-135M and 2.3x slower for Llama-3.2-1B on an AVX2-only part — and
+**re-measuring on an AVX-512 + VNNI Xeon did not recover the 1B regression**,
+because weight-only quantization leaves activations in FP32 and so never issues an
+INT8 GEMM for `vpdpbusd` to accelerate. Measure it for your model rather than
+assuming a newer CPU will help. See [quantization](quantization.md).
 
 For an artifact to ship to an edge device rather than a process to run here, the
 ExecuTorch backend has a separate calibrated INT8 export flow — see
