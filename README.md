@@ -98,6 +98,32 @@ Not supported, with written plans: [Intel NPU](docs/openvino-evaluation.md),
 [Qualcomm Hexagon NPU](docs/qualcomm-hexagon.md), and
 [AMD MIGraphX](docs/amd-migraphx.md).
 
+## Tested model coverage
+
+LM7 is an early prototype: this is architecture-level smoke-test coverage, not
+a model zoo. See [limitations](docs/limitations.md) for the caveats behind
+every row.
+
+| Architecture | Example | Where |
+| --- | --- | --- |
+| Dense CNN (vision) | `resnet18`, `mobilenet_v2` | CI, every push |
+| Transformer encoder (BERT) | `hf_Bert` | CI, every push |
+| Vision Transformer | `timm_vision_transformer` | CI, every push |
+| Sparse Mixture-of-Experts | Mixtral (tiny, random init) | CI, every push — verified on `inductor` (CPU and NVIDIA); export-based backends can't capture its data-dependent expert routing, see [limitations](docs/limitations.md#compilation-and-artifacts) |
+
+Real pretrained Hugging Face checkpoints, exercised end-to-end (generation and
+quantization, not just a forward pass):
+
+| Model | Exercised for |
+| --- | --- |
+| [`HuggingFaceTB/SmolLM2-135M-Instruct`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation on every backend and hardware target in this README; INT8 and FP8 weight-only quantization; OpenVINO NNCF INT8; ExecuTorch XNNPACK export |
+| [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8, FP8, and NVFP4 weight-only quantization |
+
+Any other Hugging Face causal LM is likely to *run* — LM7 doesn't allowlist
+models — but only these two have had their outputs actually compared against
+an unquantized baseline. See [quantization](docs/quantization.md) for the
+per-(model, mode) results.
+
 ## 1. Install
 
 LM7 needs Python 3.10+ and a PyTorch build matching the target machine. It does
