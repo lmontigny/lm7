@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from lm7 import huggingface
+from lm7.detection import torch_device
 from lm7.errors import UnsupportedModelError
 from lm7.targets import TargetSpec
 
@@ -184,7 +185,9 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert len(calls["generate"]) == 2
     assert all(call["cache_implementation"] == "static" for call in calls["generate"])
     assert all(call["do_sample"] is False for call in calls["generate"])
-    assert result.backend == "inductor"
+    # A CPU target does not meet Transformers' compilation criteria, so the decode
+    # loop runs eagerly however the compile_config is spelled.
+    assert result.backend == "eager"
     assert result.cache_implementation == "static"
     assert result.input_tokens == 3
     assert result.generated_tokens == 4
@@ -192,6 +195,31 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert result.generated_text == "token-4 token-5 token-6 token-7"
     assert result.first_call_ms >= 0
     assert result.latency_ms >= 0
+
+
+@pytest.mark.parametrize(
+    ("target", "compiled"),
+    [
+        (TargetSpec("nvidia", "gpu"), True),
+        (TargetSpec("amd", "gpu"), True),
+        (TargetSpec("intel", "gpu"), True),
+        (TargetSpec("intel", "npu"), False),
+        (TargetSpec("apple", "gpu"), False),
+        (TargetSpec("tpu", "accelerator"), False),
+        (TargetSpec("tenstorrent", "accelerator"), False),
+        (TargetSpec("cpu", "cpu"), False),
+    ],
+)
+def test_compiled_decode_follows_the_target_device_type(target, compiled):
+    """Which targets Transformers will compile a decode step on.
+
+    Transformers gates compiled generation on the torch device type, so LM7's own
+    target mapping decides this: `apple` reaches `mps` and `tpu` reaches `xla`,
+    neither of which is on the upstream list, and generation there decodes eagerly
+    no matter what `compile_config` says. Constructing the device is enough to
+    check it, which keeps this runnable on a CPU-only build.
+    """
+    assert huggingface.compiles_decode(torch_device(target)) is compiled
 
 
 @pytest.mark.parametrize(

@@ -164,4 +164,18 @@ claimed:
 | `openxla` / `tpu`, `tenstorrent` | Need hardware that is not present. |
 | `apple` (MPS) | Needs a Mac. The other four validated models were checked there; this one was not. |
 | `intel:npu` | No NPU present, as [intel-npu.md](intel-npu.md) already records. |
-| Compiled generation (`lm7 model generate`) | The static KV-cache decode path was not exercised for this model; only the prefill forward pass above was. |
+
+## Decode
+
+Everything above is a prefill forward pass. The static KV-cache decode loop was
+measured separately and works: 32 greedy tokens in 389 ms steady after a 34.5 s
+first call on `nvidia:sm89`, one decode graph, no graph breaks, text identical to
+an uncompiled baseline.
+
+Decode is also where the prefill results stop transferring. TensorRT handles this
+model's prefill inside the accuracy bars above, but driving the *decode* loop with
+it produces silently different text that degenerates into a repeated newline
+token, and the OpenVINO dynamo backend crashes outright. Both are recorded in
+[compiled generation](huggingface-generation.md), along with the finding that
+Transformers — not LM7 — owns this compilation, and that it is skipped entirely
+off CUDA.
