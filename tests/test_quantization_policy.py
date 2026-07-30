@@ -7,11 +7,13 @@ import torch
 
 from lm7.errors import UnsupportedModelError
 from lm7.huggingface import (
-    FP8_WEIGHT_ONLY,
-    INT8_WEIGHT_ONLY,
+    FP8,
+    INT8,
+    NVFP4,
     VALIDATED_WEIGHT_ONLY,
     _apply_quantization,
     _validate_quantization,
+    normalize_quantization,
 )
 from lm7.targets import parse_target
 
@@ -34,7 +36,7 @@ def test_validated_models_are_accepted():
 
 def test_unvalidated_model_is_rejected():
     with pytest.raises(UnsupportedModelError, match="not validated"):
-        validate("some/unknown-model", INT8_WEIGHT_ONLY)
+        validate("some/unknown-model", INT8)
 
 
 def test_validation_is_per_mode_not_per_model():
@@ -43,13 +45,27 @@ def test_validation_is_per_mode_not_per_model():
     token under FP8 but diverges completely under INT8."""
     model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
     original = VALIDATED_WEIGHT_ONLY[model_id]
-    VALIDATED_WEIGHT_ONLY[model_id] = frozenset({FP8_WEIGHT_ONLY})
+    VALIDATED_WEIGHT_ONLY[model_id] = frozenset({FP8})
     try:
-        validate(model_id, FP8_WEIGHT_ONLY)
+        validate(model_id, FP8)
         with pytest.raises(UnsupportedModelError, match="not validated"):
-            validate(model_id, INT8_WEIGHT_ONLY)
+            validate(model_id, INT8)
     finally:
         VALIDATED_WEIGHT_ONLY[model_id] = original
+
+
+def test_long_form_names_normalize_to_short_names():
+    """`--quantization int8-weight-only` predates `--quantize int8`; both work."""
+    assert normalize_quantization("int8-weight-only") == INT8
+    assert normalize_quantization("fp8-weight-only") == FP8
+    assert normalize_quantization(INT8) == INT8
+    assert normalize_quantization(NVFP4) == NVFP4
+    assert normalize_quantization("none") == "none"
+
+
+def test_unknown_quantization_lists_the_short_names():
+    with pytest.raises(UnsupportedModelError, match="none, fp8, int8, nvfp4"):
+        validate("HuggingFaceTB/SmolLM2-135M-Instruct", "int4")
 
 
 def test_quantization_that_matches_no_layer_raises():
@@ -61,7 +77,7 @@ def test_quantization_that_matches_no_layer_raises():
     model = torch.nn.Sequential(torch.nn.Linear(8, 8)).eval()
 
     with pytest.raises(UnsupportedModelError, match="matched no quantizable layers"):
-        _apply_quantization(model, parse_target("cpu"), FP8_WEIGHT_ONLY)
+        _apply_quantization(model, parse_target("cpu"), FP8)
 
 
 def test_int8_filter_matches_plain_linears():
@@ -70,4 +86,38 @@ def test_int8_filter_matches_plain_linears():
     pytest.importorskip("torchao")
     model = torch.nn.Sequential(torch.nn.Linear(8, 8)).eval()
 
-    _apply_quantization(model, parse_target("cpu"), INT8_WEIGHT_ONLY)
+    _, converted = _apply_quantization(model, parse_target("cpu"), INT8)
+    assert converted == 1
+
+
+def test_nvfp4_skips_layers_whose_dims_are_not_multiples_of_16():
+    """NVFP4 stores a scale per 16-element block, so torchao raises on any other
+    shape. LM7 filters those layers out rather than failing the whole model."""
+    pytest.importorskip("torchao.prototype.mx_formats")
+    model = torch.nn.Sequential(
+        torch.nn.Linear(32, 32),  # eligible
+        torch.nn.Linear(30, 32),  # in_features not a multiple of 16
+        torch.nn.Linear(32, 20),  # out_features not a multiple of 16
+    ).eval()
+
+    _, converted = _apply_quantization(model, parse_target("cpu"), NVFP4)
+    assert converted == 1
+
+
+def test_nvfp4_raises_when_every_layer_is_ineligible():
+    pytest.importorskip("torchao.prototype.mx_formats")
+    model = torch.nn.Sequential(torch.nn.Linear(30, 20)).eval()
+
+    with pytest.raises(UnsupportedModelError, match="matched no quantizable layers"):
+        _apply_quantization(model, parse_target("cpu"), NVFP4)
+
+
+def test_nvfp4_is_validated_far_more_narrowly_than_int8():
+    """4-bit weights cost more accuracy than 8-bit at these model sizes. Only
+    Llama-3.2-1B held its top-1 token on all four prompts; SmolLM2-135M managed
+    2/4 and LFM2.5-230M 3/4, so neither is admitted. See docs/quantization.md."""
+    assert NVFP4 in VALIDATED_WEIGHT_ONLY["unsloth/Llama-3.2-1B-Instruct"]
+    assert NVFP4 not in VALIDATED_WEIGHT_ONLY["HuggingFaceTB/SmolLM2-135M-Instruct"]
+
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        validate("HuggingFaceTB/SmolLM2-135M-Instruct", NVFP4)

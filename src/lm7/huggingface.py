@@ -18,10 +18,20 @@ from .targets import TargetSpec
 # The tensors _LogitsOnly forwards, and therefore the only ones captured.
 _CAPTURED_INPUTS = ("input_ids", "attention_mask")
 
-INT8_WEIGHT_ONLY = "int8-weight-only"
-FP8_WEIGHT_ONLY = "fp8-weight-only"
-WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY})
+INT8 = "int8"
+FP8 = "fp8"
+NVFP4 = "nvfp4"
+WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8, FP8, NVFP4})
 NO_QUANTIZATION = "none"
+
+# The pre-0.2 spellings. `--quantize` advertises the short names; these keep
+# existing scripts and `--quantization` working.
+QUANTIZATION_ALIASES: dict[str, str] = {
+    "int8-weight-only": INT8,
+    "fp8-weight-only": FP8,
+}
+
+_QUANTIZATION_LABELS = {INT8: "INT8", FP8: "FP8", NVFP4: "NVFP4"}
 
 # Validated per model *and* per mode, because the two are not interchangeable:
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
@@ -29,10 +39,15 @@ NO_QUANTIZATION = "none"
 # model earns an entry here only after its outputs have been compared against an
 # unquantized baseline on real hardware. See docs/quantization.md.
 VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
-    "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY}),
-    "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8_WEIGHT_ONLY, FP8_WEIGHT_ONLY}),
+    "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8, FP8}),
+    "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8, FP8, NVFP4}),
 }
 WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
+
+
+def normalize_quantization(value: str) -> str:
+    """Map a deprecated long-form quantization name onto its short name."""
+    return QUANTIZATION_ALIASES.get(value, value)
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,7 @@ class HuggingFaceRunResult:
     parameter_count: int
     baseline_model_storage_bytes: int
     model_storage_bytes: int
+    quantized_modules: int
     input_tokens: int
     output_shape: tuple[int, ...]
     quantization_ms: float
@@ -208,6 +224,7 @@ def run_hf_model(
     """Load and run one compiled causal-LM forward pass from Hugging Face."""
     model_id = _model_id(model_uri)
     resolved_target = resolve_target(target)
+    quantization = normalize_quantization(quantization)
     _validate_quantization(quantization, resolved_target, backend, dtype, model_id)
     torch_dtype = _resolve_dtype(dtype, resolved_target, quantization)
     transformers = _load_transformers()
@@ -233,7 +250,7 @@ def run_hf_model(
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     baseline_model_storage_bytes = _model_storage_bytes(model)
     _reset_peak_memory(resolved_target)
-    quantization_ms = _apply_quantization(model, resolved_target, quantization)
+    quantization_ms, quantized_modules = _apply_quantization(model, resolved_target, quantization)
     model_storage_bytes = _model_storage_bytes(model)
     wrapped = compile(
         model,
@@ -275,6 +292,7 @@ def run_hf_model(
         parameter_count=parameter_count,
         baseline_model_storage_bytes=baseline_model_storage_bytes,
         model_storage_bytes=model_storage_bytes,
+        quantized_modules=quantized_modules,
         input_tokens=int(input_ids.shape[-1]),
         output_shape=tuple(logits.shape),
         quantization_ms=quantization_ms,
@@ -516,7 +534,7 @@ def _validate_quantization(
         raise UnsupportedModelError(
             f"Unsupported quantization {quantization!r}; expected one of: {choices}."
         )
-    label = "FP8" if quantization == FP8_WEIGHT_ONLY else "INT8"
+    label = _QUANTIZATION_LABELS[quantization]
     if target.vendor != "nvidia":
         raise UnsupportedModelError(
             f"{label} weight-only quantization is supported only on detected NVIDIA GPUs."
@@ -529,7 +547,7 @@ def _validate_quantization(
         raise UnsupportedModelError(
             f"{label} weight-only quantization requires dtype='auto' or dtype='bfloat16'."
         )
-    if quantization == FP8_WEIGHT_ONLY and not _supports_fp8(target):
+    if quantization == FP8 and not _supports_fp8(target):
         raise UnsupportedModelError(
             "FP8 weight-only quantization requires NVIDIA Ada (sm89), Hopper (sm90), "
             "or newer hardware."
@@ -551,19 +569,14 @@ def _apply_quantization(
     model: torch.nn.Module,
     target: TargetSpec,
     quantization: str,
-) -> float:
+) -> tuple[float, int]:
+    """Quantize in place, returning elapsed milliseconds and converted layer count."""
     if quantization == NO_QUANTIZATION:
-        return 0.0
+        return 0.0, 0
     torchao_quantization = _load_torchao_quantization()
     started = time.perf_counter()
-    config = (
-        torchao_quantization.Float8WeightOnlyConfig(version=2)
-        if quantization == FP8_WEIGHT_ONLY
-        else torchao_quantization.Int8WeightOnlyConfig(version=2)
-    )
-    filter_fn = (
-        _is_fp8_quantizable_linear if quantization == FP8_WEIGHT_ONLY else _is_quantizable_linear
-    )
+    config = _quantization_config(torchao_quantization, quantization)
+    filter_fn = _QUANTIZATION_FILTERS[quantization]
     # torchao silently does nothing when the filter matches no module, so an
     # unmatched filter would report a successful quantization that left the model
     # untouched. LFM2.5-230M hits this with the FP8 filter: it has no ".mlp."
@@ -571,20 +584,15 @@ def _apply_quantization(
     # logits.
     matched = sum(1 for fqn, module in model.named_modules() if filter_fn(module, fqn))
     if matched == 0:
-        selects = (
-            "linears whose module path contains '.mlp.'"
-            if quantization == FP8_WEIGHT_ONLY
-            else "every linear except lm_head"
-        )
         alternative = (
-            f" Try {INT8_WEIGHT_ONLY}, which selects every linear except lm_head."
-            if quantization == FP8_WEIGHT_ONLY
+            f" Try {INT8}, which selects every linear except lm_head."
+            if quantization != INT8
             else ""
         )
         raise UnsupportedModelError(
             f"{quantization} matched no quantizable layers in this model, so quantization "
-            f"would silently do nothing. It selects {selects}, and this model has none. "
-            f"Use quantization='none'.{alternative}"
+            f"would silently do nothing. It selects {_QUANTIZATION_SELECTS[quantization]}, "
+            f"and this model has none. Use quantization='none'.{alternative}"
         )
     torchao_quantization.quantize_(
         model,
@@ -593,17 +601,51 @@ def _apply_quantization(
         device=torch_device(target),
     )
     _synchronize(target)
-    return (time.perf_counter() - started) * 1000
+    return (time.perf_counter() - started) * 1000, matched
+
+
+def _quantization_config(torchao_quantization: ModuleType, quantization: str) -> Any:
+    if quantization == FP8:
+        return torchao_quantization.Float8WeightOnlyConfig(version=2)
+    if quantization == NVFP4:
+        return _load_torchao_nvfp4().NVFP4WeightOnlyConfig()
+    return torchao_quantization.Int8WeightOnlyConfig(version=2)
+
+
+def _is_lm_head(fqn: str) -> bool:
+    return fqn == "lm_head" or fqn.endswith(".lm_head")
 
 
 def _is_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
-    return isinstance(module, torch.nn.Linear) and not (
-        fqn == "lm_head" or fqn.endswith(".lm_head")
-    )
+    return isinstance(module, torch.nn.Linear) and not _is_lm_head(fqn)
 
 
 def _is_fp8_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
     return isinstance(module, torch.nn.Linear) and ".mlp." in fqn
+
+
+def _is_nvfp4_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
+    # NVFP4 packs two 4-bit values per byte against a scale for every block of
+    # 16 elements, so torchao raises unless both trailing weight dimensions are
+    # multiples of 16. Skipping those layers keeps a model with one odd-shaped
+    # projection usable instead of failing the whole run.
+    if not isinstance(module, torch.nn.Linear) or _is_lm_head(fqn):
+        return False
+    out_features, in_features = module.weight.shape[-2:]
+    return out_features % 16 == 0 and in_features % 16 == 0
+
+
+_QUANTIZATION_FILTERS = {
+    INT8: _is_quantizable_linear,
+    FP8: _is_fp8_quantizable_linear,
+    NVFP4: _is_nvfp4_quantizable_linear,
+}
+
+_QUANTIZATION_SELECTS = {
+    INT8: "every linear except lm_head",
+    FP8: "linears whose module path contains '.mlp.'",
+    NVFP4: "every linear except lm_head whose last two dimensions are multiples of 16",
+}
 
 
 def _supports_fp8(target: TargetSpec) -> bool:
@@ -650,6 +692,19 @@ def _load_torchao_quantization() -> ModuleType:
     except ImportError as exc:
         raise UnsupportedModelError(
             'TorchAO quantization is not installed. Install it with: pip install "lm7[hf,torchao]".'
+        ) from exc
+
+
+def _load_torchao_nvfp4() -> ModuleType:
+    # NVFP4 lives under torchao.prototype, so it carries no API stability promise
+    # and moved module in recent releases. Fail with the pin rather than an
+    # ImportError from inside torchao.
+    try:
+        return importlib.import_module("torchao.prototype.mx_formats")
+    except ImportError as exc:
+        raise UnsupportedModelError(
+            "NVFP4 quantization needs torchao.prototype.mx_formats, which this torchao "
+            'build does not provide. Install the pinned version with: pip install "lm7[hf,torchao]".'
         ) from exc
 
 

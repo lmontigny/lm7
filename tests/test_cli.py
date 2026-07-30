@@ -110,10 +110,11 @@ def test_model_run_json(monkeypatch, capsys):
         target="nvidia:sm89",
         backend="inductor",
         dtype="bfloat16",
-        quantization="fp8-weight-only",
+        quantization="fp8",
         parameter_count=10,
         baseline_model_storage_bytes=100,
         model_storage_bytes=75,
+        quantized_modules=3,
         input_tokens=2,
         output_shape=(1, 2, 8),
         quantization_ms=0,
@@ -145,8 +146,8 @@ def test_model_run_json(monkeypatch, capsys):
                 "inductor",
                 "--dtype",
                 "bfloat16",
-                "--quantization",
-                "fp8-weight-only",
+                "--quantize",
+                "fp8",
                 "--json",
             ]
         )
@@ -159,7 +160,7 @@ def test_model_run_json(monkeypatch, capsys):
         "target": "nvidia",
         "backend": "inductor",
         "dtype": "bfloat16",
-        "quantization": "fp8-weight-only",
+        "quantization": "fp8",
     }
     output = json.loads(capsys.readouterr().out)
     assert output["model_uri"] == "hf://example/tiny"
@@ -168,6 +169,25 @@ def test_model_run_json(monkeypatch, capsys):
     assert output["model_storage_bytes"] == 75
     assert output["peak_memory_bytes"] == 1024
     assert output["next_token"] == " world"
+
+
+def test_model_run_accepts_the_deprecated_quantization_flag(monkeypatch, capsys):
+    """`--quantization int8-weight-only` predates `--quantize int8`. It still
+    parses, and run_hf_model normalizes the long name."""
+    calls = {}
+
+    def run_model(model_uri, **kwargs):
+        calls.update(kwargs)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "run_hf_model", run_model)
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            ["model", "run", "hf://example/tiny", "--quantization", "int8-weight-only", "--json"]
+        )
+
+    assert calls["quantization"] == "int8-weight-only"
 
 
 def test_model_generate_json(monkeypatch, capsys):

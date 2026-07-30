@@ -332,22 +332,26 @@ Quantization stores or computes tensors in fewer bits than the model was trained
 in. It has two halves, and **LM7 implements only the first** — weight-only, with
 BF16 compute:
 
-| `--quantization` | Weight storage | Compute | Requires |
+| `--quantize` | Weight storage | Compute | Requires |
 | --- | --- | --- | --- |
 | `none` (default) | as loaded | FP32 / FP16 / BF16 | nothing |
-| `int8-weight-only` | INT8 | BF16 | NVIDIA GPU |
-| `fp8-weight-only` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer |
+| `int8` | INT8 | BF16 | NVIDIA GPU |
+| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer |
+| `nvfp4` | NVFP4 (4-bit, block-16) | BF16 | NVIDIA GPU |
 
 ```bash
 uv pip install -e ".[hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia --backend inductor --dtype bfloat16 \
-  --quantization int8-weight-only
+  --quantize int8
 ```
 
 The conversion is [TorchAO](https://github.com/pytorch/ao)'s. It is NVIDIA-only,
-validated for `SmolLM2-135M-Instruct` alone, and can be *slower* at small batch
-sizes, so it stays opt-in. Activation quantization is not implemented. See
+opt-in, and admitted per **(model, mode)** pair — a mode is rejected for a model
+whose outputs have not been compared against a BF16 baseline on real hardware.
+`nvfp4` buys the smallest footprint and costs the most accuracy; it clears that
+bar for one model so far. Both `--quantize` and the older `--quantization`
+spelling work. Activation quantization is not implemented. See
 [quantization](docs/quantization.md).
 
 ## Examples and benchmarks

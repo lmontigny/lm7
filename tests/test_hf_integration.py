@@ -8,8 +8,8 @@ import torch
 import lm7
 from lm7.detection import resolve_target, torch_device
 from lm7.huggingface import (
-    FP8_WEIGHT_ONLY,
-    INT8_WEIGHT_ONLY,
+    FP8,
+    INT8,
     _apply_quantization,
     _model_storage_bytes,
     export_hf_model,
@@ -101,8 +101,8 @@ def test_hf_model_runner_on_accelerator():
 @pytest.mark.parametrize(
     ("quantization", "minimum_cosine", "maximum_p99_error", "maximum_storage_ratio"),
     [
-        (INT8_WEIGHT_ONLY, 0.99, 1.0, 0.7),
-        (FP8_WEIGHT_ONLY, 0.995, 2.0, 0.75),
+        (INT8, 0.99, 1.0, 0.7),
+        (FP8, 0.995, 2.0, 0.75),
     ],
 )
 def test_weight_only_quantization_matches_bfloat16_logits(

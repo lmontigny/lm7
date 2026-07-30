@@ -14,12 +14,13 @@ class FakeDecoderLayer(torch.nn.Module):
     def __init__(self):
         super().__init__()
         # Named so the fully qualified path contains ".mlp.", which is what the
-        # FP8 filter selects on.
-        self.mlp = torch.nn.Sequential(torch.nn.Linear(8, 8))
+        # FP8 filter selects on. Both dimensions are multiples of 16 so the
+        # NVFP4 filter matches it too.
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(16, 16))
 
 
 class FakeQuantizableLM(torch.nn.Module):
-    """A fake with layers both weight-only filters actually match."""
+    """A fake with layers every weight-only filter actually matches."""
 
     def __init__(self):
         super().__init__()
@@ -209,7 +210,7 @@ def test_run_hf_model_rejects_invalid_uri(value):
 
 @pytest.mark.parametrize(
     "quantization",
-    [huggingface.INT8_WEIGHT_ONLY, huggingface.FP8_WEIGHT_ONLY],
+    [huggingface.INT8, huggingface.FP8],
 )
 def test_auto_dtype_depends_on_target(quantization):
     assert huggingface._resolve_dtype("auto", TargetSpec("cpu", "cpu")) == torch.float32
@@ -245,10 +246,10 @@ def test_int8_weight_only_uses_torchao_version_two(monkeypatch):
     monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
 
     model = FakeQuantizableLM()
-    elapsed = huggingface._apply_quantization(
+    elapsed, converted = huggingface._apply_quantization(
         model,
         TargetSpec("cpu", "cpu"),
-        huggingface.INT8_WEIGHT_ONLY,
+        huggingface.INT8,
     )
 
     assert calls["version"] == 2
@@ -256,6 +257,7 @@ def test_int8_weight_only_uses_torchao_version_two(monkeypatch):
     assert calls["filter_fn"] is huggingface._is_quantizable_linear
     assert calls["device"] == torch.device("cpu")
     assert elapsed >= 0
+    assert converted > 0
 
 
 def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
@@ -279,10 +281,10 @@ def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
     monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
 
     model = FakeQuantizableLM()
-    elapsed = huggingface._apply_quantization(
+    elapsed, converted = huggingface._apply_quantization(
         model,
         TargetSpec("nvidia", "gpu"),
-        huggingface.FP8_WEIGHT_ONLY,
+        huggingface.FP8,
     )
 
     assert calls["version"] == 2
@@ -290,6 +292,45 @@ def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
     assert calls["filter_fn"] is huggingface._is_fp8_quantizable_linear
     assert calls["device"] == torch.device("cuda", 0)
     assert elapsed >= 0
+    assert converted > 0
+
+
+def test_nvfp4_uses_the_prototype_mx_formats_config(monkeypatch):
+    """NVFP4 lives in torchao.prototype, not torchao.quantization, so it is
+    loaded separately and takes no version argument."""
+    calls = {}
+
+    class Config:
+        def __init__(self):
+            calls["config_built"] = True
+
+    def quantize(model, config, *, filter_fn, device):
+        calls["filter_fn"] = filter_fn
+        calls["device"] = device
+
+    monkeypatch.setattr(
+        huggingface,
+        "_load_torchao_quantization",
+        lambda: SimpleNamespace(quantize_=quantize),
+    )
+    monkeypatch.setattr(
+        huggingface,
+        "_load_torchao_nvfp4",
+        lambda: SimpleNamespace(NVFP4WeightOnlyConfig=Config),
+    )
+    monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
+
+    model = FakeQuantizableLM()
+    elapsed, converted = huggingface._apply_quantization(
+        model,
+        TargetSpec("nvidia", "gpu"),
+        huggingface.NVFP4,
+    )
+
+    assert calls["config_built"] is True
+    assert calls["filter_fn"] is huggingface._is_nvfp4_quantizable_linear
+    assert elapsed >= 0
+    assert converted > 0
 
 
 def test_int8_weight_only_excludes_lm_head():
@@ -320,7 +361,7 @@ def test_fp8_weight_only_selects_mlp_linears():
 def test_int8_weight_only_rejects_unsupported_combinations(target, backend, dtype, message):
     with pytest.raises(UnsupportedModelError, match=message):
         huggingface._validate_quantization(
-            huggingface.INT8_WEIGHT_ONLY,
+            huggingface.INT8,
             target,
             backend,
             dtype,
@@ -330,7 +371,7 @@ def test_int8_weight_only_rejects_unsupported_combinations(target, backend, dtyp
 def test_int8_weight_only_rejects_unvalidated_model():
     with pytest.raises(UnsupportedModelError, match="not validated"):
         huggingface._validate_quantization(
-            huggingface.INT8_WEIGHT_ONLY,
+            huggingface.INT8,
             TargetSpec("nvidia", "gpu"),
             "inductor",
             "bfloat16",
@@ -341,7 +382,7 @@ def test_int8_weight_only_rejects_unvalidated_model():
 def test_fp8_weight_only_rejects_ampere():
     with pytest.raises(UnsupportedModelError, match="Ada"):
         huggingface._validate_quantization(
-            huggingface.FP8_WEIGHT_ONLY,
+            huggingface.FP8,
             TargetSpec("nvidia", "gpu", architecture="sm80"),
             "inductor",
             "bfloat16",

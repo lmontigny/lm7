@@ -215,6 +215,7 @@ def _print_model_run(result: HuggingFaceRunResult) -> None:
             f"Model storage: {baseline_mib:.1f} -> {storage_mib:.1f} MiB "
             f"({reduction:.1%} reduction)"
         )
+        print(f"Quantized layers: {result.quantized_modules}")
     print(f"Input tokens: {result.input_tokens}")
     if result.quantization_ms:
         print(f"Quantization time: {result.quantization_ms:.2f} ms")
@@ -327,10 +328,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="model dtype (default: auto)",
     )
     run_parser.add_argument(
-        "--quantization",
-        choices=("none", "int8-weight-only", "fp8-weight-only"),
+        "--quantize",
+        dest="quantization",
+        choices=("none", "int8", "fp8", "nvfp4"),
         default="none",
-        help="experimental model quantization (default: none)",
+        help="experimental weight-only quantization (default: none)",
+    )
+    # The pre-0.2 spelling, kept working so existing scripts do not break.
+    run_parser.add_argument(
+        "--quantization",
+        dest="quantization",
+        choices=("none", "int8", "fp8", "nvfp4", "int8-weight-only", "fp8-weight-only"),
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     _add_json_argument(run_parser)
 

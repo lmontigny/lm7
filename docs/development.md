@@ -246,7 +246,7 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --backend inductor
 ```
 
-Validate the optional TorchAO INT8 and FP8 weight-only paths:
+Validate the optional TorchAO INT8, FP8, and NVFP4 weight-only paths:
 
 ```bash
 uv pip install -e ".[dev,hf,torchao]"
@@ -254,20 +254,30 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia \
   --backend inductor \
   --dtype bfloat16 \
-  --quantization int8-weight-only
+  --quantize int8
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target nvidia \
   --backend inductor \
   --dtype bfloat16 \
-  --quantization fp8-weight-only
+  --quantize fp8
+lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
+  --target nvidia \
+  --backend inductor \
+  --dtype bfloat16 \
+  --quantize nvfp4
 LM7_RUN_HF_TESTS=1 python -m pytest tests/test_hf_integration.py -q
 ```
 
-FP8 requires NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer. NVFP4 requires
-Blackwell (`sm100+`) in the current TorchAO execution path and is therefore not
-available on the local RTX 4070. LM7 quantizes only MLP linear weights in the
-validated FP8 path because applying FP8 to every linear changed the predicted
-next token.
+FP8 requires NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer. NVFP4 needs no
+minimum architecture: hardware FP4 matmul is Blackwell-only, but weight-only
+quantization unpacks to BF16 inside the matmul, so it runs on the local RTX 4070
+and was validated there. It does need `inductor` — eager NVFP4 measured 9.4x
+slower than eager BF16, because nothing fuses the unpack.
+
+LM7 quantizes only MLP linear weights in the validated FP8 path because applying
+FP8 to every linear changed the predicted next token. NVFP4 additionally skips
+any linear whose last two dimensions are not multiples of 16, which the format
+requires.
 
 ## Compiler IR and generated code
 
