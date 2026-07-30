@@ -33,6 +33,19 @@ coverage is CPU.
   `torch.export.load`.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
+- **Sparse Mixture-of-Experts models compile, but do not export.** The
+  reference transformers implementation (e.g. Mixtral) routes tokens to
+  experts with a data-dependent Python loop (`for expert_idx in expert_hit:
+  ...`) — the number of iterations is only known at runtime. `torch.compile`
+  tolerates that: Dynamo graph-breaks around the loop and falls back to eager
+  for it, so `inductor` and `tensorrt` (both JIT, both Dynamo-based) compile
+  and run these models correctly. `torch.export` cannot: it must capture one
+  static graph and hard-fails with `GuardOnDataDependentSymNode` on the same
+  loop. Every export-based backend — `aot_inductor`, `openvino`,
+  `onnxruntime`, `executorch`, `iree_vulkan`, `litert`, `stablehlo` — calls
+  `torch.export` internally, so none of them support this architecture today.
+  See [`examples/sparse_moe.py`](../examples/sparse_moe.py) for a compiling
+  example on CPU and NVIDIA.
 
 ## Per-backend scope
 
