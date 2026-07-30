@@ -32,10 +32,11 @@ use H100 with large HBM >32GB or something to check usual llama model, liquidAI 
 IREE vulkan? IREE
 ExecuTorch Vulkan is a separate edge/Android deployment path.
 torch-mlir as the StableHLO lowering path
+add more model support from HF
+-> HackerNews feedback on 7 days
 
-** today **
+### Done ###
 simplify readme see z, use figure to show all the backend
 add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
 
--> HackerNews feedback on 7 days
