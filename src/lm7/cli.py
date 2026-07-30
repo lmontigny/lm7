@@ -235,7 +235,14 @@ def _print_model_generate(result: HuggingFaceGenerateResult) -> None:
     print(f"Input tokens: {result.input_tokens}")
     print(f"Generated tokens: {result.generated_tokens}")
     print(f"KV cache: {result.cache_implementation}")
-    print(f"First generation (includes compile): {result.first_call_ms:.2f} ms")
+    # Only the compiling backends pay a compile on the first generation; saying so
+    # unconditionally would explain an eager target's timings with a step it skipped.
+    first_call_label = (
+        "First generation (includes compile)"
+        if result.backend != "eager"
+        else "First generation"
+    )
+    print(f"{first_call_label}: {result.first_call_ms:.2f} ms")
     print(f"Steady generation: {result.latency_ms:.2f} ms")
     if result.peak_memory_bytes is not None:
         print(f"Peak GPU memory: {result.peak_memory_bytes / 1024**2:.1f} MiB")

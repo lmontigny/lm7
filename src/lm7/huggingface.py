@@ -73,6 +73,17 @@ WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 # compresses the IR's weights with NNCF and needs no calibration.
 QUANTIZING_EXPORT_BACKENDS = frozenset({"executorch", "openvino"})
 
+# Transformers decides for itself whether to compile a decode step, and only these
+# torch device types satisfy it -- see `_valid_auto_compile_criteria` in
+# transformers/generation/utils.py. Anywhere else it logs "Compilation will be
+# skipped" and decodes eagerly, so a passed `compile_config` is ignored. LM7 mirrors
+# the upstream set rather than second-guessing it, and reports the backend that
+# actually ran instead of the one it asked for. Measured locally: forcing the CPU
+# path to compile anyway (the private `_compile_all_devices` flag) bought 1.06x for
+# a 43 s compile, so there is nothing to reclaim here. See
+# docs/huggingface-generation.md.
+_COMPILED_DECODE_DEVICE_TYPES = frozenset({"cuda", "xpu", "neuron", "tpu"})
+
 # NNCF compresses every eligible layer, the vocabulary projection included, so
 # it is checked per model like the runtime path. SmolLM2-135M held 4/4 top-1
 # tokens at a 1.20 max logit difference and DeepSeek-Coder-1.3B 4/4 at 0.79;
@@ -149,7 +160,12 @@ def generate_hf_model(
     backend: str = "auto",
     dtype: str = "auto",
 ) -> HuggingFaceGenerateResult:
-    """Greedily generate with an eager prefill and compiled static-cache decode."""
+    """Greedily generate with an eager prefill and a static-cache decode loop.
+
+    The decode loop is compiled only where Transformers agrees to compile it --
+    see ``_COMPILED_DECODE_DEVICE_TYPES``. On other targets generation still runs,
+    and the returned ``backend`` says ``eager`` because that is what executed.
+    """
     if max_new_tokens < 2:
         raise UnsupportedModelError(
             "Compiled generation requires max_new_tokens >= 2: the first token "
@@ -198,6 +214,9 @@ def generate_hf_model(
         for name, value in inputs.items()
     }
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    compiles_decode = device.type in _COMPILED_DECODE_DEVICE_TYPES
+    # These are also CompileConfig's own defaults, so this pins the behaviour
+    # against a future change in that default rather than requesting anything new.
     compile_config = compile_config_type(
         backend="inductor",
         mode="reduce-overhead",
@@ -238,7 +257,7 @@ def generate_hf_model(
         model_id=model_id,
         prompt=prompt,
         target=str(resolved_target),
-        backend="inductor",
+        backend="inductor" if compiles_decode else "eager",
         dtype=str(torch_dtype).removeprefix("torch."),
         parameter_count=parameter_count,
         input_tokens=prompt_tokens,

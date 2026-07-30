@@ -184,7 +184,9 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert len(calls["generate"]) == 2
     assert all(call["cache_implementation"] == "static" for call in calls["generate"])
     assert all(call["do_sample"] is False for call in calls["generate"])
-    assert result.backend == "inductor"
+    # A CPU target does not meet Transformers' compilation criteria, so the decode
+    # loop runs eagerly however the compile_config is spelled.
+    assert result.backend == "eager"
     assert result.cache_implementation == "static"
     assert result.input_tokens == 3
     assert result.generated_tokens == 4
@@ -192,6 +194,30 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert result.generated_text == "token-4 token-5 token-6 token-7"
     assert result.first_call_ms >= 0
     assert result.latency_ms >= 0
+
+
+def test_generate_hf_model_reports_inductor_where_transformers_compiles(monkeypatch):
+    """A CUDA target does meet the criteria, so the same call reports inductor.
+
+    The pair of tests is the point: the reported backend has to follow what
+    Transformers actually did, not what LM7 asked for.
+    """
+    calls = {}
+    monkeypatch.setattr(
+        huggingface, "_load_transformers", lambda: _fake_generation_transformers(calls)
+    )
+    monkeypatch.setattr(huggingface, "resolve_target", lambda target: TargetSpec("nvidia", "gpu"))
+    monkeypatch.setattr(huggingface, "torch_device", lambda target: torch.device("cuda", 0))
+
+    result = huggingface.generate_hf_model(
+        "hf://example/tiny-model",
+        prompt="Hello",
+        max_new_tokens=4,
+        target="nvidia",
+    )
+
+    assert result.backend == "inductor"
+    assert result.cache_implementation == "static"
 
 
 @pytest.mark.parametrize(
