@@ -162,6 +162,52 @@ SmolLM2.
 > did not reproduce: measured one configuration per process, INT8 is at parity
 > for SmolLM2. The table above is the isolated measurement.
 
+## INT8 through OpenVINO, for an artifact rather than a process
+
+Everything above quantizes a model inside a running Python process. To ship
+something instead, `lm7 model export --backend openvino --quantize int8`
+compresses the OpenVINO IR's weights with
+[NNCF](https://github.com/openvinotoolkit/nncf) between `convert_model` and
+`save_model`. That is a **different mechanism** from the TorchAO path: it needs
+no calibration data, it runs on the IR rather than on `nn.Linear` modules, and
+the result is a `.xml`/`.bin` pair that loads without PyTorch.
+
+It also compresses more. TorchAO leaves `lm_head` in full precision; NNCF
+compresses every eligible layer including the embedding and the vocabulary
+projection, which is where the extra saving comes from:
+
+| model | IR weights | top-1 | max logit diff | FP32 | INT8 |
+| --- | --- | --- | --- | --- | --- |
+| SmolLM2-135M | 538.1 → 135.2 MB (**3.98x**) | 4/4 | 1.20 | ~36 ms | ~31 ms (**1.16x faster**) |
+| Llama-3.2-1B | 4943.3 → 1237.5 MB (3.99x) | **3/4** | 1.79 | ~292 ms | ~284 ms (parity) |
+
+Intel i7-8086K, sequence length 16, median of 30 after warmup, one IR per
+process. This is the only quantization path measured here that is *faster* than
+its baseline rather than slower — but only on the smaller model, and only
+modestly.
+
+**Llama-3.2-1B is rejected.** It loses a top-1 token on one prompt in four, and
+excluding `lm_head` from compression did not recover it, because that model ties
+its output projection to its input embedding — so the shared weight is still
+compressed through the embedding. The gate is therefore per model, as it is for
+the runtime path.
+
+Full post-training quantization (`nncf.quantize`, which also quantizes
+activations, and does need calibration data) was measured and **not adopted**:
+on SmolLM2-135M it produced a max logit difference of 11.9 against FP32 — ten
+times the weight-only path — and was *slower* than weight-only at 33.0 ms,
+because INT8 activations want VNNI this CPU does not have.
+
+One caveat about artifact size: LM7 writes the source `exported_program.pt2`
+alongside the compiled IR, and that stays FP32. The deployable IR is 3.98x
+smaller, but the `.lm7` directory as a whole is not.
+
+```bash
+uv pip install -e ".[hf,openvino]"
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct out.lm7 \
+  --backend openvino --target cpu --quantize int8
+```
+
 ## Scope and caveats
 
 > [!NOTE]

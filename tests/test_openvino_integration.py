@@ -201,3 +201,50 @@ def test_openvino_ir_artifact_loads_without_torch():
         actual = torch.from_numpy(numpy.load(output_path))
 
     torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_int8_export_shrinks_the_ir_and_still_matches_eager(tmp_path):
+    """NNCF weight compression is applied between convert_model and save_model,
+    so it shrinks the IR the artifact ships rather than the graph shape."""
+    pytest.importorskip("nncf")
+    torch.manual_seed(0)
+    source = model()
+    example = torch.randn(8, 16)
+    expected = copy.deepcopy(source)(example)
+
+    baseline = lm7.export(
+        copy.deepcopy(source),
+        args=(example,),
+        target="cpu",
+        backend="openvino",
+        output=tmp_path / "fp32.lm7",
+    )
+    quantized = lm7.export(
+        source,
+        args=(example,),
+        target="cpu",
+        backend="openvino",
+        output=tmp_path / "int8.lm7",
+        options={"quantization": "int8"},
+    )
+
+    baseline_bytes = (baseline.path / "compiled_model.bin").stat().st_size
+    quantized_bytes = (quantized.path / "compiled_model.bin").stat().st_size
+    assert quantized_bytes < baseline_bytes
+
+    # INT8 weights move the outputs well beyond the FP32 path's 1e-6, so this
+    # only asserts the artifact still computes the same function approximately.
+    torch.testing.assert_close(quantized(example), expected, rtol=0.1, atol=0.1)
+    reloaded = lm7.load_artifact(quantized.path)
+    torch.testing.assert_close(reloaded(example), expected, rtol=0.1, atol=0.1)
+
+
+def test_openvino_rejects_an_unknown_quantization():
+    with pytest.raises(CompilationError, match="Unsupported OpenVINO quantization"):
+        lm7.compile(
+            model(),
+            target="cpu",
+            backend="openvino",
+            fallback="error",
+            options={"quantization": "int4"},
+        )(torch.randn(8, 16))

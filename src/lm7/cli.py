@@ -405,7 +405,10 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="quantization",
         choices=("none", "int8"),
         default="none",
-        help="calibrated XNNPACK INT8 quantization for ExecuTorch (default: none)",
+        help=(
+            "INT8 export quantization: calibrated XNNPACK PTQ on the executorch "
+            "backend, NNCF weight compression on openvino (default: none)"
+        ),
     )
     _add_json_argument(export_parser)
 

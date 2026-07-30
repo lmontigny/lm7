@@ -31,7 +31,7 @@ onnxruntime-gpu = [
     "numpy>=1.26,<2.5",
 ]
 tensorrt = ["torch-tensorrt==2.12.1"]
-openvino = ["openvino>=2025.0"]
+openvino = ["openvino>=2025.0", "nncf>=2.14"]
 iree-vulkan = [
     "iree-turbine>=3.9,<4",
     "iree-base-compiler>=3.11,<4",

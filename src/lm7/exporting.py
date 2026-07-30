@@ -331,6 +331,7 @@ def export(
                 if compiler_options.get("static_shapes", True)
                 else None,
                 compress_to_fp16=bool(compiler_options.get("compress_to_fp16", False)),
+                quantization=str(compiler_options.get("quantization", "none")),
             )
             compiled_file = COMPILED_IR_NAME
             compiled_sha256 = _file_sha256(staging / COMPILED_IR_NAME)
