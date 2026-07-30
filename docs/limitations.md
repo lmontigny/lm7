@@ -22,10 +22,11 @@ coverage is CPU.
 
 ## Compilation and artifacts
 
-- **JIT results are process-local.** JIT-compiled callables and TensorRT engines
-  do not outlive the process. Only `aot_inductor`, `openvino`, `onnxruntime`,
+- **JIT results are process-local.** A JIT-compiled callable does not outlive
+  the process. Only `aot_inductor`, `openvino`, `onnxruntime`, `tensorrt`,
   `iree_vulkan`, `litert`, `executorch`, `stablehlo`, and `lm7.export` produce
-  something another process can load.
+  something another process can load — and `tensorrt` only through
+  `lm7.export`; its `lm7.compile` engines still die with the process.
 - **Exported causal-LM artifacts are prefill-only.** `--dynamic-seq` makes the
   sequence length variable within recorded bounds; the batch dimension stays
   fixed, and a KV-cache decode loop is not captured. LM7 captures a logits-only
@@ -53,7 +54,7 @@ coverage is CPU.
 | --- | --- |
 | `inductor` | The default and the best-covered path. CPU is the only target with CI. |
 | `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). |
-| `tensorrt` | NVIDIA only, JIT only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). |
+| `tensorrt` | NVIDIA only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). `lm7.export` serializes the engine so a second process need not rebuild it; the artifact is static-shape and bound to the GPU architecture, TensorRT version, and Torch-TensorRT version that built it. |
 | `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on export, validated for one model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
 | `onnxruntime` | CPU and NVIDIA CUDA. Returns CPU tensors even after CUDA execution, because the initial adapter uses NumPy rather than I/O binding. Tensor-only inputs and flat outputs; external-data packaging above the 2 GiB protobuf limit is future work. See the [guide](onnxruntime.md). |
 | `iree_vulkan` | Export-only and experimental: fixed shapes, tensor-only I/O, FP32 MLP execution is the validated scope. Causal LMs, dynamic sequences, KV caches, and WebGPU are future work. See the [guide](iree-vulkan.md). |

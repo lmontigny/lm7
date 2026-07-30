@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import lm7
+from lm7.errors import ArtifactLoadError
 
 pytestmark = [
     pytest.mark.cuda,
@@ -87,3 +88,53 @@ def test_smollm2_tensorrt_matches_eager_logits():
     assert cosine.item() >= 0.9999
     assert p99_error.item() <= 0.15
     assert actual[:, -1].argmax().equal(expected[:, -1].argmax())
+
+
+def test_tensorrt_engine_survives_export_and_reload(tmp_path):
+    """The point of the AOT path: a second process must not rebuild the engine.
+
+    Building SmolLM2-135M took 54 s on an Ada GPU against 4 s to load the saved
+    engine, so this is the difference between a usable artifact and a rebuild.
+    """
+    torch.manual_seed(0)
+    source = torch.nn.Sequential(
+        torch.nn.Linear(16, 64),
+        torch.nn.ReLU(),
+        torch.nn.Linear(64, 4),
+    ).eval()
+    example = torch.randn(8, 16, device="cuda")
+    expected = copy.deepcopy(source).cuda()(example)
+
+    artifact = lm7.export(
+        source,
+        args=(example,),
+        target="nvidia",
+        backend="tensorrt",
+        output=tmp_path / "trt.lm7",
+    )
+
+    assert artifact.manifest.compiled_file == "compiled_model.trt.pt2"
+    requirements = artifact.manifest.runtime_requirements or {}
+    # An engine is tuned for one GPU architecture; the manifest has to say which.
+    assert requirements["device_bound"] is True
+    assert requirements["compute_capability"].startswith("sm")
+    assert requirements["torch-tensorrt"]
+    torch.testing.assert_close(artifact(example), expected, rtol=2e-3, atol=2e-3)
+
+    reloaded = lm7.load_artifact(artifact.path)
+    torch.testing.assert_close(reloaded(example), expected, rtol=2e-3, atol=2e-3)
+
+
+def test_corrupt_tensorrt_engine_fails_checksum_validation(tmp_path):
+    artifact = lm7.export(
+        torch.nn.Sequential(torch.nn.Linear(16, 4)).eval(),
+        args=(torch.randn(8, 16, device="cuda"),),
+        target="nvidia",
+        backend="tensorrt",
+        output=tmp_path / "trt.lm7",
+    )
+    engine = artifact.path / "compiled_model.trt.pt2"
+    engine.write_bytes(engine.read_bytes() + b"corrupt")
+
+    with pytest.raises(ArtifactLoadError, match="checksum does not match"):
+        lm7.load_artifact(artifact.path)

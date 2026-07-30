@@ -5,7 +5,9 @@ Two things distinguish LM7's compilation paths: *when* compilation happens, and
 
 ## JIT: compiled in-process, on the first call
 
-`inductor`, `tensorrt`, `openxla`, and `tenstorrent` are all JIT backends.
+`inductor`, `openxla`, and `tenstorrent` are JIT backends, and so is
+`tensorrt` when reached through `lm7.compile` — it also has an AOT export
+path, below.
 `lm7.compile()` does no work — it validates options and returns a
 `CompiledModule`. Compilation happens on the first call with a given input
 signature.
@@ -66,8 +68,8 @@ version and the checksums before loading anything.
 `aot_inductor` is validated for CPU, Apple Silicon, and NVIDIA GPU, and uses Beta
 PyTorch APIs. On other targets, export still works at level 1.
 
-On NVIDIA it is the only path that reaches the GPU without a compiler in the
-process — `inductor` and `tensorrt` both compile on the first call and keep
+On NVIDIA it reaches the GPU without a compiler in the process, as does a
+`tensorrt` artifact; plain `inductor` compiles on the first call and keeps
 nothing. Packaging one needs a CUDA toolkit, because AOTInductor compiles a C++
 wrapper against the CUDA headers that the PyTorch CUDA wheel does not ship;
 `uv pip install -e ".[cuda-aot]"` supplies them, and LM7 finds them without a

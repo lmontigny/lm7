@@ -87,9 +87,53 @@ stable enough to benchmark and amortize engine construction. Inductor remains
 the safer automatic choice because it has broader PyTorch operator coverage and
 the local evidence does not establish a universal TensorRT advantage.
 
+## Serializing the engine
+
+The costly half of TensorRT is the engine build, and the JIT path pays it in
+every process. `lm7.export(..., backend="tensorrt")` writes the engine into the
+`.lm7` artifact instead, through `torch_tensorrt.save`, so a second process
+loads it rather than rebuilding it:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct out.lm7 \
+  --target nvidia --backend tensorrt --dtype float16
+```
+
+Measured on the same Ada (`sm89`) host as the table above, SmolLM2-135M at
+5 tokens, FP16:
+
+| step | time |
+| --- | ---: |
+| `lm7 model export --backend tensorrt` (build + save) | 49.0 s |
+| `lm7.load_artifact()` + first call, fresh process | **10.6 s** |
+| ...of which the engine itself | 6.1 s |
+| ...of which SHA-256 of the 345 MB payload | 0.7 s |
+
+The remainder is reading the `exported_program.pt2` that LM7 keeps beside every
+artifact. Time-to-first-inference drops 4.6x; against the 56.38 s first call in
+the JIT table above, the saving is the whole build.
+
+The artifact is the least portable payload LM7 writes, and the manifest says so
+in `runtime_requirements`: `device_bound: true`, the compute capability, the
+GPU name, and the TensorRT and Torch-TensorRT versions. An engine built for
+`sm89` will not load on `sm90`, and a TensorRT upgrade invalidates it. Loading
+one whose provenance does not match fails with an actionable error rather than
+silently rebuilding.
+
+Two constraints on this path:
+
+- **Static shapes only.** `dynamic_shapes=` and `shape_profile=` are rejected.
+  A dynamically shaped engine needs min/opt/max `Input` specs rather than
+  example tensors, and choosing those well is a separate evaluation.
+- **No `enabled_precisions`.** Torch-TensorRT 2.12 turns explicit typing on by
+  default and then rejects that option; precision comes from the exported
+  graph's own dtypes, so export the model in the dtype you want. LM7 turns the
+  resulting assertion into an error that says this.
+
 ## Limits
 
 - These are single-host descriptive measurements, not CI thresholds.
+- The serialization numbers above are one run each, not a distribution.
 - Only FP16 and fixed input shapes were measured.
 - SmolLM2 is a prefill forward pass with `use_cache=False`, not token-by-token
   generation with a KV cache.
