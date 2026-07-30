@@ -208,6 +208,11 @@ lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct out.lm7 \
   --backend openvino --target cpu --quantize int8
 ```
 
+The same flags work with `--target intel:npu`, which is where compressed weights
+matter most — an NPU's advantage is bandwidth and power, not FP32 throughput.
+That combination has not been measured: no NPU was available. See
+[intel-npu.md](intel-npu.md).
+
 ## Scope and caveats
 
 > [!NOTE]

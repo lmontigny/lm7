@@ -13,6 +13,7 @@ import torch
 
 from ..cache import cache_dir
 from ..errors import ArtifactLoadError, CompilationError
+from ..targets import TargetSpec
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
 # OpenVINO's CPU plugin does not default to FP32: it is FP16 on ARM hosts and
@@ -20,6 +21,11 @@ from .base import Artifact, BackendInfo, CompileRequest, Support
 # and silently disagree with eager. LM7 pins FP32 and lets the caller opt out
 # through options={"inference_precision": ...}.
 _DEFAULT_INFERENCE_PRECISION = "f32"
+
+# The NPU plugin's supported inference precision is FP16 -- it has no FP32
+# execution mode to pin -- so the CPU default cannot be applied to it. This
+# sentinel means "choose per device"; an explicit option always wins.
+_INFERENCE_PRECISION_AUTO = "auto"
 
 # torch.export leaves batch and spatial dimensions symbolic, so convert_model
 # produces IR shaped like [?,3,?,?]. LM7 reshapes to the example inputs so the
@@ -32,6 +38,29 @@ _DEFAULT_STATIC_SHAPES = True
 # 11.9 max logit difference against FP32 on SmolLM2-135M and was *slower* than
 # weight-only, because INT8 activations want VNNI. See docs/quantization.md.
 _QUANTIZATIONS = frozenset({"none", "int8"})
+
+
+def device_for_target(target: TargetSpec) -> str:
+    """The OpenVINO device string LM7 compiles an ``.xml`` for.
+
+    ``intel:npu`` is the only non-CPU mapping. ``intel`` on its own means the
+    Intel GPU, which keeps running on the CPU plugin until the GPU plugin has
+    been evaluated the way ``docs/openvino-evaluation.md`` describes -- mapping
+    it to ``"GPU"`` here would change what that target executes today.
+    """
+    if target.vendor == "intel" and target.kind == "npu":
+        return "NPU"
+    return "CPU"
+
+
+def _is_npu(device: str) -> bool:
+    return device.split(".", 1)[0] == "NPU"
+
+
+def _resolve_inference_precision(value: str | None, device: str) -> str | None:
+    if value != _INFERENCE_PRECISION_AUTO:
+        return value
+    return None if _is_npu(device) else _DEFAULT_INFERENCE_PRECISION
 
 
 class OpenVINOBackend:
@@ -71,7 +100,7 @@ class OpenVINOBackend:
         if not probe.available:
             return Support(False, probe.reason)
         if request.target.vendor not in {"cpu", "intel"}:
-            return Support(False, "OpenVINO supports Intel CPU targets only in LM7 v0.1.")
+            return Support(False, "OpenVINO supports Intel CPU and NPU targets only in LM7 v0.1.")
         # The OpenVINO runtime exchanges tensors through NumPy, which has no
         # bfloat16 dtype, so a bfloat16 model cannot round-trip.
         dtype = _model_dtype(request.model)
@@ -84,9 +113,12 @@ class OpenVINOBackend:
         # Deliberately below inductor (100) and aot_inductor (90). The evaluation
         # shows a latency win but has not yet established operator coverage across
         # a wide model set, so automatic planning should still prefer Inductor.
+        # On intel:npu it wins by default anyway: inductor and eager both decline
+        # a target PyTorch has no device for.
+        device = device_for_target(request.target)
         return Support(
             True,
-            "OpenVINO can compile an ExportedProgram to IR for Intel CPU execution.",
+            f"OpenVINO can compile an ExportedProgram to IR for Intel {device} execution.",
             priority=80,
         )
 
@@ -108,9 +140,17 @@ class OpenVINOBackend:
                 )
 
             options = dict(request.options)
-            device = str(options.pop("device", "CPU"))
-            inference_precision = options.pop("inference_precision", _DEFAULT_INFERENCE_PRECISION)
+            device = str(options.pop("device", device_for_target(request.target)))
+            inference_precision = _resolve_inference_precision(
+                options.pop("inference_precision", _INFERENCE_PRECISION_AUTO), device
+            )
             static_shapes = bool(options.pop("static_shapes", _DEFAULT_STATIC_SHAPES))
+            if _is_npu(device) and not static_shapes:
+                raise CompilationError(
+                    "The OpenVINO NPU plugin compiles static shapes only, so "
+                    "options={'static_shapes': False} cannot be used with intel:npu. "
+                    "Drop the option, or compile for target='cpu'."
+                )
             # openvino.save_model compresses weights to FP16 by default, which shows
             # up as FP16-level error on an otherwise FP32 model.
             compress_to_fp16 = bool(options.pop("compress_to_fp16", False))
@@ -242,7 +282,7 @@ class OpenVINOBackend:
         model_path: Path,
         *,
         device: str = "CPU",
-        inference_precision: str | None = _DEFAULT_INFERENCE_PRECISION,
+        inference_precision: str | None = _INFERENCE_PRECISION_AUTO,
         openvino: Any = None,
     ) -> Callable[..., Any]:
         """Load saved OpenVINO IR into a tensor-in/tensor-out callable."""
@@ -251,9 +291,8 @@ class OpenVINOBackend:
             raise ArtifactLoadError(probe.reason)
         if openvino is None:
             openvino = importlib.import_module("openvino")
-        config = (
-            {"INFERENCE_PRECISION_HINT": str(inference_precision)} if inference_precision else {}
-        )
+        precision = _resolve_inference_precision(inference_precision, device)
+        config = {"INFERENCE_PRECISION_HINT": str(precision)} if precision else {}
         compiled = _compile_ir(openvino, model_path, device=device, config=config)
         return _OpenVINOCallable(compiled, len(compiled.inputs))
 
@@ -297,9 +336,14 @@ def _compile_ir(
     if base_device not in available:
         # OpenVINO otherwise falls back silently, so a run labelled GPU or NPU can
         # quietly be the CPU plugin.
+        hint = (
+            "Install the openvino NPU plugin and the intel_vpu driver (Linux "
+            "kernel 6.10+ exposes /dev/accel/accel0), or use target='cpu'."
+            if _is_npu(device)
+            else "Install the matching plugin or use device='CPU'."
+        )
         raise CompilationError(
-            f"OpenVINO device {device!r} is not available; the runtime reports "
-            f"{available}. Install the matching plugin or use device='CPU'."
+            f"OpenVINO device {device!r} is not available; the runtime reports {available}. {hint}"
         )
     return core.compile_model(str(model_path), device, dict(config))
 

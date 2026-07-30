@@ -108,9 +108,17 @@ class CompiledModule(torch.nn.Module):
             if self.fallback == "error" or backend.name == "eager":
                 self.state = "failed"
                 raise
+            # A target with no torch device -- intel:npu -- has nowhere to fall
+            # back to but the host, so the warning has to say which silicon the
+            # model ends up on.
+            destination = (
+                "PyTorch eager on the host CPU"
+                if self.target is not None and self.target.kind == "npu"
+                else "PyTorch eager"
+            )
             warnings.warn(
                 f"Backend {backend.name} compilation failed for {self.target}; "
-                "falling back to PyTorch eager.",
+                f"falling back to {destination}.",
                 RuntimeWarning,
                 stacklevel=2,
             )

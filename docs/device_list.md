@@ -31,7 +31,7 @@ This document summarizes the major AI inference hardware platforms and their com
 |---------|----------|-----------------|----------------|-------------|----------|-----------------|
 | NVIDIA | Jetson Orin, Thor | Robotics, Edge AI | CUDA, TensorRT | ❌ | TensorRT | Native |
 | Qualcomm | Cloud AI 100, Robotics RB5 | Edge servers, Robotics | Qualcomm AI Stack | Partial | AI Compiler | ONNX / PyTorch |
-| Intel | Core Ultra NPU, Movidius VPU | PC, Edge | OpenVINO | Mostly ✅ | OpenVINO Compiler | Native |
+| Intel | Core Ultra NPU, Movidius VPU | PC, Edge | [OpenVINO](intel-npu.md) | Mostly ✅ | OpenVINO Compiler | Native |
 | Hailo | Hailo-8, Hailo-10 | Edge AI | Hailo SDK | ❌ | Dataflow Compiler | ONNX |
 | Axelera AI | Metis AIPU | Vision Edge | Voyager SDK | ❌ | Voyager Compiler | ONNX |
 | Kinara | Ara-2 | Industrial Edge | Ara SDK | ❌ | Ara Compiler | ONNX |

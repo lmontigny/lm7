@@ -30,6 +30,7 @@ from .backends.litert import parse_options as parse_litert_options
 from .backends.onnxruntime import ONNXRuntimeBackend
 from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
+from .backends.openvino import device_for_target as openvino_device_for_target
 from .backends.stablehlo import StableHLOBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
@@ -204,7 +205,17 @@ def export(
         )
     if backend == "openvino" and resolved_target.vendor not in {"cpu", "intel"}:
         raise BackendUnavailableError(
-            "OpenVINO artifacts are validated for Intel CPU targets only."
+            "OpenVINO artifacts are validated for Intel CPU and NPU targets only."
+        )
+    if (
+        backend == "openvino"
+        and openvino_device_for_target(resolved_target) == "NPU"
+        and (dynamic_shapes is not None or shape_profile is not None)
+    ):
+        raise BackendUnavailableError(
+            "The OpenVINO NPU plugin compiles static shapes only, so an intel:npu "
+            "artifact cannot carry dynamic_shapes or a shape profile. Export one "
+            "artifact per shape, or target='cpu'."
         )
     if backend == "executorch" and resolved_target.vendor != "cpu":
         raise BackendUnavailableError(
@@ -309,6 +320,7 @@ def export(
         compiled_weights_sha256 = None
         iree_device_uri = None
         iree_vulkan_target = None
+        openvino_device = None
         executorch_delegated = None
         executorch_total = None
         executorch_quantization = None
@@ -324,6 +336,12 @@ def export(
             if not probe.available:
                 raise BackendUnavailableError(probe.reason)
             compiler_options = dict(options or {})
+            openvino_device = openvino_device_for_target(resolved_target)
+            if openvino_device == "NPU" and not compiler_options.get("static_shapes", True):
+                raise BackendUnavailableError(
+                    "The OpenVINO NPU plugin compiles static shapes only, so "
+                    "static_shapes=False cannot be used with an intel:npu artifact."
+                )
             openvino_backend.compile_exported(
                 exported_program,
                 staging / COMPILED_IR_NAME,
@@ -449,8 +467,14 @@ def export(
                 "device": resolved_target.vendor,
                 "api_status": "stable" if backend == "export" else "beta",
                 # The IR payload executes on the OpenVINO runtime alone; torch is
-                # only needed to read the exported_program.pt2 alongside it.
-                **({"openvino": _openvino_version()} if backend == "openvino" else {}),
+                # only needed to read the exported_program.pt2 alongside it. The
+                # IR itself is device-neutral, but which plugin compiles it is
+                # not, so the device travels with the artifact.
+                **(
+                    {"openvino": _openvino_version(), "openvino_device": openvino_device}
+                    if backend == "openvino"
+                    else {}
+                ),
                 **(
                     {
                         "iree-base-runtime": _iree_runtime_version(),
@@ -527,7 +551,10 @@ def export(
         assert isinstance(selected_backend, AOTInductorBackend)
         compiled_callable = selected_backend.load_package(destination / COMPILED_PROGRAM_NAME)
     elif backend == "openvino":
-        compiled_callable = _openvino_backend().load_ir(destination / COMPILED_IR_NAME)
+        compiled_callable = _openvino_backend().load_ir(
+            destination / COMPILED_IR_NAME,
+            device=openvino_device or "CPU",
+        )
     elif backend == "iree_vulkan":
         compiled_callable = _iree_vulkan_backend().load_vmfb(
             destination / COMPILED_VMFB_NAME,
@@ -618,7 +645,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
         _verify_payload(
             artifact_path, manifest.compiled_weights_file, manifest.compiled_weights_sha256
         )
-        compiled_callable = _openvino_backend().load_ir(compiled_path)
+        requirements = manifest.runtime_requirements or {}
+        compiled_callable = _openvino_backend().load_ir(
+            compiled_path,
+            device=str(requirements.get("openvino_device") or "CPU"),
+        )
     elif manifest.backend == "iree_vulkan":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256

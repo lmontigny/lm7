@@ -34,6 +34,14 @@ and `PJRT_DEVICE` is unset or `TT`, and never reassigns a runtime that has
 already come up as `TPU`. It shares the TPU path's `torch.no_grad()` execution
 for the same reason. See [Tenstorrent support](tenstorrent.md).
 
+The `intel:npu` target is the one place where the target/backend split carries
+real weight. It is the first `TargetSpec` with no torch device behind it: its
+`kind` is `"npu"`, `torch_device()` maps it to the host CPU, and the OpenVINO
+NPU plugin owns both the compilation and the transfer. Detection asks the
+OpenVINO runtime rather than torch, `inductor` and `eager` decline the kind
+instead of silently lowering for the CPU, and `target="auto"` skips it because
+it is neither a `gpu` nor an `accelerator`. See [Intel NPU](intel-npu.md).
+
 The optional `executorch` adapter is export-only and targets edge devices. It
 lowers an ExportedProgram through ExecuTorch's XNNPACK partitioner to a `.pte`,
 which the ExecuTorch C++ runtime executes on Android, iOS, or the build host

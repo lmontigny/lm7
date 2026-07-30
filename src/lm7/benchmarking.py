@@ -13,6 +13,7 @@ from typing import Any
 import torch
 
 from .api import compile
+from .detection import intel_npu_device_nodes
 from .targets import TargetSpec
 
 
@@ -147,6 +148,16 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
         )
     elif target.vendor == "apple":
         value.update({"device_name": "Apple Metal GPU", "mps_built": torch.backends.mps.is_built()})
+    elif target.vendor == "intel" and target.kind == "npu":
+        # The NPU has no torch device to interrogate, so the runtime that owns
+        # it -- and the driver nodes under it -- are the environment.
+        value.update(
+            {
+                "device_name": "Intel NPU",
+                "openvino": _package_version("openvino"),
+                "npu_device_nodes": intel_npu_device_nodes(),
+            }
+        )
     elif target.vendor in {"tpu", "tenstorrent"}:
         device_name = "Google TPU" if target.vendor == "tpu" else "Tenstorrent device"
         try:

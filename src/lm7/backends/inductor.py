@@ -28,6 +28,14 @@ class InductorBackend:
             return Support(False, probe.reason)
         if request.target.vendor not in {"cpu", "nvidia", "amd", "intel", "apple"}:
             return Support(False, f"Inductor does not support target {request.target} in LM7 v0.1.")
+        if request.target.kind == "npu":
+            # torch.compile needs a torch device to lower to, and there is no
+            # NPU one. Claiming this target would silently compile for the CPU.
+            return Support(
+                False,
+                "PyTorch has no NPU device for TorchInductor to lower to; "
+                f"{request.target} is reached through backend='openvino'.",
+            )
         return Support(
             True, f"torch.compile supports {request.target.kind} execution.", priority=100
         )

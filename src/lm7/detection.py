@@ -70,6 +70,7 @@ def detect_targets() -> list[DeviceInfo]:
 
     devices.extend(_detect_tpu_targets())
     devices.extend(_detect_tenstorrent_targets())
+    devices.extend(_detect_intel_npu_targets())
 
     cpu_arch = platform.machine().lower() or None
     devices.append(
@@ -82,6 +83,9 @@ def resolve_target(requested: str | TargetSpec) -> TargetSpec:
     parsed = parse_target(requested)
     devices = detect_targets()
     if parsed.vendor == "auto":
+        # "npu" is deliberately absent: an Intel NPU is a low-power accelerator
+        # that wants INT8 weights and rejects dynamic shapes, so it is never a
+        # silent substitute for the CPU. Ask for it with target="intel:npu".
         return next(
             (d.target for d in devices if d.target.kind in {"gpu", "accelerator"}),
             devices[-1].target,
@@ -105,7 +109,28 @@ def resolve_target(requested: str | TargetSpec) -> TargetSpec:
         )
     raise TargetNotFoundError(
         f"Requested target {parsed} was not found locally. "
-        f"Detected: {', '.join(str(d.target) for d in devices)}."
+        f"Detected: {', '.join(str(d.target) for d in devices)}.{_missing_target_hint(parsed)}"
+    )
+
+
+def _missing_target_hint(parsed: TargetSpec) -> str:
+    """Separate "no such hardware" from "no runtime for it" where LM7 can tell.
+
+    Only the Intel NPU needs this: it is discovered through OpenVINO rather than
+    torch, so a missing plugin and a missing device look identical from the
+    target list alone. The kernel driver's node tells them apart.
+    """
+    if parsed.kind != "npu":
+        return ""
+    nodes = intel_npu_device_nodes()
+    if nodes:
+        return (
+            f" The intel_vpu driver publishes /dev/accel/{nodes[0]}, so the NPU is "
+            'present and the OpenVINO NPU plugin is what is missing: install ".[openvino]".'
+        )
+    return (
+        " Neither an OpenVINO NPU device nor an intel_vpu driver node was found; "
+        "see docs/intel-npu.md."
     )
 
 
@@ -114,6 +139,11 @@ def torch_device(target: TargetSpec) -> torch.device:
     if target.vendor == "nvidia" or target.vendor == "amd":
         return torch.device("cuda", ordinal)
     if target.vendor == "intel":
+        if target.kind == "npu":
+            # There is no torch NPU device. The OpenVINO plugin owns the NPU and
+            # takes host tensors, so LM7 leaves inputs on the CPU exactly as it
+            # does for the OpenVINO CPU path.
+            return torch.device("cpu")
         return torch.device("xpu", ordinal)
     if target.vendor == "apple":
         return torch.device("mps")
@@ -230,3 +260,75 @@ def _detect_tenstorrent_targets() -> list[DeviceInfo]:
 def _tenstorrent_architecture(device_kind: str) -> str | None:
     lowered = device_kind.lower()
     return next((arch for arch in ("blackhole", "wormhole") if arch in lowered), None)
+
+
+INTEL_NPU_DEVICE_ROOT = Path("/dev/accel")
+
+
+def intel_npu_device_nodes() -> list[str]:
+    """Accel character devices published by the Linux ``intel_vpu`` driver.
+
+    This is the driver-level view, independent of OpenVINO, so diagnostics can
+    tell a host with no NPU apart from one whose OpenVINO NPU plugin is missing.
+    Empty on Windows, where the NPU is only visible through the driver stack
+    OpenVINO itself talks to.
+    """
+    try:
+        return sorted(
+            node.name for node in INTEL_NPU_DEVICE_ROOT.iterdir() if node.name.startswith("accel")
+        )
+    except OSError:
+        return []
+
+
+def _detect_intel_npu_targets() -> list[DeviceInfo]:
+    """Intel NPUs, discovered through the OpenVINO runtime rather than torch.
+
+    OpenVINO is the only local view of this device: it reports one entry per NPU
+    in ``Core().available_devices``, named ``NPU`` or ``NPU.<ordinal>``.
+    """
+    try:
+        if importlib.util.find_spec("openvino") is None:
+            return []
+        openvino = importlib.import_module("openvino")
+        core = openvino.Core()
+        names = [name for name in core.available_devices if name.split(".", 1)[0] == "NPU"]
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError):
+        # Optional runtime discovery must not make CPU/GPU detection fail when
+        # the NPU plugin is absent or its driver cannot be opened.
+        return []
+
+    device_nodes = intel_npu_device_nodes()
+    devices: list[DeviceInfo] = []
+    for name in names:
+        devices.append(
+            DeviceInfo(
+                TargetSpec("intel", "npu", ordinal=_intel_npu_ordinal(name)),
+                str(_openvino_property(core, name, "FULL_DEVICE_NAME") or "Intel NPU"),
+                capabilities={
+                    "openvino": getattr(openvino, "__version__", None),
+                    "openvino_device": name,
+                    # "3720" is Meteor Lake, "4000" Lunar Lake; the plugin
+                    # reports it as an opaque string, so LM7 records rather
+                    # than interprets it.
+                    "device_architecture": _openvino_property(core, name, "DEVICE_ARCHITECTURE"),
+                    "driver_version": _openvino_property(core, name, "NPU_DRIVER_VERSION"),
+                    "device_nodes": device_nodes,
+                },
+            )
+        )
+    return devices
+
+
+def _intel_npu_ordinal(device_name: str) -> int | None:
+    _, _, suffix = device_name.partition(".")
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _openvino_property(core: Any, device_name: str, key: str) -> str | None:
+    try:
+        return str(core.get_property(device_name, key))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        # Property support varies by plugin version; a missing one is not a
+        # reason to hide a device that available_devices already reported.
+        return None
