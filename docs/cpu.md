@@ -75,3 +75,27 @@ Reach for it when you want an artifact that runs without PyTorch, or when you
 are deploying to Intel hardware specifically. See the
 [OpenVINO evaluation](openvino-evaluation.md) for the measurements behind that
 and for the backend's documented limits.
+
+## Shrinking a model on CPU
+
+`lm7 model run` can quantize a Hugging Face causal LM's weights to INT8 on CPU,
+which is the one weight-only mode measured off NVIDIA:
+
+```bash
+uv pip install -e ".[hf,torchao]"
+lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu --quantize int8
+```
+
+That cuts SmolLM2-135M from 513 MiB to 210 MiB with the same next token on every
+prompt tried. Compute stays FP32, because x86-64 without AVX-512 has no native
+BF16 path.
+
+The footprint saving is reliable; the latency effect is not, and depends on both
+model size and CPU. On an AVX2-only part INT8 was at parity for SmolLM2-135M and
+2.6x slower for Llama-3.2-1B — INT8 GEMM wants VNNI, which that machine lacks.
+Measure it for your model rather than assuming. See
+[quantization](quantization.md).
+
+For an artifact to ship to an edge device rather than a process to run here, the
+ExecuTorch backend has a separate calibrated INT8 export flow — see
+[ExecuTorch](executorch.md).

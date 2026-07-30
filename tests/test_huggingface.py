@@ -353,9 +353,11 @@ def test_fp8_weight_only_selects_mlp_linears():
 @pytest.mark.parametrize(
     ("target", "backend", "dtype", "message"),
     [
-        (TargetSpec("cpu", "cpu"), "inductor", "bfloat16", "NVIDIA"),
+        # CPU is allowed for INT8 now, but its compute dtype is FP32, not BF16.
+        (TargetSpec("cpu", "cpu"), "inductor", "bfloat16", "dtype"),
         (TargetSpec("nvidia", "gpu"), "eager", "bfloat16", "backend"),
         (TargetSpec("nvidia", "gpu"), "inductor", "float16", "dtype"),
+        (TargetSpec("amd", "gpu"), "inductor", "bfloat16", "NVIDIA"),
     ],
 )
 def test_int8_weight_only_rejects_unsupported_combinations(target, backend, dtype, message):
@@ -366,6 +368,43 @@ def test_int8_weight_only_rejects_unsupported_combinations(target, backend, dtyp
             backend,
             dtype,
         )
+
+
+def test_int8_weight_only_accepts_cpu():
+    """INT8 is the one mode measured off NVIDIA: on CPU it kept 4/4 top-1 tokens
+    at a 1.36 max logit difference, so the target gate admits it."""
+    huggingface._validate_quantization(
+        huggingface.INT8,
+        TargetSpec("cpu", "cpu"),
+        "inductor",
+        "auto",
+        "HuggingFaceTB/SmolLM2-135M-Instruct",
+    )
+
+
+@pytest.mark.parametrize("quantization", [huggingface.FP8, huggingface.NVFP4])
+def test_narrow_formats_stay_nvidia_only(quantization):
+    """FP8 needs Ada tensor cores; NVFP4 on CPU kept 2/4 top-1 and ran 8.5x
+    slower than compiled FP32, so neither is admitted off NVIDIA."""
+    with pytest.raises(UnsupportedModelError, match="NVIDIA"):
+        huggingface._validate_quantization(
+            quantization,
+            TargetSpec("cpu", "cpu"),
+            "inductor",
+            "auto",
+        )
+
+
+def test_auto_dtype_under_quantization_is_target_specific():
+    """BF16 on NVIDIA, FP32 on CPU — x86 without AVX-512 has no native BF16."""
+    assert (
+        huggingface._resolve_dtype("auto", TargetSpec("nvidia", "gpu"), huggingface.INT8)
+        == torch.bfloat16
+    )
+    assert (
+        huggingface._resolve_dtype("auto", TargetSpec("cpu", "cpu"), huggingface.INT8)
+        == torch.float32
+    )
 
 
 def test_int8_weight_only_rejects_unvalidated_model():

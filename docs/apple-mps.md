@@ -125,8 +125,8 @@ produce a wider tail of outlier logits. Validated locally on SmolLM2-135M
 Llama-3.2-1B-Instruct (about 0.03), and Qwen3.5-0.8B (about 0.02); all four
 keep matching next-token predictions and cosine similarity above 0.9999
 against eager. `tests/test_hf_integration.py` uses a wider `atol` on the
-`apple` vendor to account for this. TorchAO INT8/FP8 weight-only
-quantization remains NVIDIA-only and validated only for SmolLM2.
+`apple` vendor to account for this. TorchAO weight-only quantization reaches
+NVIDIA GPUs and CPU only — there is no Apple/MPS quantization path.
 
 Qwen3.5 (like LFM2.5) uses a hybrid linear-attention/convolution
 architecture rather than plain attention. It runs correctly through both
