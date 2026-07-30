@@ -74,10 +74,16 @@ These have measurement harnesses or written plans, and no registered backend:
 
 ## Quantization
 
-Weight-only, NVIDIA-only, and validated per (model, mode) pair. Activation
-quantization is not implemented. Every mode measured *slower* than the BF16
-baseline on sm89 once compiled, so the reliable benefit is footprint, not speed.
-`nvfp4` gives the smallest footprint and the largest accuracy loss — it clears
-the validation bar for one model out of three tried. See
+The `lm7 model run` path is weight-only and validated per (model, mode) pair. It
+reaches NVIDIA GPUs and CPU; `int8` is the only mode measured off NVIDIA, and
+AMD, Apple, Intel XPU, and TPU have no path at all. Activation quantization is
+not implemented here — ExecuTorch export has its own calibrated INT8 flow.
+
+Footprint is the reliable benefit, not speed. On sm89 every mode measured
+*slower* than the BF16 baseline once compiled. On CPU, INT8 was at parity for
+SmolLM2-135M and 2.6x slower for Llama-3.2-1B, on an AVX2-only part with no
+VNNI — so the latency result does not generalize to server CPUs or ARM.
+`nvfp4` gives the smallest footprint and the largest accuracy loss, clearing the
+validation bar for one model out of three tried. See
 [quantization](quantization.md) for which layers each mode converts and the
 measurements behind it.

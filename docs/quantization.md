@@ -23,18 +23,28 @@ inside each matmul, stay in BF16.
 
 ## Supported data types
 
-| `--quantize` | Weight storage | Compute dtype | Requires |
+| `--quantize` | Weight storage | Targets | Compute dtype |
 | --- | --- | --- | --- |
-| `none` (default) | as loaded | FP32 / FP16 / BF16 | nothing |
-| `int8` | INT8 | BF16 | NVIDIA GPU |
-| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer |
-| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | BF16 | NVIDIA GPU |
+| `none` (default) | as loaded | all | FP32 / FP16 / BF16 |
+| `int8` | INT8 | NVIDIA GPU, **CPU** | BF16 on NVIDIA, FP32 on CPU |
+| `fp8` | FP8 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
+| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | NVIDIA GPU | BF16 |
 
-All modes force BF16 compute. `--dtype` must be `auto` or `bfloat16`, and `auto`
-resolves to BF16 whenever quantization is on. `--backend` must be `auto` or
+Quantization pins the compute dtype so measurements stay comparable, and the
+dtype is target-specific: BF16 on NVIDIA, FP32 on CPU. `--dtype` must be `auto`
+or that target's dtype, and `auto` resolves to it. `--backend` must be `auto` or
 `inductor`. Anything else raises `UnsupportedModelError` rather than silently
-degrading — including a non-NVIDIA target, an FP8 request on pre-Ada hardware,
-and any (model, mode) pair outside the validated list.
+degrading — including a mode on a target it was not measured on, an FP8 request
+on pre-Ada hardware, and any (model, mode) pair outside the validated list.
+
+CPU uses FP32 rather than BF16 because x86-64 without AVX-512 has no native BF16
+path, so forcing BF16 there would measure emulation rather than the format.
+
+> [!NOTE]
+> `lm7 model export --quantize int8` is a **different mechanism**: calibrated
+> XNNPACK post-training quantization inside the ExecuTorch backend, which
+> quantizes activations too. Everything on this page is the TorchAO weight-only
+> path used by `lm7 model run`. See the [ExecuTorch guide](executorch.md).
 
 `--quantize` replaced `--quantization`, and the long-form values it took
 (`int8-weight-only`, `fp8-weight-only`) are still accepted and normalized onto
@@ -121,12 +131,44 @@ Compilation is not free either. On that machine the first call for
 `nvfp4` took **72 seconds** against a 20 ms steady-state call, so the mode only
 makes sense where the process is long-lived or the artifact is reused.
 
+## INT8 on CPU
+
+INT8 is the only mode measured off NVIDIA. It converts the same layers, keeps
+the same 4/4 top-1 agreement, and gives a slightly *better* footprint ratio than
+on GPU, because the CPU baseline is FP32 rather than BF16:
+
+| model | top-1 | max logit diff | storage | FP32 | INT8 |
+| --- | --- | --- | --- | --- | --- |
+| SmolLM2-135M | 4/4 | 1.36 | 513 → 210 MiB (2.44x) | ~49 ms | ~50 ms (**1.03x**) |
+| Llama-3.2-1B | 4/4 | 0.76 | 4943 → 2026 MB (2.44x) | ~323 ms | ~835 ms (**2.59x**) |
+
+Intel i7-8086K, 6 threads, compiled through `inductor`, median of 10 after
+warmup, one configuration per process.
+
+**The latency cost depends on model size, so measure it.** At 135M the
+dequantization is free; at 1B it costs 2.6x. That gap is hardware-specific: this
+CPU is **AVX2-only, with no VNNI, AVX-512, or AMX**, and INT8 GEMM needs VNNI's
+`vpdpbusd` to beat an AVX2 FP32 path. A Cascade Lake or Sapphire Rapids server
+part, or an ARM core with dotprod/i8mm, would likely land differently. None of
+that is measured here, so none of it is claimed.
+
+What is reliable on CPU is the footprint: **2.44x smaller, at no measured
+accuracy cost**, which is the difference between a 513 MiB and a 210 MiB
+SmolLM2.
+
+> [!WARNING]
+> An earlier draft of this page reported INT8 on CPU as 4.5x slower. That number
+> came from a harness that built six quantization configs in one process, and it
+> did not reproduce: measured one configuration per process, INT8 is at parity
+> for SmolLM2. The table above is the isolated measurement.
+
 ## Scope and caveats
 
 > [!NOTE]
 > This path is validated per **(model, mode)** pair and rejects everything else.
 > Currently validated: `HuggingFaceTB/SmolLM2-135M-Instruct` (`int8`, `fp8`) and
-> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`).
+> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`). Both `int8` entries
+> were measured on NVIDIA sm89 *and* on x86-64 CPU.
 
 ### What "validated" means here
 
@@ -178,20 +220,24 @@ filter and takes the footprint. The likelier explanation is size: block-scaled
 in a 135M–1B network. Whether NVFP4 holds up better at 7B and above is
 unmeasured here.
 
-- **NVIDIA only.** No CPU, AMD, Apple, or TPU quantization path exists. NVFP4
-  happens to run on CPU through the same dequantization path, but that is
-  untested and ungated, so it stays rejected.
+- **NVIDIA and CPU only, and only INT8 on CPU.** No AMD, Apple, Intel XPU, or
+  TPU path exists. FP8 needs Ada-class tensor cores. NVFP4 does run on CPU
+  through the same dequantization path, but it kept only 2 of 4 top-1 tokens
+  there and ran 8.5x slower than compiled FP32, so it stays NVIDIA-only.
 - **It can be slower.** Weight-only quantization trades arithmetic for
   bandwidth. At small batch sizes, where a decode step is already
   memory-bound per token but the dequantization overhead is paid on every
   matmul, the net can go the wrong way. This is why it is opt-in rather than a
   default, and why the run reports latency alongside footprint. Measured on
   sm89 and compiled, **every mode was slower than the BF16 baseline** —
-  `fp8` by 1.6x, `nvfp4` by 2.5x, `int8` by 7.3x. Treat the footprint saving as
-  the reliable benefit and latency as something to measure per model.
+  `fp8` by 1.6x, `nvfp4` by 2.5x, `int8` by 7.3x. CPU is the one place where a
+  mode came out even: INT8 is at parity for SmolLM2-135M and 2.6x slower for
+  Llama-3.2-1B. Treat the footprint saving as the reliable benefit and latency
+  as something to measure per model *and* per target.
 - **A validated pair is not a general guarantee.** It means those prompts
-  agreed on that GPU. It does not establish behaviour across long contexts,
-  batch sizes, or downstream task accuracy, none of which are measured.
+  agreed on that GPU or CPU. It does not establish behaviour across long
+  contexts, batch sizes, or downstream task accuracy, none of which are
+  measured.
 - **Storage saving is not proportional to bit width.** Only the selected linears
   are converted, so a 4x narrower weight dtype does not mean a 4x smaller model —
   embeddings, norms, `lm_head`, and (for FP8) attention all stay in BF16. A

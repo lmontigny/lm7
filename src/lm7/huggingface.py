@@ -33,11 +33,34 @@ QUANTIZATION_ALIASES: dict[str, str] = {
 
 _QUANTIZATION_LABELS = {INT8: "INT8", FP8: "FP8", NVFP4: "NVFP4"}
 
+# Which targets each mode is allowed on. INT8 is the only mode measured off
+# NVIDIA: FP8 needs Ada-class tensor cores, and NVFP4 on CPU kept only 2 of 4
+# top-1 tokens and ran 8.5x slower than compiled FP32, so both stay NVIDIA-only.
+_QUANTIZATION_VENDORS = {
+    INT8: frozenset({"nvidia", "cpu"}),
+    FP8: frozenset({"nvidia"}),
+    NVFP4: frozenset({"nvidia"}),
+}
+
+_QUANTIZATION_VENDOR_TEXT = {
+    INT8: "detected NVIDIA GPUs and CPU targets",
+    FP8: "detected NVIDIA GPUs",
+    NVFP4: "detected NVIDIA GPUs",
+}
+
+# Quantization pins compute dtype so the (model, mode) measurements stay
+# comparable. CPU uses FP32 rather than BF16: x86 without AVX-512 has no native
+# BF16 path, so forcing BF16 there would measure emulation.
+_QUANTIZED_COMPUTE_DTYPE = {"nvidia": "bfloat16", "cpu": "float32"}
+
 # Validated per model *and* per mode, because the two are not interchangeable:
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
 # (0/4 prompts agreed with BF16, max logit difference 22.4 on NVIDIA sm89). A
 # model earns an entry here only after its outputs have been compared against an
-# unquantized baseline on real hardware. See docs/quantization.md.
+# unquantized baseline on real hardware. Both INT8 entries were measured on
+# NVIDIA sm89 *and* on x86-64 CPU; the narrower formats are NVIDIA-only, so
+# _QUANTIZATION_VENDORS carries the target half of the gate. See
+# docs/quantization.md.
 VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
     "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8, FP8}),
     "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8, FP8, NVFP4}),
@@ -524,7 +547,7 @@ def _resolve_dtype(
     }
     if value == "auto":
         if quantization in WEIGHT_ONLY_QUANTIZATIONS:
-            return torch.bfloat16
+            return values[_QUANTIZED_COMPUTE_DTYPE.get(target.vendor, "bfloat16")]
         if target.vendor == "cpu":
             return torch.float32
         if target.vendor == "tpu":
@@ -552,17 +575,20 @@ def _validate_quantization(
             f"Unsupported quantization {quantization!r}; expected one of: {choices}."
         )
     label = _QUANTIZATION_LABELS[quantization]
-    if target.vendor != "nvidia":
+    if target.vendor not in _QUANTIZATION_VENDORS[quantization]:
         raise UnsupportedModelError(
-            f"{label} weight-only quantization is supported only on detected NVIDIA GPUs."
+            f"{label} weight-only quantization is supported only on "
+            f"{_QUANTIZATION_VENDOR_TEXT[quantization]}."
         )
     if backend not in {"auto", "inductor"}:
         raise UnsupportedModelError(
             f"{label} weight-only quantization requires backend='auto' or backend='inductor'."
         )
-    if dtype not in {"auto", "bfloat16"}:
+    expected_dtype = _QUANTIZED_COMPUTE_DTYPE[target.vendor]
+    if dtype not in {"auto", expected_dtype}:
         raise UnsupportedModelError(
-            f"{label} weight-only quantization requires dtype='auto' or dtype='bfloat16'."
+            f"{label} weight-only quantization on {target.vendor} requires dtype='auto' "
+            f"or dtype='{expected_dtype}'."
         )
     if quantization == FP8 and not _supports_fp8(target):
         raise UnsupportedModelError(

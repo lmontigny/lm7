@@ -329,31 +329,34 @@ lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 ## Quantization
 
 For `lm7 model run`, quantization stores weights in fewer bits than the model was
-trained in. This path is weight-only, with BF16 compute:
+trained in. This path is weight-only:
 
-| `--quantize` | Weight storage | Compute | Requires |
+| `--quantize` | Weight storage | Targets | Compute |
 | --- | --- | --- | --- |
-| `none` (default) | as loaded | FP32 / FP16 / BF16 | nothing |
-| `int8` | INT8 | BF16 | NVIDIA GPU |
-| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer |
-| `nvfp4` | NVFP4 (4-bit, block-16) | BF16 | NVIDIA GPU |
+| `none` (default) | as loaded | all | FP32 / FP16 / BF16 |
+| `int8` | INT8 | NVIDIA GPU, **CPU** | BF16 on NVIDIA, FP32 on CPU |
+| `fp8` | FP8 | NVIDIA Ada (`sm89`) or newer | BF16 |
+| `nvfp4` | NVFP4 (4-bit, block-16) | NVIDIA GPU | BF16 |
 
 ```bash
 uv pip install -e ".[hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --target nvidia --backend inductor --dtype bfloat16 \
-  --quantize int8
+  --target cpu --quantize int8      # 513 -> 210 MiB, same next token
 ```
 
-The conversion is [TorchAO](https://github.com/pytorch/ao)'s. It is NVIDIA-only,
-opt-in, and admitted per **(model, mode)** pair — a mode is rejected for a model
-whose outputs have not been compared against a BF16 baseline on real hardware.
-`nvfp4` buys the smallest footprint and costs the most accuracy; it clears that
-bar for one model so far. Both `--quantize` and the older `--quantization`
-spelling work. This runtime path does not quantize activations. ExecuTorch export
-has a separate calibrated XNNPACK INT8 weight-and-activation path for edge CPUs;
-see [ExecuTorch](docs/executorch.md). See [quantization](docs/quantization.md) for
-the runtime modes.
+The conversion is [TorchAO](https://github.com/pytorch/ao)'s. It is opt-in and
+admitted per **(model, mode)** pair — a mode is rejected for a model whose
+outputs have not been compared against an unquantized baseline on real hardware.
+`int8` is the only mode measured off NVIDIA; on CPU it cuts a model to 2.44x
+smaller at no measured accuracy cost, with a latency effect that depends on model
+size. `nvfp4` buys the smallest footprint and costs the most accuracy; it clears
+the bar for one model so far. Both `--quantize` and the older `--quantization`
+spelling work.
+
+This runtime path does not quantize activations. ExecuTorch export has a separate
+calibrated XNNPACK INT8 weight-and-activation path for edge CPUs; see
+[ExecuTorch](docs/executorch.md). See [quantization](docs/quantization.md) for the
+runtime modes and the measurements behind them.
 
 ## Examples and benchmarks
 

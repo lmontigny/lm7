@@ -133,7 +133,7 @@ Not implemented:
 - Persistent artifacts. This is a JIT backend — the compiled flatbuffer lives in
   the process and a restart recompiles. `lm7.export` and `.lm7` bundles do not
   cover Tenstorrent.
-- Quantization, which is NVIDIA-only in LM7 today.
+- Quantization, which reaches only NVIDIA GPUs and CPU in LM7 today.
 - Physical-hardware CI. Nothing in this path is exercised by GitHub Actions, and
   the numbers below have not been measured on a card by this project.
 
