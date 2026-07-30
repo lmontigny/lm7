@@ -239,6 +239,28 @@ modestly.
 DeepSeek-Coder-1.3B passes this path with the smallest logit movement of the
 three, so it is admitted alongside SmolLM2.
 
+### VNNI *does* help this path, unlike the TorchAO one
+
+Re-measuring SmolLM2-135M on the Cascade Lake Xeon, rebuilding all three IRs from
+one exported graph so they differ only in quantization:
+
+| IR | weights | top-1 | max logit diff | median |
+| --- | --- | --- | --- | --- |
+| FP32 | 538.1 MB | — | — | 45.3 ms |
+| weight-only INT8 | 135.2 MB | 4/4 | 1.11 | **22.0 ms** |
+
+That is **2.1x faster than FP32**, against the 1.16x measured on the AVX2 i7 —
+the opposite of the TorchAO weight-only path, which VNNI did nothing for. The
+accuracy reproduces the row above (1.11 here against 1.20 there), so this is the
+same operation, not a different one.
+
+The difference is what the runtime does at execution time. OpenVINO's CPU plugin
+dynamically quantizes activations for an INT8-weight-compressed model, so it
+really does issue INT8 GEMMs and `vpdpbusd` applies. "Weight-only" describes how
+the IR is *stored*, not how the plugin executes it. TorchAO's weight-only path
+dequantizes to FP32 and issues an FP32 GEMM, which is why the same nominal
+technique gains 2.1x here and loses 1.5-2.3x there.
+
 **Llama-3.2-1B is rejected.** It loses a top-1 token on one prompt in four, and
 excluding `lm_head` from compression did not recover it, because that model ties
 its output projection to its input embedding — so the shared weight is still
@@ -249,12 +271,27 @@ Full post-training quantization (`nncf.quantize`, which also quantizes
 activations, and does need calibration data) was measured and **not adopted**:
 on SmolLM2-135M it produced a max logit difference of 11.9 against FP32 — ten
 times the weight-only path — and was *slower* than weight-only at 33.0 ms,
-because INT8 activations want VNNI this CPU does not have. Unlike the weight-only
-path above, that hardware argument does apply here: quantized activations are
-what make an INT8 GEMM, and an INT8 GEMM is what `vpdpbusd` accelerates. The
-accuracy half of the objection is hardware-independent, so a VNNI part would have
-to fix the 11.9 logit difference — probably through better calibration — before
-the speed question is worth re-asking.
+because INT8 activations want VNNI this CPU does not have.
+
+That decision was re-examined on the VNNI Xeon, with a 32-sample calibration set
+of varied prose rather than repeats of the eval prompt, and it **stands**:
+
+| IR | weights | top-1 | max logit diff | median |
+| --- | --- | --- | --- | --- |
+| weight-only INT8 | 135.2 MB | **4/4** | **1.11** | 22.0 ms |
+| full INT8 PTQ | 135.8 MB | **2/4** | **11.55** | 19.1 ms |
+
+Two things changed and one did not. The speed half of the original objection was
+wrong for this hardware — on VNNI full PTQ is 13% *faster* than weight-only, not
+slower — and the footprint is slightly *worse*, because the extra activation
+scales outweigh nothing. What did not change is accuracy: 11.55 here against the
+11.9 recorded before, so a calibration set built specifically to be representative
+did not move it. Ten times the logit error of weight-only, and 2/4 on a gate that
+requires 4/4, for 13% latency.
+
+Anyone re-running this should know that `model_type=nncf.ModelType.TRANSFORMER` is
+not optional: without it the same call produced 0/4 top-1 and a max logit
+difference of **81.5** on this model.
 
 One caveat about artifact size: LM7 writes the source `exported_program.pt2`
 alongside the compiled IR, and that stays FP32. The deployable IR is 3.98x
