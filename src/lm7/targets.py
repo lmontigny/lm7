@@ -19,6 +19,10 @@ class TargetSpec:
     def __str__(self) -> str:
         if self.vendor == "cpu":
             return "cpu" + (f":{self.architecture}" if self.architecture else "")
+        if self.kind == "npu":
+            # The kind has to survive the round trip: `intel` on its own already
+            # means the Intel GPU, so an NPU spec cannot print as its vendor.
+            return f"{self.vendor}:npu"
         qualifier = self.model or self.architecture
         return f"{self.vendor}:{qualifier}" if qualifier else self.vendor
 
@@ -56,6 +60,11 @@ def parse_target(value: str | TargetSpec) -> TargetSpec:
         return TargetSpec("cpu", "cpu", architecture=qualifier)
     if vendor == "intel" and qualifier == "gpu":
         return TargetSpec("intel", "gpu")
+    if vendor == "intel" and qualifier == "npu":
+        # Core Ultra "AI Boost". Its kind is neither "gpu" nor "accelerator":
+        # PyTorch has no NPU device, so the silicon is reached only through the
+        # OpenVINO NPU plugin, and backends gate on that kind to say so.
+        return TargetSpec("intel", "npu")
     if vendor == "apple" and qualifier == "metal":
         return TargetSpec("apple", "gpu", architecture="metal")
     if vendor == "aws" and qualifier == "trainium":

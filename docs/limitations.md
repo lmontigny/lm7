@@ -54,7 +54,7 @@ coverage is CPU.
 | `inductor` | The default and the best-covered path. CPU is the only target with CI. |
 | `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). |
 | `tensorrt` | NVIDIA only, JIT only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). |
-| `openvino` | Intel CPU only. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on export, validated for one model. |
+| `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on export, validated for one model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
 | `onnxruntime` | CPU and NVIDIA CUDA. Returns CPU tensors even after CUDA execution, because the initial adapter uses NumPy rather than I/O binding. Tensor-only inputs and flat outputs; external-data packaging above the 2 GiB protobuf limit is future work. See the [guide](onnxruntime.md). |
 | `iree_vulkan` | Export-only and experimental: fixed shapes, tensor-only I/O, FP32 MLP execution is the validated scope. Causal LMs, dynamic sequences, KV caches, and WebGPU are future work. See the [guide](iree-vulkan.md). |
 | `litert` | Export-only, CPU/XNNPACK only. Static tensor-only inputs, returns CPU tensors. LiteRT Torch caps PyTorch below 2.13, so conversion belongs in a separate environment. Packages generic `.tflite` graphs, not LiteRT-LM conversations. See the [guide](litert.md). |
@@ -72,6 +72,10 @@ coverage is CPU.
   initial single-process integrations **without physical-hardware CI**.
 - NVIDIA Inductor, quantization, and TensorRT have been exercised on a local Ada
   (`sm89`) GPU only.
+- `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
+  **no Intel NPU has ever executed it**. Its integration tests skip unless
+  OpenVINO reports an NPU; everything else about it is unit-tested against a
+  fake runtime.
 - `aws:trainium` parses as a target and is never executed.
 
 ## Evaluated, not adopted
@@ -81,7 +85,6 @@ These have measurement harnesses or written plans, and no registered backend:
 - [AMD MIGraphX](amd-migraphx.md) — benchmark harness only.
 - [Qualcomm Hexagon](qualcomm-hexagon.md) — evaluation plan; blocked on SDK and
   device access. ExecuTorch's QNN delegate is likely the cheaper route.
-- [Intel NPU via OpenVINO](openvino-evaluation.md) — plan only.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — would unpin
   `stablehlo` from a matching PyTorch; evaluated and **not adopted**.
 

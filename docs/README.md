@@ -21,6 +21,7 @@ This index covers everything else.
 | NVIDIA GPU | [development.md#nvidia-cuda](development.md#nvidia-cuda) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
+| Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
 | Google TPU | [google-tpu.md](google-tpu.md) |
 | Tenstorrent | [tenstorrent.md](tenstorrent.md) |
 
@@ -29,7 +30,7 @@ This index covers everything else.
 | Backend | Document |
 | --- | --- |
 | `onnxruntime` | [onnxruntime.md](onnxruntime.md) |
-| `openvino` | [openvino-evaluation.md](openvino-evaluation.md) |
+| `openvino` | [openvino-evaluation.md](openvino-evaluation.md), [intel-npu.md](intel-npu.md) |
 | `iree_vulkan` | [iree-vulkan.md](iree-vulkan.md) |
 | `litert` | [litert.md](litert.md) |
 | `executorch` (Android, iOS, embedded) | [executorch.md](executorch.md) |

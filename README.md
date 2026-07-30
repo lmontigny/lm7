@@ -46,6 +46,7 @@ lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT instea
 lm7.compile(model, target="apple")  # TorchInductor, Metal via MPS
 lm7.compile(model, target="tpu")  # PyTorch/XLA and OpenXLA
 lm7.compile(model, target="tenstorrent")  # tt-xla, tt-mlir, tt-metal
+lm7.compile(model, target="intel:npu")  # OpenVINO, Intel NPU plugin
 ```
 
 You do not install or learn five toolchains to try a second device; you change a
@@ -79,23 +80,28 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `eager` (+ `iree_vulkan`) |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` |
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `eager` (+ `iree_vulkan`) |
+| Intel | NPU (Core Ultra AI Boost) | `intel:npu` | `openvino` |
 | Google | TPU | `tpu` | `openxla`, `eager` |
 | Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` |
 | Android, iOS, embedded | CPU (ARM64, x86-64) | `cpu` | `executorch` (export only) |
 | AWS | Trainium | `aws:trainium` | parses only, never executed |
 
 Any x86-64 or ARM64 CPU runs through `cpu`, Intel and AMD included. A vendor
-listed twice has an *additional* accelerator; its CPU is still supported.
+listed more than once has *additional* accelerators; its CPU is still supported.
 Backends in parentheses are export-only or explicit — see
 [backends](#backends).
 
 Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
 `amd:gfx942`, `cpu:arm64`, `tenstorrent:blackhole`.
 
+`intel:npu` is the one target with no PyTorch device behind it: OpenVINO owns
+the NPU, so `inductor` and `eager` decline it, `target="auto"` never picks it,
+and it has [its own guide](docs/intel-npu.md).
+
 Run `lm7 targets` to see what is actually present on your machine.
 
-Not supported, with written plans: [Intel NPU](docs/openvino-evaluation.md),
-[Qualcomm Hexagon NPU](docs/qualcomm-hexagon.md), and
+Not supported, with written plans:
+[Qualcomm Hexagon NPU](docs/qualcomm-hexagon.md) and
 [AMD MIGraphX](docs/amd-migraphx.md).
 
 ## Tested model coverage
@@ -176,7 +182,7 @@ print(compiled.target, compiled.selected_backend)
 | `tenstorrent` | tt-xla + tt-mlir + tt-metal | StableHLO, then a TT-NN flatbuffer | JIT | tenstorrent | 100 |
 | `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT | nvidia | 90 |
-| `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel) | 80 |
+| `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel), intel:npu | 80 |
 | `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel | export only |
 | `litert` | LiteRT Torch + XNNPACK | persistent `.tflite` model | **AOT**, export only | cpu | export only |
@@ -187,8 +193,9 @@ print(compiled.target, compiled.selected_backend)
 
 With `backend="auto"`, LM7 picks the highest-priority backend that supports the
 resolved target: `inductor` on CPU, NVIDIA, AMD, Intel, and Apple; `openxla` on
-TPU; `tenstorrent` on Tenstorrent. `eager` wins only when nothing else supports
-the target, or when a compile fails and `fallback="warn"` takes over.
+TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is the
+only candidate. `eager` wins only when nothing else supports the target, or when
+a compile fails and `fallback="warn"` takes over.
 
 Two rows in that table are not `lm7.compile` backends at all. **Export only**
 means the backend is reachable solely through `lm7.export(..., backend=...)` —
@@ -211,7 +218,7 @@ Most non-default backends need an extra:
 
 ```bash
 uv pip install -e ".[tensorrt]"      # Torch-TensorRT 2.12.1 / PyTorch 2.12 / CUDA 13
-uv pip install -e ".[openvino]"      # Intel CPU
+uv pip install -e ".[openvino]"      # Intel CPU and NPU
 uv pip install -e ".[onnxruntime]"   # CPU — or ".[onnxruntime-gpu]" for CUDA 13, never both
 uv pip install -e ".[iree-vulkan]"   # Vulkan AOT export
 uv pip install -e ".[openxla]"       # on a TPU VM
@@ -292,7 +299,7 @@ PyTorch `.pt2` program. Pick a backend to add a compiled payload beside it:
 | --- | --- | --- | --- |
 | `export` (default) | portable `ExportedProgram` only | no | [JIT vs. AOT](docs/jit-vs-aot.md) |
 | `aot_inductor` | `.pt2` with kernels baked in | no | [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) |
-| `openvino` | OpenVINO IR (`.xml` + `.bin`) | yes, Intel CPU | [OpenVINO](docs/openvino-evaluation.md) |
+| `openvino` | OpenVINO IR (`.xml` + `.bin`) | yes, Intel CPU or NPU | [OpenVINO](docs/openvino-evaluation.md), [Intel NPU](docs/intel-npu.md) |
 | `onnxruntime` | `.onnx` plus its execution provider | yes | [ONNX Runtime](docs/onnxruntime.md) |
 | `iree_vulkan` | Vulkan VMFB with SPIR-V | yes, GPU | [IREE Vulkan](docs/iree-vulkan.md) |
 | `litert` | `.tflite` flatbuffer | yes, CPU | [LiteRT](docs/litert.md) |

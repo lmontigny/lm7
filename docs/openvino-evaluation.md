@@ -135,7 +135,7 @@ the caller:
 
 | Pitfall | What the backend does |
 | --- | --- |
-| Reduced default precision | Pins `INFERENCE_PRECISION_HINT` to `f32`; override with `options={"inference_precision": ...}` |
+| Reduced default precision | Pins `INFERENCE_PRECISION_HINT` to `f32` on the CPU plugin, and leaves it unset on the NPU, whose supported precision is FP16; override with `options={"inference_precision": ...}` |
 | FP16 weight compression | Passes `compress_to_fp16=False` |
 | Dynamically shaped export | Reshapes IR to the example input shapes; disable with `options={"static_shapes": False}` |
 | Output buffer aliasing | Clones every returned tensor |
@@ -145,8 +145,13 @@ the caller:
 Two limits worth knowing. The callable returns a tensor or a tuple of tensors,
 so a model whose `forward` returns a dataclass (a Hugging Face `ModelOutput`,
 for example) needs the same wrapper the benchmark harness uses. And only the
-`cpu` and `intel` target vendors are accepted; Intel GPU and NPU are untested
-because no such device was available.
+`cpu` and `intel` target vendors are accepted.
+
+`intel:npu` maps to the OpenVINO `NPU` device and is documented separately in
+[intel-npu.md](intel-npu.md) — it is implemented but has never run on hardware.
+`intel` on its own, meaning the Intel GPU, still compiles on the CPU plugin:
+mapping it to the `GPU` device would change what that target executes today and
+needs its own pass through the criteria above.
 
 ### Artifacts
 

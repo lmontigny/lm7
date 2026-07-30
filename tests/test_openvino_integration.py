@@ -33,6 +33,17 @@ def model() -> torch.nn.Module:
     ).eval()
 
 
+def requires_intel_npu() -> None:
+    """Skip unless the OpenVINO NPU plugin reports a usable device.
+
+    An Intel NPU needs both the plugin and the ``intel_vpu`` driver, so this is
+    a runtime question rather than a package one.
+    """
+    core = pytest.importorskip("openvino").Core()
+    if not any(name.split(".", 1)[0] == "NPU" for name in core.available_devices):
+        pytest.skip("this host exposes no Intel NPU to OpenVINO")
+
+
 def request_for(module: torch.nn.Module) -> CompileRequest:
     return CompileRequest(
         model=module,
@@ -141,6 +152,50 @@ def test_export_writes_openvino_ir_and_round_trips(tmp_path):
 
     reloaded = lm7.load_artifact(artifact.path)
     torch.testing.assert_close(reloaded(example), expected, rtol=1e-4, atol=1e-4)
+
+
+def test_openvino_matches_eager_on_the_npu():
+    """The NPU plugin computes in FP16, so the tolerance here is FP16-level and
+    deliberately looser than the CPU test above."""
+    requires_intel_npu()
+    torch.manual_seed(0)
+    source = model()
+    reference = copy.deepcopy(source)
+    example_input = torch.randn(8, 16)
+    expected = reference(example_input)
+
+    compiled = lm7.compile(source, target="intel:npu", backend="auto", fallback="error")
+    actual = compiled(example_input)
+
+    assert compiled.selected_backend == "openvino"
+    assert compiled.artifact is not None
+    assert compiled.artifact.metadata["device"] == "NPU"
+    # No INFERENCE_PRECISION_HINT: the plugin has no FP32 mode to pin.
+    assert compiled.artifact.metadata["inference_precision"] is None
+    torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+
+
+def test_npu_export_round_trips_through_the_npu_plugin(tmp_path):
+    requires_intel_npu()
+    torch.manual_seed(0)
+    source = model()
+    example = torch.randn(8, 16)
+    expected = copy.deepcopy(source)(example)
+
+    artifact = lm7.export(
+        source,
+        args=(example,),
+        target="intel:npu",
+        backend="openvino",
+        output=tmp_path / "npu.lm7",
+    )
+
+    assert artifact.manifest.runtime_requirements["openvino_device"] == "NPU"
+    torch.testing.assert_close(artifact(example), expected, rtol=2e-2, atol=2e-2)
+
+    # The device travels with the artifact: a reload must not drop to the CPU.
+    reloaded = lm7.load_artifact(artifact.path)
+    torch.testing.assert_close(reloaded(example), expected, rtol=2e-2, atol=2e-2)
 
 
 def test_export_rejects_openvino_for_non_intel_targets(tmp_path):

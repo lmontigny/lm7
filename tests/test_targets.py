@@ -14,6 +14,7 @@ from lm7.targets import parse_target
         ("nvidia:sm90", "nvidia", "gpu", "sm90", None),
         ("amd:gfx942", "amd", "gpu", "gfx942", None),
         ("intel:gpu", "intel", "gpu", None, None),
+        ("intel:npu", "intel", "npu", None, None),
         ("tenstorrent", "tenstorrent", "accelerator", None, None),
         ("tenstorrent:blackhole", "tenstorrent", "accelerator", "blackhole", None),
         ("tenstorrent:wormhole", "tenstorrent", "accelerator", "wormhole", None),
@@ -30,7 +31,7 @@ def test_parse_target(value, vendor, kind, architecture, model):
     )
 
 
-@pytest.mark.parametrize("value", ["", "wat", "nvidia:", "nvidia:h100:0"])
+@pytest.mark.parametrize("value", ["", "wat", "nvidia:", "nvidia:h100:0", "intel:vpu"])
 def test_parse_invalid_target(value):
     with pytest.raises(TargetNotFoundError):
         parse_target(value)

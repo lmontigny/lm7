@@ -18,6 +18,15 @@ class EagerBackend:
         )
 
     def supports(self, request: CompileRequest) -> Support:
+        if request.target.kind == "npu":
+            # An NPU is not a PyTorch device, so "eager on intel:npu" would be
+            # eager on the CPU under another name. LM7 still falls back here
+            # when an NPU compile fails, but that path warns; planning does not.
+            return Support(
+                False,
+                f"PyTorch has no NPU device; {request.target} is reached through "
+                "backend='openvino'.",
+            )
         return Support(True, "Eager supports every detected local PyTorch device.", priority=0)
 
     def compile(
