@@ -6,7 +6,7 @@ runtime. `lm7.export(..., backend="executorch")` writes a `.pte` — the file
 Android and iOS actually load — into the `.lm7` artifact.
 
 ```
-nn.Module → torch.export → to_edge_transform_and_lower(XnnpackPartitioner) → .pte → phone
+nn.Module → torch.export → [optional PT2E INT8] → XNNPACK lowering → .pte → phone
 ```
 
 This is an **export-only** backend. `lm7.compile()` never selects it, because a
@@ -50,7 +50,7 @@ the situation either way.
 
 ```bash
 lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target cpu --backend executorch
+  --target cpu --backend executorch --quantize int8
 ```
 
 ```python
@@ -60,6 +60,7 @@ artifact = lm7.export(
     target="cpu",
     backend="executorch",
     output="model.lm7",
+    options={"quantization": "int8"},
 )
 output = artifact(example_input)  # runs through the ExecuTorch runtime
 ```
@@ -79,6 +80,28 @@ The reloaded callable takes **positional tensors only**. An ExecuTorch method
 has a flat input list with no keyword names, so capture with
 `args=(input_ids, attention_mask)` rather than kwargs.
 
+## INT8 quantization
+
+Pass `--quantize int8` to `lm7 model export`, or
+`options={"quantization": "int8"}` to `lm7.export`. LM7 uses ExecuTorch's
+XNNPACK PT2E post-training quantizer: activations use symmetric per-tensor INT8
+and weights use symmetric per-channel INT8. The captured example input is run
+once as the calibration sample before conversion and XNNPACK lowering.
+
+Calibration data matters. For `model export`, choose a representative prompt;
+for the Python API, pass a representative tensor batch. One sample is a useful
+first export, not an accuracy guarantee. Compare the quantized model on the
+dataset and shapes that matter before shipping it.
+
+INT8 currently requires a fixed capture shape. LM7 also fails the export when
+the quantizer inserts no quantized operators, instead of silently producing a
+float artifact. Unsupported operators can remain as portable ExecuTorch
+kernels, so inspect both `quantized_ops` and delegate coverage in the manifest.
+
+The `.pte` is the deployable, quantized payload. LM7 still retains the original
+float `exported_program.pt2` for reproducibility and debugging, so total `.lm7`
+directory size does not shrink in proportion to the `.pte`.
+
 ## What the manifest records
 
 ```json
@@ -87,6 +110,9 @@ has a flat input list with no keyword names, so capture with
   "delegate": "xnnpack",
   "delegated_calls": 155,
   "total_calls": 1970,
+  "quantization": "int8",
+  "quantized_ops": 42,
+  "calibration_samples": 1,
   "device_bound": false
 }
 ```
@@ -125,9 +151,14 @@ The artifact is nearly twice the `.pte`, because LM7 always writes
 `exported_program.pt2` beside the compiled payload. Only the `.pte` ships to a
 device; the `.pt2` is what makes the artifact reloadable as a torch program.
 
-And 622 MiB is float32 weights written verbatim. A 135M-parameter model has no
-business being that large on a phone — that is what quantization is for, and
-LM7 does not do it on this path yet.
+And 622 MiB is float32 weights written verbatim. The new INT8 path addresses
+that deployment cost, but the SmolLM2 numbers above remain the float baseline;
+full-model INT8 accuracy and latency have not yet been characterized.
+
+A separate 256→512→64 MLP check reduced the deployable `.pte` from 660,480 to
+174,976 bytes (73.5%) and had 0.0082 maximum absolute error against eager FP32.
+That verifies the storage and runtime path; it is not a language-model quality
+claim.
 
 ## Scope
 
@@ -135,10 +166,11 @@ LM7 does not do it on this path yet.
   it raises. The artifact is the deliverable.
 - **XNNPACK only.** Core ML, QNN, MediaTek, Vulkan, Arm Ethos-U, and Exynos are
   ExecuTorch delegates LM7 does not wire up.
-- **No quantization.** LM7's quantization is NVIDIA-only, and ExecuTorch has its
-  own quantization flow that is not integrated here. This matters more for edge
-  than anywhere else — see the artifact size above.
-- **Static shapes.** Whatever `torch.export` captured is what the `.pte` accepts.
+- **INT8 PTQ only.** There is no INT4, QAT, multi-sample calibration API, or
+  backend-specific accuracy gate yet. Quantization support depends on the
+  operator patterns recognized by ExecuTorch's XNNPACK quantizer.
+- **Static shapes.** Whatever `torch.export` captured is what the `.pte` accepts;
+  INT8 export explicitly rejects dynamic sequence capture.
 - **No on-device execution or deployment.** LM7 writes the artifact; getting it
   onto a phone and into an app is ExecuTorch's Android and iOS tooling.
 - **No physical-device CI.** Validation is host XNNPACK. The delegate is the same

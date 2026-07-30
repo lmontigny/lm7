@@ -311,6 +311,8 @@ def export(
         iree_vulkan_target = None
         executorch_delegated = None
         executorch_total = None
+        executorch_quantization = None
+        executorch_quantized_ops = None
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
         litert_settings = None
@@ -355,6 +357,8 @@ def export(
             compiled_sha256 = _file_sha256(lowered.path)
             executorch_delegated = lowered.delegated_calls
             executorch_total = lowered.total_calls
+            executorch_quantization = lowered.quantization
+            executorch_quantized_ops = lowered.quantized_ops
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -494,6 +498,9 @@ def export(
                         "delegate": EXECUTORCH_DELEGATE,
                         "delegated_calls": executorch_delegated,
                         "total_calls": executorch_total,
+                        "quantization": executorch_quantization,
+                        "quantized_ops": executorch_quantized_ops,
+                        "calibration_samples": 1 if executorch_quantization == "int8" else 0,
                         "device_bound": False,
                     }
                     if backend == "executorch"

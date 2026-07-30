@@ -182,6 +182,68 @@ def test_compile_exported_writes_pte_and_reports_partition(monkeypatch, tmp_path
     assert lowered.path == destination
     assert destination.read_bytes() == b"PTE\x00fake-program"
     assert (lowered.delegated_calls, lowered.total_calls) == (3, 7)
+    assert lowered.quantization == "none"
+    assert lowered.quantized_ops == 0
+
+
+def test_compile_exported_applies_int8_quantization(monkeypatch, tmp_path):
+    install_fake_executorch(monkeypatch, tmp_path, delegated=2, total=4)
+    exported = torch.export.export(model(), (torch.randn(8, 4),))
+    calls = {}
+
+    def quantize(program):
+        calls["program"] = program
+        return program, 3
+
+    monkeypatch.setattr(executorch_backend_module, "_quantize_int8", quantize)
+    lowered = ExecuTorchBackend().compile_exported(
+        exported,
+        tmp_path / COMPILED_PTE_NAME,
+        options={"quantization": "int8"},
+    )
+
+    assert calls["program"] is exported
+    assert lowered.quantization == "int8"
+    assert lowered.quantized_ops == 3
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"quantization": "int4"}, "must be 'none' or 'int8'"),
+        ({"unknown": True}, "Unsupported ExecuTorch options"),
+    ],
+)
+def test_compile_exported_rejects_invalid_options(monkeypatch, tmp_path, options, message):
+    install_fake_executorch(monkeypatch, tmp_path)
+    exported = torch.export.export(model(), (torch.randn(8, 4),))
+
+    with pytest.raises(CompilationError, match=message):
+        ExecuTorchBackend().compile_exported(
+            exported, tmp_path / COMPILED_PTE_NAME, options=options
+        )
+
+
+def test_int8_rejects_dynamic_shapes_before_quantization(monkeypatch, tmp_path):
+    install_fake_executorch(monkeypatch, tmp_path)
+    batch = torch.export.Dim("batch", min=1, max=16)
+    exported = torch.export.export(
+        model(),
+        (torch.randn(8, 4),),
+        dynamic_shapes=({0: batch},),
+    )
+    monkeypatch.setattr(
+        executorch_backend_module,
+        "_quantize_int8",
+        lambda program: pytest.fail("quantizer must not run"),
+    )
+
+    with pytest.raises(CompilationError, match="fixed-shape"):
+        ExecuTorchBackend().compile_exported(
+            exported,
+            tmp_path / COMPILED_PTE_NAME,
+            options={"quantization": "int8"},
+        )
 
 
 def test_compile_exported_wraps_lowering_failure(monkeypatch, tmp_path):
@@ -236,10 +298,32 @@ def test_export_writes_an_executorch_artifact(monkeypatch, tmp_path):
     requirements = artifact.manifest.runtime_requirements
     assert requirements["delegate"] == "xnnpack"
     assert (requirements["delegated_calls"], requirements["total_calls"]) == (2, 5)
+    assert requirements["quantization"] == "none"
+    assert requirements["quantized_ops"] == 0
+    assert requirements["calibration_samples"] == 0
     # The .pte carries its own weights and the XNNPACK delegate spans ARM64 and
     # x86-64, so unlike every other compiled payload it is not host-bound.
     assert requirements["device_bound"] is False
     assert (output / COMPILED_PTE_NAME).is_file()
+
+
+def test_export_records_int8_quantization(monkeypatch, tmp_path):
+    install_fake_executorch(monkeypatch, tmp_path, delegated=2, total=5)
+    monkeypatch.setattr(executorch_backend_module, "_quantize_int8", lambda program: (program, 4))
+
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(8, 4),),
+        target="cpu",
+        backend="executorch",
+        output=tmp_path / "model.lm7",
+        options={"quantization": "int8"},
+    )
+
+    requirements = artifact.manifest.runtime_requirements
+    assert requirements["quantization"] == "int8"
+    assert requirements["quantized_ops"] == 4
+    assert requirements["calibration_samples"] == 1
 
 
 def test_export_rejects_a_non_cpu_target(monkeypatch, tmp_path):

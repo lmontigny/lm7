@@ -328,9 +328,8 @@ lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 
 ## Quantization
 
-Quantization stores or computes tensors in fewer bits than the model was trained
-in. It has two halves, and **LM7 implements only the first** — weight-only, with
-BF16 compute:
+For `lm7 model run`, quantization stores weights in fewer bits than the model was
+trained in. This path is weight-only, with BF16 compute:
 
 | `--quantize` | Weight storage | Compute | Requires |
 | --- | --- | --- | --- |
@@ -351,8 +350,10 @@ opt-in, and admitted per **(model, mode)** pair — a mode is rejected for a mod
 whose outputs have not been compared against a BF16 baseline on real hardware.
 `nvfp4` buys the smallest footprint and costs the most accuracy; it clears that
 bar for one model so far. Both `--quantize` and the older `--quantization`
-spelling work. Activation quantization is not implemented. See
-[quantization](docs/quantization.md).
+spelling work. This runtime path does not quantize activations. ExecuTorch export
+has a separate calibrated XNNPACK INT8 weight-and-activation path for edge CPUs;
+see [ExecuTorch](docs/executorch.md). See [quantization](docs/quantization.md) for
+the runtime modes.
 
 ## Examples and benchmarks
 
