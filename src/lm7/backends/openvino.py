@@ -26,6 +26,13 @@ _DEFAULT_INFERENCE_PRECISION = "f32"
 # compiled model matches the shapes it was captured for.
 _DEFAULT_STATIC_SHAPES = True
 
+# NNCF weight compression, applied to the IR between convert_model and
+# save_model. Only weight-only INT8 is wired up: full post-training
+# quantization (nncf.quantize, which also quantizes activations) measured a
+# 11.9 max logit difference against FP32 on SmolLM2-135M and was *slower* than
+# weight-only, because INT8 activations want VNNI. See docs/quantization.md.
+_QUANTIZATIONS = frozenset({"none", "int8"})
+
 
 class OpenVINOBackend:
     """Intel OpenVINO backend built on the IR artifact path.
@@ -107,6 +114,7 @@ class OpenVINOBackend:
             # openvino.save_model compresses weights to FP16 by default, which shows
             # up as FP16-level error on an otherwise FP32 model.
             compress_to_fp16 = bool(options.pop("compress_to_fp16", False))
+            quantization = str(options.pop("quantization", "none"))
             plugin_config = dict(options.pop("config", {}))
             if inference_precision is not None:
                 plugin_config.setdefault("INFERENCE_PRECISION_HINT", str(inference_precision))
@@ -138,6 +146,7 @@ class OpenVINOBackend:
                     model_path,
                     static_shapes=flat_inputs if static_shapes else None,
                     compress_to_fp16=compress_to_fp16,
+                    quantization=quantization,
                 )
                 compiled = _compile_ir(
                     openvino,
@@ -156,6 +165,7 @@ class OpenVINOBackend:
                         "device": device,
                         "openvino_version": getattr(openvino, "__version__", None),
                         "compress_to_fp16": compress_to_fp16,
+                        "quantization": quantization,
                         "static_shapes": static_shapes,
                         "inference_precision": plugin_config.get("INFERENCE_PRECISION_HINT"),
                     },
@@ -179,13 +189,20 @@ class OpenVINOBackend:
         *,
         static_shapes: Sequence[torch.Tensor] | None = None,
         compress_to_fp16: bool = False,
+        quantization: str = "none",
     ) -> Path:
         """Convert an ExportedProgram to OpenVINO IR and save it to ``model_path``.
 
         Writes ``model_path`` and its ``.bin`` weight sibling. ``static_shapes``
         pins the IR to those tensor shapes; leaving it ``None`` keeps the symbolic
-        dimensions ``torch.export`` produces.
+        dimensions ``torch.export`` produces. ``quantization="int8"`` compresses
+        the IR's weights with NNCF before saving.
         """
+        if quantization not in _QUANTIZATIONS:
+            raise CompilationError(
+                f"Unsupported OpenVINO quantization {quantization!r}; expected "
+                f"{' or '.join(repr(name) for name in sorted(_QUANTIZATIONS))}."
+            )
         probe = self.probe()
         if not probe.available:
             raise CompilationError(probe.reason)
@@ -194,6 +211,8 @@ class OpenVINOBackend:
             ov_model = openvino.convert_model(exported_program)
             if static_shapes is not None:
                 _reshape_to_static(ov_model, static_shapes)
+            if quantization == "int8":
+                ov_model = _compress_weights(ov_model)
             openvino.save_model(ov_model, str(model_path), compress_to_fp16=compress_to_fp16)
         except Exception as exc:
             raise CompilationError(
@@ -283,6 +302,31 @@ def _compile_ir(
             f"{available}. Install the matching plugin or use device='CPU'."
         )
     return core.compile_model(str(model_path), device, dict(config))
+
+
+def _compress_weights(ov_model: Any) -> Any:
+    """Compress an IR's weights to INT8 with NNCF.
+
+    Uses asymmetric per-channel INT8, which needs no calibration data because a
+    weight tensor's range is known statically. NNCF compresses every eligible
+    layer including the embedding and the vocabulary projection, which is why
+    the saving lands near 4x rather than the ~2.4x the TorchAO runtime path
+    reaches by leaving lm_head alone.
+    """
+    try:
+        nncf = importlib.import_module("nncf")
+    except ImportError as exc:
+        raise CompilationError(
+            "INT8 OpenVINO export needs NNCF, which is not installed. "
+            'Install it with: pip install "lm7[openvino]".'
+        ) from exc
+    try:
+        return nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT8_ASYM)
+    except Exception as exc:
+        raise CompilationError(
+            f"NNCF INT8 weight compression failed: {exc}. Export without "
+            "quantization, or file the model shape that broke it."
+        ) from exc
 
 
 def _reshape_to_static(ov_model: Any, flat_inputs: Sequence[torch.Tensor]) -> None:

@@ -353,10 +353,18 @@ size. `nvfp4` buys the smallest footprint and costs the most accuracy; it clears
 the bar for one model so far. Both `--quantize` and the older `--quantization`
 spelling work.
 
-This runtime path does not quantize activations. ExecuTorch export has a separate
-calibrated XNNPACK INT8 weight-and-activation path for edge CPUs; see
-[ExecuTorch](docs/executorch.md). See [quantization](docs/quantization.md) for the
-runtime modes and the measurements behind them.
+This runtime path does not quantize activations. Two export paths quantize the
+*artifact* instead, each with its own mechanism:
+
+```bash
+lm7 model export hf://... out.lm7 --backend openvino  --quantize int8  # NNCF, IR weights
+lm7 model export hf://... out.lm7 --backend executorch --quantize int8  # calibrated XNNPACK PTQ
+```
+
+The OpenVINO one compresses the IR to **3.98x smaller** and was the only
+quantization measured here that runs *faster* than its FP32 baseline. See
+[quantization](docs/quantization.md) for every mode and the measurements behind
+them, and [ExecuTorch](docs/executorch.md) for the edge flow.
 
 ## Examples and benchmarks
 

@@ -545,12 +545,14 @@ def test_export_hf_model_passes_int8_to_executorch(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"backend": "export", "quantization": "int8"}, "only by the ExecuTorch"),
+        ({"backend": "export", "quantization": "int8"}, "executorch, openvino"),
         (
             {"backend": "executorch", "quantization": "int8", "dynamic_sequence": True},
             "requires a fixed input shape",
         ),
         ({"backend": "executorch", "quantization": "int4"}, "expected 'none' or 'int8'"),
+        # NNCF compresses the vocabulary projection too, so the gate is per model.
+        ({"backend": "openvino", "quantization": "int8"}, "not validated"),
     ],
 )
 def test_export_hf_model_rejects_invalid_quantization(tmp_path, kwargs, message):
@@ -558,6 +560,32 @@ def test_export_hf_model_rejects_invalid_quantization(tmp_path, kwargs, message)
         huggingface.export_hf_model(
             "hf://example/tiny-model", output=str(tmp_path / "m.lm7"), **kwargs
         )
+
+
+def test_openvino_int8_export_passes_the_option_for_a_validated_model(monkeypatch, tmp_path):
+    """The dynamic-sequence restriction is ExecuTorch's, because its calibration
+    sample is the captured example. NNCF needs no calibration, so OpenVINO keeps
+    dynamic sequences."""
+    calls = {}
+    monkeypatch.setattr(huggingface, "_load_transformers", lambda: _exportable_transformers(calls))
+    recorded = {}
+
+    def fake_export(model, **kwargs):
+        recorded.update(kwargs)
+        raise SystemExit(0)
+
+    monkeypatch.setattr("lm7.exporting.export", fake_export)
+
+    model_id = next(iter(huggingface.VALIDATED_OPENVINO_INT8))
+    with pytest.raises(SystemExit):
+        huggingface.export_hf_model(
+            f"hf://{model_id}",
+            output=str(tmp_path / "m.lm7"),
+            backend="openvino",
+            quantization="int8",
+        )
+
+    assert recorded["options"] == {"quantization": "int8"}
 
 
 def test_export_hf_model_rejects_a_non_hf_uri(tmp_path):

@@ -99,3 +99,20 @@ Measure it for your model rather than assuming. See
 For an artifact to ship to an edge device rather than a process to run here, the
 ExecuTorch backend has a separate calibrated INT8 export flow — see
 [ExecuTorch](executorch.md).
+
+## Shipping a smaller artifact
+
+`lm7 model run --quantize int8` shrinks a model inside the current process. To
+produce something to deploy, export an OpenVINO IR with NNCF weight compression:
+
+```bash
+uv pip install -e ".[hf,openvino]"
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct out.lm7 \
+  --backend openvino --target cpu --quantize int8
+```
+
+That writes a 135 MB IR against 538 MB for FP32 — 3.98x smaller, because NNCF
+compresses the embedding and vocabulary projection that the TorchAO runtime path
+leaves alone. It loads without PyTorch, and on this host it was the one
+quantization path measured *faster* than its FP32 baseline. See
+[quantization](quantization.md) for the numbers and the per-model gate.

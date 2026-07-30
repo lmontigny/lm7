@@ -67,6 +67,18 @@ VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
 }
 WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 
+# Export backends that accept `quantization`. The two are unrelated mechanisms:
+# ExecuTorch runs calibrated XNNPACK PTQ over the lowered graph, while OpenVINO
+# compresses the IR's weights with NNCF and needs no calibration.
+QUANTIZING_EXPORT_BACKENDS = frozenset({"executorch", "openvino"})
+
+# NNCF compresses every eligible layer, the vocabulary projection included, so
+# it is checked per model like the runtime path. SmolLM2-135M held 4/4 top-1
+# tokens at a 1.20 max logit difference; Llama-3.2-1B managed only 3/4, and
+# excluding lm_head did not recover it because its embedding is tied. See
+# docs/quantization.md.
+VALIDATED_OPENVINO_INT8 = frozenset({"HuggingFaceTB/SmolLM2-135M-Instruct"})
+
 
 def normalize_quantization(value: str) -> str:
     """Map a deprecated long-form quantization name onto its short name."""
@@ -428,14 +440,26 @@ def export_hf_model(
         raise UnsupportedModelError(
             f"Unsupported export quantization {quantization!r}; expected 'none' or 'int8'."
         )
-    if quantization != NO_QUANTIZATION and backend != "executorch":
+    if quantization != NO_QUANTIZATION and backend not in QUANTIZING_EXPORT_BACKENDS:
+        backends = ", ".join(sorted(QUANTIZING_EXPORT_BACKENDS))
         raise UnsupportedModelError(
-            "Export quantization is currently supported only by the ExecuTorch backend."
+            f"Export quantization is currently supported only by these backends: {backends}."
         )
-    if quantization != NO_QUANTIZATION and dynamic_sequence:
+    if quantization != NO_QUANTIZATION and backend == "executorch" and dynamic_sequence:
         raise UnsupportedModelError(
             "ExecuTorch INT8 export currently requires a fixed input shape because the "
             "captured example is also its calibration sample."
+        )
+    if (
+        quantization != NO_QUANTIZATION
+        and backend == "openvino"
+        and model_id not in VALIDATED_OPENVINO_INT8
+    ):
+        validated = ", ".join(sorted(VALIDATED_OPENVINO_INT8))
+        raise UnsupportedModelError(
+            f"INT8 OpenVINO export is not validated for {model_id!r}. Currently "
+            f"validated: {validated}. Llama-3.2-1B loses its top-1 token on one prompt "
+            "in four under this path, which is why the gate is per model."
         )
     resolved_target = resolve_target(target)
     torch_dtype = _resolve_dtype(dtype, resolved_target)
@@ -499,7 +523,7 @@ def export_hf_model(
         backend=backend,
         output=output,
         shape_profile=_sequence_shape_profile(inputs, bounds) if bounds else None,
-        options={"quantization": quantization} if backend == "executorch" else None,
+        options=({"quantization": quantization} if backend in QUANTIZING_EXPORT_BACKENDS else None),
     )
     export_ms = (time.perf_counter() - started) * 1000
 
