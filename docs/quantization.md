@@ -141,9 +141,14 @@ on GPU, because the CPU baseline is FP32 rather than BF16:
 | --- | --- | --- | --- | --- | --- |
 | SmolLM2-135M | 4/4 | 1.36 | 513 → 210 MiB (2.44x) | ~49 ms | ~50 ms (**1.03x**) |
 | Llama-3.2-1B | 4/4 | 0.76 | 4943 → 2026 MB (2.44x) | ~323 ms | ~835 ms (**2.59x**) |
+| DeepSeek-Coder-1.3B | 4/4 | 0.67 | 5386 → 1746 MB (3.09x) | — | — |
 
 Intel i7-8086K, 6 threads, compiled through `inductor`, median of 10 after
-warmup, one configuration per process.
+warmup, one configuration per process. The DeepSeek row was measured on a
+different host (12-thread AVX2 x86-64) for accuracy and footprint only; its
+latency is left blank rather than filled with a number from another machine.
+Its better-than-2.44x ratio comes from a wider model with proportionally less
+weight sitting in the untouched `lm_head`.
 
 **The latency cost depends on model size, so measure it.** At 135M the
 dequantization is free; at 1B it costs 2.6x. That gap is hardware-specific: this
@@ -180,11 +185,19 @@ projection, which is where the extra saving comes from:
 | --- | --- | --- | --- | --- | --- |
 | SmolLM2-135M | 538.1 → 135.2 MB (**3.98x**) | 4/4 | 1.20 | ~36 ms | ~31 ms (**1.16x faster**) |
 | Llama-3.2-1B | 4943.3 → 1237.5 MB (3.99x) | **3/4** | 1.79 | ~292 ms | ~284 ms (parity) |
+| DeepSeek-Coder-1.3B | 5385.9 → 1348.4 MB (3.99x) | 4/4 | 0.79 | — | — |
 
 Intel i7-8086K, sequence length 16, median of 30 after warmup, one IR per
-process. This is the only quantization path measured here that is *faster* than
+process. As in the CPU table above, the DeepSeek row comes from a different host
+and covers accuracy and footprint only; its FP32 figure is the model's own weight
+bytes rather than a separately measured FP32 IR. Because the OpenVINO export is
+static-shape, its four prompts are four *five-token* prompts rather than the
+mixed-length set used elsewhere on this page. This is the only quantization path measured here that is *faster* than
 its baseline rather than slower — but only on the smaller model, and only
 modestly.
+
+DeepSeek-Coder-1.3B passes this path with the smallest logit movement of the
+three, so it is admitted alongside SmolLM2.
 
 **Llama-3.2-1B is rejected.** It loses a top-1 token on one prompt in four, and
 excluding `lm_head` from compression did not recover it, because that model ties
@@ -217,9 +230,10 @@ That combination has not been measured: no NPU was available. See
 
 > [!NOTE]
 > This path is validated per **(model, mode)** pair and rejects everything else.
-> Currently validated: `HuggingFaceTB/SmolLM2-135M-Instruct` (`int8`, `fp8`) and
-> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`). Both `int8` entries
-> were measured on NVIDIA sm89 *and* on x86-64 CPU.
+> Currently validated: `HuggingFaceTB/SmolLM2-135M-Instruct` (`int8`, `fp8`),
+> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`), and
+> `deepseek-ai/deepseek-coder-1.3b-instruct` (`int8`, `fp8`). Every `int8` entry
+> was measured on NVIDIA sm89 *and* on x86-64 CPU.
 
 ### What "validated" means here
 
@@ -238,6 +252,9 @@ and the maximum last-token logit difference:
 | **LFM2.5-230M** | `int8` | **0/4** | **22.41** | 1.55x smaller |
 | **LFM2.5-230M** | `fp8` | 4/4 | 0.00 | **1.00x — no-op** |
 | **LFM2.5-230M** | `nvfp4` | **3/4** | **6.31** | 2.04x smaller |
+| DeepSeek-Coder-1.3B | `int8` | 4/4 | 1.66 | 1.82x smaller |
+| DeepSeek-Coder-1.3B | `fp8` | 4/4 | 2.12 | 1.43x smaller |
+| **DeepSeek-Coder-1.3B** | `nvfp4` | 4/4 | **9.25** | 2.84x smaller |
 
 The LFM2.5 rows are why the gate is keyed on the pair rather than the model:
 
@@ -252,9 +269,18 @@ The LFM2.5 rows are why the gate is keyed on the pair rather than the model:
 ### NVFP4 costs much more accuracy than 8-bit
 
 Four bits per weight is a real quality loss at these model sizes, and the table
-above shows it plainly: NVFP4's logit differences are 4.3–7.4 where INT8 and FP8
-sit at 0.6–1.5. Only Llama-3.2-1B kept its top-1 token on all four prompts, so it
-is the only pair admitted. SmolLM2-135M (2/4) and LFM2.5-230M (3/4) are rejected.
+above shows it plainly: NVFP4's logit differences are 4.3–9.3 where INT8 and FP8
+sit at 0.6–2.2. SmolLM2-135M (2/4) and LFM2.5-230M (3/4) fail the top-1 check
+outright, leaving Llama-3.2-1B as the only admitted pair.
+
+DeepSeek-Coder-1.3B is the awkward case: it does keep its top-1 token on all four
+prompts, yet its logits move by 9.25 — more than twice Llama's 4.34, and wider
+than the differences that accompanied both rejections. It is therefore **kept
+out** of the NVFP4 gate. Four greedy prompts are a coarse instrument, and a model
+whose logits move that far has almost certainly changed its distribution below
+the argmax; admitting it on 4/4 alone would be reading more into the signal than
+it carries. Reopening this needs a stronger accuracy check than next-token
+agreement, not another prompt.
 
 This is not an artifact of which layers are selected. Narrowing the filter
 recovers a little accuracy and gives back most of the footprint:
