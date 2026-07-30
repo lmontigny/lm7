@@ -139,23 +139,63 @@ on GPU, because the CPU baseline is FP32 rather than BF16:
 
 | model | top-1 | max logit diff | storage | FP32 | INT8 |
 | --- | --- | --- | --- | --- | --- |
-| SmolLM2-135M | 4/4 | 1.36 | 513 → 210 MiB (2.44x) | ~49 ms | ~50 ms (**1.03x**) |
-| Llama-3.2-1B | 4/4 | 0.76 | 4943 → 2026 MB (2.44x) | ~323 ms | ~835 ms (**2.59x**) |
+| SmolLM2-135M | 4/4 | 1.36 | 513 → 210 MiB (2.44x) | 49.9 ms | 75.8 ms (**1.52x**) |
+| Llama-3.2-1B | 4/4 | 0.76 | 4943 → 2026 MB (2.44x) | 411.2 ms | 928.5 ms (**2.26x**) |
 | DeepSeek-Coder-1.3B | 4/4 | 0.67 | 5386 → 1746 MB (3.09x) | — | — |
 
-Intel i7-8086K, 6 threads, compiled through `inductor`, median of 10 after
-warmup, one configuration per process. The DeepSeek row was measured on a
-different host (12-thread AVX2 x86-64) for accuracy and footprint only; its
-latency is left blank rather than filled with a number from another machine.
-Its better-than-2.44x ratio comes from a wider model with proportionally less
-weight sitting in the untouched `lm_head`.
+Intel i7-8086K, 6 threads, sequence length 16, compiled through `inductor`,
+median of 20 after warmup, one configuration per process. The DeepSeek row was
+measured on a different host for accuracy and footprint only; its latency is left
+blank rather than filled with a number from another machine. Its
+better-than-2.44x ratio comes from a wider model with proportionally less weight
+sitting in the untouched `lm_head`.
 
-**The latency cost depends on model size, so measure it.** At 135M the
-dequantization is free; at 1B it costs 2.6x. That gap is hardware-specific: this
-CPU is **AVX2-only, with no VNNI, AVX-512, or AMX**, and INT8 GEMM needs VNNI's
-`vpdpbusd` to beat an AVX2 FP32 path. A Cascade Lake or Sapphire Rapids server
-part, or an ARM core with dotprod/i8mm, would likely land differently. None of
-that is measured here, so none of it is claimed.
+> [!NOTE]
+> An earlier revision of this table reported SmolLM2-135M INT8 at `~50 ms`, i.e.
+> parity. Re-measured with the numbers above it is **1.52x slower**. The FP32
+> column reproduced exactly (49.9 ms against the previous ~49 ms), so the
+> methodology held and the INT8 figure was the stale one — most likely a
+> different torchao version or sequence length. INT8 is not at parity at 135M
+> either; it is cheaper there, not free.
+
+### VNNI does not rescue it, which rules out the obvious explanation
+
+The previous revision of this page attributed the 1B regression to missing
+hardware: this CPU is AVX2-only, so "INT8 GEMM needs VNNI's `vpdpbusd` to beat an
+AVX2 FP32 path", and a Cascade Lake or Sapphire Rapids part "would likely land
+differently". That was a guess, and it was wrong. Re-running the same script on a
+Cascade Lake Xeon with `avx512f` **and** `avx512_vnni`:
+
+| model | ISA | FP32 | INT8 | ratio (median) | ratio (min) |
+| --- | --- | --- | --- | --- | --- |
+| SmolLM2-135M | AVX2 only | 49.9 ms | 75.8 ms | 1.52x slower | 1.38x slower |
+| SmolLM2-135M | **AVX-512 + VNNI** | 133.8 ms | 76.3 ms | 0.57x *faster* | 1.11x slower |
+| Llama-3.2-1B | AVX2 only | 411.2 ms | 928.5 ms | 2.26x slower | 2.69x slower |
+| Llama-3.2-1B | **AVX-512 + VNNI** | 623.7 ms | 1212.1 ms | 1.94x slower | 3.44x slower |
+
+The 1B regression survives VNNI intact — 2.3–2.7x on AVX2 against 1.9–3.4x on
+VNNI, ranges that overlap completely.
+
+**Why the hardware cannot help.** TorchAO's `Int8WeightOnlyConfig` is
+*weight-only*: activations stay FP32, so the kernel dequantizes the weights and
+runs an **FP32** GEMM. `vpdpbusd` computes INT8×INT8→INT32 and therefore needs
+quantized *activations* to be reachable at all. There is no INT8 GEMM in this path
+for VNNI to accelerate, and the extra time is the dequantization bolted onto a
+matmul that was going to run in FP32 regardless. That is consistent with the
+OpenVINO section below, which correctly notes that it is *activation*
+quantization that wants VNNI.
+
+Read the footprint as the reliable benefit and treat latency as something to
+measure per model. Two caveats on the VNNI column: that host is a 4-vCPU
+virtualised instance and it is noisy — the identical FP32 configuration produced
+a 134 ms median in one run and 275 ms in another, with within-run spreads up to
+8x — and it runs at 2.6 GHz against the i7's 4.0 GHz, so only the ratios compare.
+The SmolLM2 VNNI row is genuinely ambiguous between the two estimators and no
+"faster" claim is made from it. What survives the noise is the direction: on both
+ISAs, by every estimator, weight-only INT8 is slower for the 1B model.
+
+Untested, and therefore still unclaimed: AMX (`amx_int8`), which that Xeon does
+not have, and ARM cores with dotprod/i8mm.
 
 What is reliable on CPU is the footprint: **2.44x smaller, at no measured
 accuracy cost**, which is the difference between a 513 MiB and a 210 MiB
@@ -209,7 +249,12 @@ Full post-training quantization (`nncf.quantize`, which also quantizes
 activations, and does need calibration data) was measured and **not adopted**:
 on SmolLM2-135M it produced a max logit difference of 11.9 against FP32 — ten
 times the weight-only path — and was *slower* than weight-only at 33.0 ms,
-because INT8 activations want VNNI this CPU does not have.
+because INT8 activations want VNNI this CPU does not have. Unlike the weight-only
+path above, that hardware argument does apply here: quantized activations are
+what make an INT8 GEMM, and an INT8 GEMM is what `vpdpbusd` accelerates. The
+accuracy half of the objection is hardware-independent, so a VNNI part would have
+to fix the 11.9 logit difference — probably through better calibration — before
+the speed question is worth re-asking.
 
 One caveat about artifact size: LM7 writes the source `exported_program.pt2`
 alongside the compiled IR, and that stays FP32. The deployable IR is 3.98x
