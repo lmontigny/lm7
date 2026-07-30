@@ -30,8 +30,20 @@ def run(model_name: str) -> None:
     benchmark = module.Model(test="eval", device="cpu", batch_size=1)
     model, example_inputs = benchmark.get_module()
 
+    # Vision models return a tuple of positional args; HF transformer models
+    # (e.g. hf_Bert) return a dict of keyword args instead.
+    if isinstance(example_inputs, dict):
+
+        def call(m: torch.nn.Module):
+            return m(**example_inputs)
+
+    else:
+
+        def call(m: torch.nn.Module):
+            return m(*example_inputs)
+
     with torch.inference_mode():
-        expected = model(*example_inputs)
+        expected = call(model)
 
     compiled = lm7.compile(
         model,
@@ -40,7 +52,7 @@ def run(model_name: str) -> None:
         fallback="error",
         cache=False,
     )
-    actual = compiled(*example_inputs)
+    actual = call(compiled)
 
     if compiled.selected_backend != "inductor" or compiled.state != "compiled":
         raise RuntimeError(
