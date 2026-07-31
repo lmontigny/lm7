@@ -51,8 +51,30 @@ _QUANTIZATION_VENDOR_TEXT = {
 
 # Quantization pins compute dtype so the (model, mode) measurements stay
 # comparable. CPU uses FP32 rather than BF16: x86 without AVX-512 has no native
-# BF16 path, so forcing BF16 there would measure emulation.
+# BF16 path, so forcing BF16 there would measure emulation. Read
+# `quantized_compute_dtype` rather than this table directly -- NVIDIA's answer
+# depends on architecture as well as vendor.
 _QUANTIZED_COMPUTE_DTYPE = {"nvidia": "bfloat16", "cpu": "float32"}
+
+# FP8 needs Ada-class tensor cores.
+_FP8_MINIMUM_CAPABILITY = 89
+
+# Weight-only quantization needs native BF16 arithmetic, which starts at Ampere.
+# Turing and older report torch.cuda.is_bf16_supported() as True but emulate it, and
+# neither compute dtype is usable there. Measured on a Tesla T4 (sm75) with
+# SmolLM2-135M:
+#
+#   unquantized FP16   17.5 ms   4/4 top-1
+#   INT8 + BF16        58.0 ms   3/4 top-1   emulated, 3.3x slower than not
+#                                            quantizing, and below the 4/4 gate
+#                                            this model clears on sm89
+#   INT8 + FP16        13.5 ms   0/4 top-1   NaN logits: dequantized products
+#                                            leave FP16's 5-bit exponent range
+#
+# So INT8 on Turing is both slower and less accurate than plain FP16, and FP16
+# compute is numerically broken. LM7 rejects it rather than offering a mode whose
+# best case is a regression. See docs/quantization.md.
+_BF16_MINIMUM_CAPABILITY = 80
 
 # Validated per model *and* per mode, because the two are not interchangeable:
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
@@ -709,6 +731,13 @@ def _validate_quantization(
         raise UnsupportedModelError(
             f"{label} weight-only quantization requires backend='auto' or backend='inductor'."
         )
+    if not supports_native_bf16(target):
+        raise UnsupportedModelError(
+            f"{label} weight-only quantization requires NVIDIA Ampere (sm80) or newer; "
+            f"{target.architecture} emulates bfloat16. Measured on a Tesla T4 (sm75), "
+            "INT8 ran 3.3x slower than unquantized float16 and lost a top-1 token, and "
+            "float16 compute produces NaN logits. Use quantization='none' on this GPU."
+        )
     expected_dtype = _QUANTIZED_COMPUTE_DTYPE[target.vendor]
     if dtype not in {"auto", expected_dtype}:
         raise UnsupportedModelError(
@@ -816,15 +845,38 @@ _QUANTIZATION_SELECTS = {
 }
 
 
-def _supports_fp8(target: TargetSpec) -> bool:
+def _compute_capability(target: TargetSpec) -> int | None:
+    """The ``smXX`` number for a CUDA target, or None when it is not stated.
+
+    None means "do not gate on architecture". An unqualified ``nvidia`` target has
+    no architecture until it is resolved against real hardware, so refusing on a
+    missing value would reject the common case.
+    """
     architecture = target.architecture
     if not architecture or not architecture.startswith("sm"):
-        return True
+        return None
     try:
-        capability = int(architecture.removeprefix("sm"))
+        return int(architecture.removeprefix("sm"))
     except ValueError:
+        return None
+
+
+def _supports_fp8(target: TargetSpec) -> bool:
+    capability = _compute_capability(target)
+    return capability is None or capability >= _FP8_MINIMUM_CAPABILITY
+
+
+def supports_native_bf16(target: TargetSpec) -> bool:
+    """Whether this target has native BF16 arithmetic rather than emulation.
+
+    Only meaningful for NVIDIA, where LM7 knows the capability number. Everything
+    else answers True, because the compute dtype for those targets is decided by
+    ``_QUANTIZED_COMPUTE_DTYPE`` and not by this.
+    """
+    if target.vendor != "nvidia":
         return True
-    return capability >= 89
+    capability = _compute_capability(target)
+    return capability is None or capability >= _BF16_MINIMUM_CAPABILITY
 
 
 def _compiled_weight_bytes(wrapped: Any) -> int | None:
