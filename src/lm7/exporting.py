@@ -39,6 +39,7 @@ from .detection import resolve_target, torch_device
 from .errors import (
     ArtifactLoadError,
     BackendUnavailableError,
+    TargetNotFoundError,
     UnsupportedModelError,
 )
 from .targets import TargetSpec, parse_target
@@ -626,6 +627,47 @@ def export(
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
+# Backends whose compiled payload only runs on the GPU architecture it was built
+# for: AOTInductor emits kernels for one compute capability, and Torch-TensorRT
+# tunes an engine for one architecture. Everything else either carries a portable
+# program or targets the CPU, so an architecture difference is not a problem there.
+_ARCHITECTURE_BOUND_BACKENDS = frozenset({"aot_inductor", "tensorrt"})
+
+
+def _validate_target_architecture(manifest: ArtifactManifest, artifact_path: Path) -> None:
+    """Refuse an architecture-bound artifact built for a different GPU.
+
+    Without this the driver reports "no kernel image is available for execution on
+    the device" on the first call, which names neither the artifact nor the fix.
+    Verified by loading an ``sm89`` AOTInductor artifact on a Tesla T4 (``sm75``).
+
+    Silent when the answer is not knowable: an artifact with no recorded
+    architecture, or a host where the vendor's architecture cannot be resolved,
+    must still load so that inspection and CPU-side use keep working.
+    """
+    if manifest.backend not in _ARCHITECTURE_BOUND_BACKENDS:
+        return
+    recorded = manifest.target.get("architecture")
+    vendor = manifest.target.get("vendor")
+    if not recorded or vendor not in {"nvidia", "amd"}:
+        return
+    try:
+        local = resolve_target(str(vendor)).architecture
+    except TargetNotFoundError:
+        # The vendor's hardware is absent. Loading is still allowed: the caller may
+        # only want the manifest or the ExportedProgram, and asking for the compiled
+        # payload will fail on its own terms.
+        return
+    if local is None or local == recorded:
+        return
+    raise ArtifactLoadError(
+        f"Artifact load stage failed for {artifact_path}: its {manifest.backend} payload was "
+        f"built for {vendor}:{recorded}, but this machine is {vendor}:{local}. Kernels are "
+        f"compiled per architecture, so it cannot run here. Re-export on this GPU, or ship a "
+        f"bundle containing both architectures and load it with load_bundle(...).load()."
+    )
+
+
 def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
     """Load an LM7 source artifact after validating its metadata and payload."""
     artifact_path = Path(path).expanduser().resolve()
@@ -648,6 +690,7 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             f"Unsupported LM7 artifact format {manifest.format_version}; "
             f"this LM7 version supports format {FORMAT_VERSION}."
         )
+    _validate_target_architecture(manifest, artifact_path)
     program_path = artifact_path / manifest.program_file
     if not program_path.is_file():
         raise ArtifactLoadError(
