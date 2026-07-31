@@ -26,9 +26,9 @@ inside each matmul, stay in BF16.
 | `--quantize` | Weight storage | Targets | Compute dtype |
 | --- | --- | --- | --- |
 | `none` (default) | as loaded | all | FP32 / FP16 / BF16 |
-| `int8` | INT8 | NVIDIA GPU, **CPU** | BF16 on NVIDIA, FP32 on CPU |
+| `int8` | INT8 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
 | `fp8` | FP8 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
-| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | NVIDIA GPU | BF16 |
+| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | NVIDIA Ampere (`sm80`) or newer | BF16 |
 
 Quantization pins the compute dtype so measurements stay comparable, and the
 dtype is target-specific: BF16 on NVIDIA, FP32 on CPU. `--dtype` must be `auto`
@@ -47,6 +47,34 @@ the torch module is left untouched. See
 
 CPU uses FP32 rather than BF16 because x86-64 without AVX-512 has no native BF16
 path, so forcing BF16 there would measure emulation rather than the format.
+
+## Why weight-only quantization needs Ampere or newer
+
+The same emulation argument rules out pre-Ampere NVIDIA, which is why every mode
+above requires at least `sm80`. Measured on a Tesla T4 (Turing, `sm75`) with
+SmolLM2-135M at sequence length 16, against an unquantized baseline in the same
+compute dtype:
+
+| configuration | prefill | top-1 | note |
+| --- | --- | --- | --- |
+| unquantized FP16 | **17.5 ms** | 4/4 | the baseline to beat |
+| unquantized BF16 | 60.3 ms | 4/4 | 3.4x slower — BF16 is emulated on `sm75` |
+| INT8 + BF16 | 58.0 ms | **3/4** | 3.3x slower than not quantizing |
+| INT8 + FP16 | 13.5 ms | **0/4** | **NaN logits** |
+
+Neither compute dtype works. BF16 is the numerically sound choice but Turing fakes
+it, so INT8 ends up 3.3x *slower* than simply running FP16 — and it drops a top-1
+token on a model that scores 4/4 on `sm89`. FP16 is genuinely fast but produces NaN:
+dequantized INT8 products leave FP16's 5-bit exponent range, and every prompt then
+returns `<|endoftext|>`. The 13.5 ms is the cost of propagating NaN.
+
+So LM7 raises `UnsupportedModelError` on `sm75` and below rather than offering a
+mode whose best case is a regression. `torch.cuda.is_bf16_supported()` cannot be
+used for this check — it returns True on a T4 — so the gate reads the capability
+number, as the FP8 gate does.
+
+Also verified on that hardware: FP8 is correctly refused on `sm75`, which until now
+had only ever been exercised against a synthetic `TargetSpec`.
 
 > [!NOTE]
 > `lm7 model export --quantize int8` is a **different mechanism**: calibrated

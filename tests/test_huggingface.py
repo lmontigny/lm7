@@ -365,6 +365,68 @@ def test_auto_dtype_depends_on_target(quantization):
     )
 
 
+@pytest.mark.parametrize(
+    ("architecture", "native"),
+    [
+        ("sm70", False),  # Volta
+        ("sm75", False),  # Turing, e.g. Tesla T4
+        ("sm80", True),  # Ampere onwards
+        ("sm89", True),
+        ("sm90", True),
+        (None, True),  # unqualified `nvidia`, architecture not yet resolved
+        ("gfx942", True),  # not an sm number, so not gated
+    ],
+)
+def test_native_bf16_follows_nvidia_architecture(architecture, native):
+    """torch.cuda.is_bf16_supported() cannot answer this.
+
+    It reports True on a Tesla T4, where BF16 is emulated: measured there, BF16
+    prefill ran 3.4x slower than FP16 and took 2.8x longer to compile. So the check
+    is on the capability number, not on torch.
+    """
+    target = TargetSpec("nvidia", "gpu", architecture=architecture)
+    assert huggingface.supports_native_bf16(target) is native
+
+
+def test_native_bf16_is_not_gated_off_nvidia():
+    assert huggingface.supports_native_bf16(TargetSpec("cpu", "cpu")) is True
+
+
+@pytest.mark.parametrize("quantization", ["int8", "fp8", "nvfp4"])
+def test_weight_only_quantization_is_rejected_below_ampere(quantization):
+    """Turing has no usable INT8 path, so it is refused rather than offered.
+
+    Measured on a Tesla T4 (sm75) with SmolLM2-135M: BF16 compute is emulated and ran
+    3.3x slower than unquantized FP16 while dropping to 3/4 top-1, and FP16 compute
+    produced NaN logits at 0/4. A mode whose best case is a regression should raise.
+    """
+    turing = TargetSpec("nvidia", "gpu", architecture="sm75")
+    with pytest.raises(UnsupportedModelError, match="Ampere"):
+        huggingface._validate_quantization(
+            quantization, turing, "inductor", "auto", "unsloth/Llama-3.2-1B-Instruct"
+        )
+
+
+def test_ampere_and_newer_still_accept_int8():
+    for architecture in ("sm80", "sm89"):
+        huggingface._validate_quantization(
+            "int8",
+            TargetSpec("nvidia", "gpu", architecture=architecture),
+            "inductor",
+            "bfloat16",
+            "HuggingFaceTB/SmolLM2-135M-Instruct",
+        )
+
+
+def test_fp8_capability_gate_uses_the_shared_parser():
+    """sm75 is the case a T4 exercises for real; sm89 is the local GPU."""
+    assert not huggingface._supports_fp8(TargetSpec("nvidia", "gpu", architecture="sm75"))
+    assert huggingface._supports_fp8(TargetSpec("nvidia", "gpu", architecture="sm89"))
+    # An unparseable or absent architecture must not gate.
+    assert huggingface._supports_fp8(TargetSpec("nvidia", "gpu", architecture=None))
+    assert huggingface._supports_fp8(TargetSpec("nvidia", "gpu", architecture="gfx942"))
+
+
 def test_int8_weight_only_uses_torchao_version_two(monkeypatch):
     calls = {}
 
