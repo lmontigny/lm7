@@ -18,6 +18,7 @@ This index covers everything else.
 | Target | Document |
 | --- | --- |
 | CPU | [cpu.md](cpu.md) |
+| AMD CPU (EPYC, Ryzen) | [amd-cpu.md](amd-cpu.md) |
 | NVIDIA GPU | [development.md#nvidia-cuda](development.md#nvidia-cuda) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
