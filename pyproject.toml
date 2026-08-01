@@ -32,6 +32,10 @@ onnxruntime-gpu = [
 ]
 tensorrt = ["torch-tensorrt==2.12.1"]
 openvino = ["openvino>=2025.0", "nncf>=2.14"]
+# AMD's ZenDNN PyTorch extension, the AMD-CPU counterpart to the openvino extra.
+# Its version tracks the PyTorch it is built against (zentorch 2.13.x pairs with
+# torch 2.13), and it publishes x86-64 Linux wheels only -- see docs/zentorch.md.
+zentorch = ["zentorch>=2.13,<3"]
 iree-vulkan = [
     "iree-turbine>=3.9,<4",
     "iree-base-compiler>=3.11,<4",
@@ -92,6 +96,7 @@ markers = [
     "tenstorrent: requires the tt-xla PJRT plugin and a Tenstorrent card",
     "executorch: requires the ExecuTorch runtime and a matching PyTorch",
     "tvm: requires Apache TVM with the Relax PyTorch frontend",
+    "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
 ]
 
 [tool.ruff]

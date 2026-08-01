@@ -110,6 +110,23 @@ are deploying to Intel hardware specifically. See the
 [OpenVINO evaluation](openvino-evaluation.md) for the measurements behind that
 and for the backend's documented limits.
 
+## Is there an AMD equivalent?
+
+Yes — `zentorch`, AMD's ZenDNN PyTorch extension, on the same opt-in terms:
+
+```bash
+uv pip install -e ".[zentorch]"
+```
+
+```python
+model = lm7.compile(model, target="cpu", backend="zentorch")
+```
+
+Like OpenVINO it ranks below Inductor, so `backend="auto"` never picks it. On an
+EPYC 7B13 at FP32 it ran SmolLM2-135M 1.11x faster than Inductor, tied on
+Llama-3.2-1B, and lost by 1.07x on a synthetic transformer block — worth trying
+on AMD hardware, not worth making the default. See [zentorch](zentorch.md).
+
 ## Shrinking a model on CPU
 
 `lm7 model run` can quantize a Hugging Face causal LM's weights to INT8 on CPU,
