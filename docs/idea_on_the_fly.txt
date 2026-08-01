@@ -54,4 +54,5 @@ add prompt size>1 for decode - unclear
 simplify readme see z, use figure to show all the backend
 add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
+add AMD Zentorch backend
 
