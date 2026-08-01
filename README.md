@@ -146,7 +146,7 @@ Then activate the environment (`source .venv/bin/activate`) or prefix commands
 with `uv run`. Without `uv`:
 `python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e .`.
 
-Per-hardware setup: [CPU](docs/cpu.md) ·
+Per-hardware setup: [CPU](docs/cpu.md) · [AMD CPU](docs/amd-cpu.md) ·
 [NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
 [Apple Silicon](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md) ·
 [Tenstorrent](docs/tenstorrent.md).

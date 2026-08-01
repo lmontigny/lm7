@@ -112,6 +112,10 @@ and for the backend's documented limits.
 
 ## Is there an AMD equivalent?
 
+For AMD CPUs generally — what PyTorch already uses there, whether Intel's MKL
+costs you anything, and the one thread-affinity setting that does — see
+[AMD CPU inference](amd-cpu.md). The short version of the backend question:
+
 Yes — `zentorch`, AMD's ZenDNN PyTorch extension, on the same opt-in terms:
 
 ```bash
