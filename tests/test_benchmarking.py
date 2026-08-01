@@ -143,3 +143,78 @@ def test_missing_optional_package_version_is_none(monkeypatch):
     monkeypatch.setattr("lm7.benchmarking.importlib.metadata.version", missing)
 
     assert _package_version("torch-tensorrt") is None
+
+
+def test_threads_pins_the_intra_op_pool_for_the_measurement():
+    before = torch.get_num_threads()
+
+    result = lm7.benchmark(
+        torch.nn.Linear(4, 3).eval(),
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        backend="eager",
+        warmup=0,
+        repeats=1,
+        threads=1,
+    )
+
+    assert result.environment["torch_threads"] == 1
+    # Process-global state, so the sweep that follows must start where this one
+    # did rather than inheriting a pinned thread count.
+    assert torch.get_num_threads() == before
+
+
+def test_threads_are_restored_when_the_measurement_raises():
+    before = torch.get_num_threads()
+
+    class Failing(torch.nn.Module):
+        def forward(self, value):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        lm7.benchmark(
+            Failing().eval(),
+            args=(torch.randn(2, 4),),
+            target="cpu",
+            backend="eager",
+            warmup=0,
+            repeats=1,
+            threads=1,
+        )
+
+    assert torch.get_num_threads() == before
+
+
+def test_benchmark_rejects_a_thread_count_below_one():
+    with pytest.raises(ValueError, match="threads"):
+        lm7.benchmark(torch.nn.Identity().eval(), args=(torch.tensor(1),), threads=0)
+
+
+def test_omitting_threads_leaves_the_torch_default_alone():
+    before = torch.get_num_threads()
+
+    result = lm7.benchmark(
+        torch.nn.Identity().eval(),
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        backend="eager",
+        warmup=0,
+        repeats=1,
+    )
+
+    assert result.environment["torch_threads"] == before
+    assert torch.get_num_threads() == before
+
+
+def test_cpu_environment_records_the_part_that_produced_the_number():
+    environment = _environment(TargetSpec("cpu", "cpu", "x86_64"))
+
+    # A latency number is only comparable against another host if the record says
+    # what that host was -- cores explain the thread count, ISA flags explain
+    # whether INT8 or BF16 had a native instruction behind it.
+    assert environment["device_name"]
+    assert environment["logical_cpu_count"]
+    assert "physical_cpu_count" in environment
+    assert "vendor_id" in environment
+    assert isinstance(environment["isa_extensions"], list)
+    assert "total_memory_bytes" in environment
