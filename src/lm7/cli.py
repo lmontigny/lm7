@@ -15,6 +15,7 @@ from .backends import registry
 from .backends.base import CompileRequest
 from .bundles import create_bundle, load_bundle
 from .cache import cache_dir
+from .compatibility import ModelCompatibilityResult, inspect_hf_model
 from .detection import detect_targets, resolve_target
 from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
@@ -297,6 +298,32 @@ def _print_model_export(result: HuggingFaceExportResult) -> None:
     print(f"Files: {', '.join(result.files)}")
 
 
+def _print_model_compatibility(result: ModelCompatibilityResult) -> None:
+    architecture = ", ".join(result.architectures) or result.config_class or "unknown"
+    if result.model_type:
+        architecture = f"{architecture} ({result.model_type})"
+    print(f"Model: {result.model_uri}")
+    print(f"Status: {result.status}")
+    print(f"Architecture: {architecture}")
+    print(f"Task: {result.task}")
+    print(f"Target: {result.target}")
+    print(f"Backend: {result.selected_backend or 'none'}")
+    if result.context_length is not None:
+        print(f"Context length: {result.context_length:,}")
+    print()
+    print("Workflows:")
+    for check in result.workflows:
+        print(f"  {check.name}: {check.status} - {check.reason}")
+    print()
+    print("Quantization:")
+    for check in result.quantization:
+        print(f"  {check.name}: {check.status} - {check.reason}")
+    print()
+    print("Notes:")
+    for note in result.notes:
+        print(f"  - {note}")
+
+
 def _emit_json(data: Any) -> None:
     print(json.dumps(data, indent=2, sort_keys=True, default=str))
 
@@ -333,6 +360,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     model_parser = subparsers.add_parser("model", help="run models through LM7")
     model_subparsers = model_parser.add_subparsers(dest="model_command", required=True)
+    compatibility_parser = model_subparsers.add_parser(
+        "compatibility", help="inspect Hugging Face compatibility without downloading weights"
+    )
+    compatibility_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    compatibility_parser.add_argument(
+        "--target", default="auto", help="target selector (default: auto)"
+    )
+    compatibility_parser.add_argument(
+        "--backend", default="auto", help="backend selector (default: auto)"
+    )
+    _add_json_argument(compatibility_parser)
+
     run_parser = model_subparsers.add_parser("run", help="compile and run a causal-LM forward pass")
     run_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
     run_parser.add_argument("--prompt", default="The capital of France is", help="input prompt")
@@ -464,6 +503,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "explain":
             data = _explain_data(args.target, args.backend)
             _emit_json(data) if args.json else _print_explanation(data)
+        elif args.command == "model" and args.model_command == "compatibility":
+            compatibility = inspect_hf_model(
+                args.model_uri,
+                target=args.target,
+                backend=args.backend,
+            )
+            (
+                _emit_json(compatibility.to_dict())
+                if args.json
+                else _print_model_compatibility(compatibility)
+            )
         elif args.command == "model" and args.model_command == "run":
             result = run_hf_model(
                 args.model_uri,

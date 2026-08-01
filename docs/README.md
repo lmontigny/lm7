@@ -41,6 +41,8 @@ This index covers everything else.
 
 ## Features
 
+- [Hugging Face model compatibility](model-compatibility.md) -- config-only
+  preflight for model type, workflows, target/backend selection, and quantization.
 - [TorchInductor options](inductor-options.md) — compile modes, CUDA Graphs,
   individual backend controls, and benchmarking guidance.
 - [Quantization](quantization.md) — weight-only modes, validation gates, caveats.

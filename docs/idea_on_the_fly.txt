@@ -8,7 +8,6 @@ simlpify the readme
 how to use for ppl/customer? 
 cross-compilation
 igpu support
-add support at model level HF not in the source code
 add quantization
 use nvidia rtx 4070 
 jit compile
@@ -51,6 +50,7 @@ test on saturnCloud, AWS, lightningAI
 add prompt size>1 for decode - unclear
 
 ### Done ###
+add config-only Hugging Face model compatibility preflight
 simplify readme see z, use figure to show all the backend
 add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
