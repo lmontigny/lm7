@@ -64,6 +64,7 @@ coverage is CPU.
 | `openxla` | TPU only, single process. SPMD sharding, multi-host execution, and persistent XLA executables are not implemented. |
 | `tenstorrent` | JIT-only and single-card: the compiled flatbuffer does not outlive the process, multi-card sharding is not exposed, and coverage is bounded by what tt-mlir lowers. See the [guide](tenstorrent.md). |
 | `tvm` | CPU-only, JIT-only, positional-inputs-only, and **far slower than Inductor** — registered for reachability, not speed. Autotuning, CUDA, and artifacts are not wired up. See the [guide](tvm.md). |
+| `zentorch` | AMD's ZenDNN extension: CPU-only, JIT-only, explicit-only, x86-64 Linux wheels only, and ABI-tied to a matching PyTorch. Measured on one Zen 3 EPYC at FP32 it beat Inductor on one workload, tied on another, and lost on a third; BF16, INT8, and newer EPYC generations are unmeasured. No quantization path and no artifact. See the [guide](zentorch.md). |
 
 ## Hardware validation
 

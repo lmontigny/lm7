@@ -75,7 +75,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 | Vendor | Hardware | `target` | Backends (highest priority first) |
 | --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` (+ `litert`, `tvm`) |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` (+ `litert`, `tvm`, `zentorch`) |
 | NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `onnxruntime`, `eager` (+ `iree_vulkan`) |
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `eager` (+ `iree_vulkan`) |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` |

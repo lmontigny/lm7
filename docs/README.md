@@ -36,6 +36,7 @@ This index covers everything else.
 | `executorch` (Android, iOS, embedded) | [executorch.md](executorch.md) |
 | `tenstorrent` | [tenstorrent.md](tenstorrent.md) |
 | `tvm` | [tvm.md](tvm.md) |
+| `zentorch` | [zentorch.md](zentorch.md) |
 | `stablehlo` | [stablehlo-pjrt-evaluation.md](stablehlo-pjrt-evaluation.md) |
 
 ## Features
