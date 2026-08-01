@@ -53,11 +53,20 @@ class InductorBackend:
             options = dict(request.options)
             compile_mode = options.pop("compile_mode", None)
             dynamic = options.pop("dynamic", None)
+            fullgraph = options.pop("fullgraph", False)
+            if compile_mode is not None and options:
+                names = ", ".join(sorted(options))
+                raise CompilationError(
+                    "Inductor compile_mode presets cannot be combined with backend "
+                    f"options ({names}); choose a preset or individual options. "
+                    "The dynamic and fullgraph controls may be used with either."
+                )
             compiled = torch.compile(
                 request.model,
                 backend="inductor",
                 mode=compile_mode,
                 dynamic=dynamic,
+                fullgraph=fullgraph,
                 options=options or None,
             )
             # torch.compile is lazy: the first call is part of compilation and must

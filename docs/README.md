@@ -41,6 +41,8 @@ This index covers everything else.
 
 ## Features
 
+- [TorchInductor options](inductor-options.md) — compile modes, CUDA Graphs,
+  individual backend controls, and benchmarking guidance.
 - [Quantization](quantization.md) — weight-only modes, validation gates, caveats.
 - [DeepSeek coverage](deepseek.md) — one model measured across every locally
   installable backend.

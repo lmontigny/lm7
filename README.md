@@ -199,6 +199,12 @@ TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is the
 only candidate. `eager` wins only when nothing else supports the target, or when
 a compile fails and `fallback="warn"` takes over.
 
+Tune TorchInductor through `options={"compile_mode": "max-autotune"}`. The
+`max-autotune` preset enables CUDA Graphs on GPU; use
+`max-autotune-no-cudagraphs` when the workload is dynamic or stateful. See the
+[TorchInductor options guide](docs/inductor-options.md) for every preset,
+lower-level controls, and the distinction from LM7's own `mode` argument.
+
 Two rows in that table are not `lm7.compile` backends at all. **Export only**
 means the backend is reachable solely through `lm7.export(..., backend=...)` —
 asking `lm7.compile` for one raises. **Explicit** means it works with

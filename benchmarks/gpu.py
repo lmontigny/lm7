@@ -80,7 +80,12 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument(
         "--compile-mode",
-        choices=("default", "reduce-overhead", "max-autotune"),
+        choices=(
+            "default",
+            "reduce-overhead",
+            "max-autotune",
+            "max-autotune-no-cudagraphs",
+        ),
         help="Optional torch.compile mode for the Inductor backend.",
     )
     parser.add_argument("--prompt", default="The capital of France is")
