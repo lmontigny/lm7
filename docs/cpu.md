@@ -19,6 +19,40 @@ source .venv/bin/activate
 small on a machine that also has a GPU. With pip instead of uv, the equivalent is
 `python -m pip install torch --index-url https://download.pytorch.org/whl/cpu`.
 
+## What LM7 knows about the host CPU
+
+`lm7 doctor` describes the CPU the way it describes an accelerator — by name,
+with its memory and its capabilities:
+
+```
+Detected targets (1):
+  cpu:x86_64: AMD EPYC 7B13, 62.8 GiB
+```
+
+`lm7 doctor --json` carries the rest under the target's `capabilities`:
+
+| Key | Meaning |
+| --- | --- |
+| `vendor_id` | `AuthenticAMD`, `GenuineIntel`, or absent |
+| `physical_cores` | Distinct (socket, core) pairs — SMT siblings folded together |
+| `logical_cores` | CPUs the OS exposes, SMT siblings included |
+| `isa_extensions` | Vector and matrix extensions, named as the kernel names them |
+
+`isa_extensions` is the interesting one. It records only the flags that change
+how LM7 should compile or quantize — `avx2`, the AVX-512 family, `avx512_vnni`,
+`avx512_bf16`, and the AMX trio on x86; `asimd`, `sve`, `bf16`, and `i8mm` on
+AArch64 — because those decide whether BF16 arithmetic is native or emulated and
+whether an INT8 GEMM has a dot-product instruction behind it.
+
+Two things this does *not* mean:
+
+- **LM7 does not yet act on these flags.** They are reported, not consulted. The
+  CPU compute dtype is still pinned to FP32 for every x86 host regardless of what
+  is detected — see [quantization](quantization.md).
+- **An absent flag means "not reported", not "not supported".** The source is
+  `/proc/cpuinfo`, so on a host without `/proc` the list is empty and the core
+  counts fall back to what Python can see. Treat empty as unknown.
+
 ## Validate CPU and GPU locally
 
 The correctness example runs identical weights and inputs through CPU

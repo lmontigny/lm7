@@ -72,10 +72,7 @@ def detect_targets() -> list[DeviceInfo]:
     devices.extend(_detect_tenstorrent_targets())
     devices.extend(_detect_intel_npu_targets())
 
-    cpu_arch = platform.machine().lower() or None
-    devices.append(
-        DeviceInfo(TargetSpec("cpu", "cpu", architecture=cpu_arch), platform.processor() or "CPU")
-    )
+    devices.append(detect_cpu_target())
     return devices
 
 
@@ -332,3 +329,137 @@ def _openvino_property(core: Any, device_name: str, key: str) -> str | None:
         # Property support varies by plugin version; a missing one is not a
         # reason to hide a device that available_devices already reported.
         return None
+
+
+CPU_INFO_PATH = Path("/proc/cpuinfo")
+MEMORY_INFO_PATH = Path("/proc/meminfo")
+
+# Instruction-set extensions that change what LM7 should compile or quantize for,
+# named exactly as Linux prints them. AVX-512 and AMX decide whether BF16 is
+# native or emulated; VNNI and AMX-INT8 decide whether an INT8 GEMM has a
+# dot-product instruction behind it at all.
+#
+# LM7 records this set and interprets none of it here. The flags are the
+# evidence; each caller applies its own rule, and an absent flag means "this host
+# did not report it", which on a kernel without /proc is not the same as "the
+# silicon lacks it".
+_X86_ISA_FLAGS = frozenset(
+    {
+        "avx",
+        "avx2",
+        "f16c",
+        "avx_vnni",
+        "avx512f",
+        "avx512bw",
+        "avx512vl",
+        "avx512_vnni",
+        "avx512_bf16",
+        "avx512_fp16",
+        "amx_tile",
+        "amx_bf16",
+        "amx_int8",
+    }
+)
+
+# The AArch64 equivalents, which the kernel prints under "Features" rather than
+# "flags". Apple Silicon and Graviton are both LM7 targets, so an x86-only
+# vocabulary would report them as having no vector ISA at all.
+_ARM_ISA_FLAGS = frozenset({"asimd", "asimdhp", "asimddp", "bf16", "i8mm", "sve", "sve2"})
+
+_RECORDED_ISA_FLAGS = _X86_ISA_FLAGS | _ARM_ISA_FLAGS
+
+
+def detect_cpu_target() -> DeviceInfo:
+    """The host CPU, described well enough to compile and quantize for it.
+
+    Every other detector here can return an empty list; this one cannot, because
+    the CPU is LM7's fallback target and must always resolve. So it degrades
+    instead: on a host without ``/proc`` the topology and ISA flags are simply
+    absent, and the device still carries a usable name.
+    """
+    info = _read_cpu_info()
+    isa_extensions = info.get("isa_extensions", ())
+    capabilities: dict[str, Any] = {
+        "vendor_id": info.get("vendor_id"),
+        "physical_cores": info.get("physical_cores"),
+        # os.cpu_count() is the fallback rather than the source: it counts the
+        # CPUs the OS exposes, which is what /proc/cpuinfo lists anyway, and it
+        # is all that is available off Linux.
+        "logical_cores": info.get("logical_cores") or os.cpu_count(),
+        "isa_extensions": isa_extensions,
+    }
+    return DeviceInfo(
+        TargetSpec("cpu", "cpu", architecture=platform.machine().lower() or None),
+        info.get("model_name") or platform.processor() or "CPU",
+        _read_total_memory_bytes(),
+        capabilities,
+    )
+
+
+def _read_cpu_info() -> dict[str, Any]:
+    try:
+        return parse_cpu_info(CPU_INFO_PATH.read_text())
+    except OSError:
+        return {}
+
+
+def parse_cpu_info(text: str) -> dict[str, Any]:
+    """Read vendor, model, topology, and ISA flags out of ``/proc/cpuinfo`` text.
+
+    Kept separate from the file read so it can be tested against captured
+    ``/proc/cpuinfo`` from hosts LM7 has no access to — an AMX Xeon, an ARM
+    server — which is the only way to cover the flags that decide the BF16 and
+    INT8 questions.
+    """
+    vendor_id: str | None = None
+    model_name: str | None = None
+    flags: set[str] = set()
+    # A physical core is one (socket, core) pair. Counting these rather than
+    # reading "cpu cores" gets the answer right on multi-socket hosts and folds
+    # SMT siblings together, which is what a thread count wants to be based on.
+    cores: set[tuple[str, str]] = set()
+    logical_cores = 0
+
+    for block in re.split(r"\n\s*\n", text):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            key, separator, value = line.partition(":")
+            if separator:
+                fields[key.strip()] = value.strip()
+        if not fields:
+            continue
+        logical_cores += 1
+        vendor_id = vendor_id or fields.get("vendor_id")
+        model_name = model_name or fields.get("model name")
+        # "flags" on x86, "Features" on AArch64; the two never co-occur.
+        flags.update(fields.get("flags", fields.get("Features", "")).split())
+        socket = fields.get("physical id")
+        core = fields.get("core id")
+        if socket is not None and core is not None:
+            cores.add((socket, core))
+
+    return {
+        "vendor_id": vendor_id,
+        "model_name": model_name,
+        "logical_cores": logical_cores or None,
+        "physical_cores": len(cores) or None,
+        "isa_extensions": tuple(sorted(flags & _RECORDED_ISA_FLAGS)),
+    }
+
+
+def _read_total_memory_bytes() -> int | None:
+    try:
+        return parse_total_memory_bytes(MEMORY_INFO_PATH.read_text())
+    except OSError:
+        return None
+
+
+def parse_total_memory_bytes(text: str) -> int | None:
+    """Installed host RAM from ``/proc/meminfo`` text, in bytes.
+
+    ``MemTotal`` is what is installed, not what is free now — the CPU analogue of
+    a GPU's total memory, and the number that decides whether a model's weights
+    can fit at all.
+    """
+    match = re.search(r"^MemTotal:\s+(\d+)\s*kB", text, re.MULTILINE)
+    return int(match.group(1)) * 1024 if match else None
