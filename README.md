@@ -264,11 +264,18 @@ the signature rules an artifact is pinned to.
 
 ```bash
 uv pip install -e ".[hf]"
+lm7 model compatibility hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target auto --backend auto
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --prompt "The capital of France is" --target auto --backend auto
 ```
 
-The command downloads through the normal Hugging Face cache, compiles the
+`model compatibility` downloads only the model configuration and reports the
+model type, runtime backend, run/generate/export paths, and validated
+quantization modes. It is a fast preflight rather than proof of compiler
+operator coverage; see the [compatibility guide](docs/model-compatibility.md).
+
+The run command downloads through the normal Hugging Face cache, compiles the
 forward pass, and reports the selected target and backend, first-call and
 steady-call time, and the predicted next token (`--json` for structured output).
 
