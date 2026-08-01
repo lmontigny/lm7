@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
 import os
 import platform
 import statistics
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import torch
 
 from .api import compile
-from .detection import intel_npu_device_nodes
+from .detection import detect_cpu_target, intel_npu_device_nodes
 from .targets import TargetSpec
 
 
@@ -44,61 +45,96 @@ def benchmark(
     backend: str = "auto",
     warmup: int = 5,
     repeats: int = 30,
+    threads: int | None = None,
     options: Mapping[str, Any] | None = None,
 ) -> BenchmarkResult:
-    """Measure first-call cost and steady-state inference latency through LM7."""
+    """Measure first-call cost and steady-state inference latency through LM7.
+
+    ``threads`` pins torch's intra-op pool for the duration of the measurement
+    and restores it afterwards. It is a benchmark parameter rather than a
+    ``compile`` one on purpose: the thread count is process-global state, so a
+    compiled module cannot own one without silently changing every other module
+    in the process. See docs/cpu.md.
+    """
     if warmup < 0:
         raise ValueError("warmup cannot be negative.")
     if repeats < 1:
         raise ValueError("repeats must be at least 1.")
+    if threads is not None and threads < 1:
+        raise ValueError("threads must be at least 1.")
     kwargs = dict(kwargs or {})
-    wrapped = compile(
-        model,
-        target=target,
-        backend=backend,
-        transfers="automatic",
-        fallback="error",
-        cache=False,
-        options=options,
-    )
-    if _uses_cuda_runtime(target) and torch.cuda.is_available():
-        torch.cuda.init()
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-    started = time.perf_counter()
-    wrapped(*args, **kwargs)
-    _synchronize(wrapped.target)
-    first_call_ms = (time.perf_counter() - started) * 1000
-
-    for _ in range(warmup):
-        wrapped(*args, **kwargs)
-    _synchronize(wrapped.target)
-
-    latencies_ms = []
-    for _ in range(repeats):
-        _synchronize(wrapped.target)
+    with _intra_op_threads(threads):
+        wrapped = compile(
+            model,
+            target=target,
+            backend=backend,
+            transfers="automatic",
+            fallback="error",
+            cache=False,
+            options=options,
+        )
+        if _uses_cuda_runtime(target) and torch.cuda.is_available():
+            torch.cuda.init()
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
         started = time.perf_counter()
         wrapped(*args, **kwargs)
         _synchronize(wrapped.target)
-        latencies_ms.append((time.perf_counter() - started) * 1000)
+        first_call_ms = (time.perf_counter() - started) * 1000
 
-    assert wrapped.target is not None
-    assert wrapped.selected_backend is not None
-    median_ms = statistics.median(latencies_ms)
-    batch_size = _batch_size((args, kwargs))
-    return BenchmarkResult(
-        target=str(wrapped.target),
-        backend=wrapped.selected_backend,
-        first_call_ms=first_call_ms,
-        latency_median_ms=median_ms,
-        latency_p95_ms=_percentile(latencies_ms, 0.95),
-        samples_per_second=batch_size / (median_ms / 1000),
-        peak_memory_bytes=_peak_memory(wrapped.target),
-        warmup=warmup,
-        repeats=repeats,
-        batch_size=batch_size,
-        environment=_environment(wrapped.target, wrapped.selected_backend),
-    )
+        for _ in range(warmup):
+            wrapped(*args, **kwargs)
+        _synchronize(wrapped.target)
+
+        latencies_ms = []
+        for _ in range(repeats):
+            _synchronize(wrapped.target)
+            started = time.perf_counter()
+            wrapped(*args, **kwargs)
+            _synchronize(wrapped.target)
+            latencies_ms.append((time.perf_counter() - started) * 1000)
+
+        assert wrapped.target is not None
+        assert wrapped.selected_backend is not None
+        median_ms = statistics.median(latencies_ms)
+        batch_size = _batch_size((args, kwargs))
+        return BenchmarkResult(
+            target=str(wrapped.target),
+            backend=wrapped.selected_backend,
+            first_call_ms=first_call_ms,
+            latency_median_ms=median_ms,
+            latency_p95_ms=_percentile(latencies_ms, 0.95),
+            samples_per_second=batch_size / (median_ms / 1000),
+            peak_memory_bytes=_peak_memory(wrapped.target),
+            warmup=warmup,
+            repeats=repeats,
+            batch_size=batch_size,
+            environment=_environment(wrapped.target, wrapped.selected_backend),
+        )
+
+
+@contextlib.contextmanager
+def _intra_op_threads(threads: int | None) -> Iterator[None]:
+    """Pin torch's intra-op thread count, then put back what was there.
+
+    ``torch.set_num_threads`` is process-global. Restoring it is what keeps a
+    sweep honest: without this, the first measurement in a
+    ``for threads in (1, 2, 4, ...)`` loop would set the thread count for every
+    measurement after it, and the sweep would report one number repeatedly.
+
+    Only the intra-op pool is touched. ``set_num_interop_threads`` raises once
+    inter-op work has started, so it cannot be set per measurement and is left
+    alone.
+    """
+    if threads is None:
+        yield
+        return
+    previous = torch.get_num_threads()
+    torch.set_num_threads(threads)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(previous)
 
 
 def _synchronize(target: TargetSpec | None) -> None:
@@ -128,10 +164,19 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
     if target.vendor == "cpu":
         cpu_backend = getattr(getattr(torch, "backends", None), "cpu", None)
         get_capability = getattr(cpu_backend, "get_cpu_capability", None)
+        # A CPU latency number is uninterpretable without the part that produced
+        # it: physical cores explain the thread count, and the ISA flags explain
+        # whether an INT8 or BF16 result had a native instruction behind it. Both
+        # come from the same detection the target list uses.
+        cpu = detect_cpu_target()
         value.update(
             {
-                "device_name": platform.processor() or platform.machine() or "CPU",
-                "logical_cpu_count": os.cpu_count(),
+                "device_name": cpu.name,
+                "vendor_id": cpu.capabilities.get("vendor_id"),
+                "logical_cpu_count": cpu.capabilities.get("logical_cores") or os.cpu_count(),
+                "physical_cpu_count": cpu.capabilities.get("physical_cores"),
+                "isa_extensions": list(cpu.capabilities.get("isa_extensions", ())),
+                "total_memory_bytes": cpu.total_memory_bytes,
                 "torch_threads": torch.get_num_threads(),
                 "cpu_capability": get_capability() if callable(get_capability) else None,
             }

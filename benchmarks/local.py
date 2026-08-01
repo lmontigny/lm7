@@ -46,6 +46,15 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument(
+        "--threads",
+        nargs="+",
+        type=int,
+        help=(
+            "Intra-op thread counts to sweep, e.g. --threads 1 2 4 8 16. "
+            "Affects CPU execution only; omit to use the torch default."
+        ),
+    )
     parser.add_argument("--output", type=Path, help="Write machine-readable results as JSON.")
     parser.add_argument(
         "--require-all",
@@ -56,6 +65,12 @@ def main() -> None:
 
     if arguments.batch_size < 1:
         parser.error("--batch-size must be at least 1")
+    if arguments.threads is not None and any(count < 1 for count in arguments.threads):
+        parser.error("--threads values must be at least 1")
+
+    # None means "leave torch's own default alone", which is the shape of every
+    # run that predates --threads.
+    thread_counts: list[int | None] = list(arguments.threads or [None])
 
     results = []
     for target in arguments.target:
@@ -65,33 +80,38 @@ def main() -> None:
             print(f"{target:>7}: skipped (unavailable)")
             continue
         for backend in arguments.backend:
-            model, example_input = _model_and_input(arguments.batch_size)
-            result = lm7.benchmark(
-                model,
-                args=(example_input,),
-                target=target,
-                backend=backend,
-                warmup=arguments.warmup,
-                repeats=arguments.repeats,
-            )
-            results.append(result.to_dict())
-            peak = (
-                f"{result.peak_memory_bytes / 1024**2:.1f} MiB"
-                if result.peak_memory_bytes is not None
-                else "n/a"
-            )
-            print(
-                f"{target:>7}/{backend:<8} first={result.first_call_ms:9.2f} ms  "
-                f"median={result.latency_median_ms:8.3f} ms  "
-                f"p95={result.latency_p95_ms:8.3f} ms  "
-                f"throughput={result.samples_per_second:10.2f} samples/s  "
-                f"peak={peak}"
-            )
-            del model
-            if target == "nvidia":
-                torch.cuda.empty_cache()
-            elif target == "apple":
-                torch.mps.empty_cache()
+            for threads in thread_counts:
+                model, example_input = _model_and_input(arguments.batch_size)
+                result = lm7.benchmark(
+                    model,
+                    args=(example_input,),
+                    target=target,
+                    backend=backend,
+                    warmup=arguments.warmup,
+                    repeats=arguments.repeats,
+                    threads=threads,
+                )
+                results.append(result.to_dict())
+                peak = (
+                    f"{result.peak_memory_bytes / 1024**2:.1f} MiB"
+                    if result.peak_memory_bytes is not None
+                    else "n/a"
+                )
+                label = f"{target}/{backend}"
+                if threads is not None:
+                    label += f"/t{threads}"
+                print(
+                    f"{label:>20} first={result.first_call_ms:9.2f} ms  "
+                    f"median={result.latency_median_ms:8.3f} ms  "
+                    f"p95={result.latency_p95_ms:8.3f} ms  "
+                    f"throughput={result.samples_per_second:10.2f} samples/s  "
+                    f"peak={peak}"
+                )
+                del model
+                if target == "nvidia":
+                    torch.cuda.empty_cache()
+                elif target == "apple":
+                    torch.mps.empty_cache()
 
     report = {
         "schema_version": 1,

@@ -53,6 +53,55 @@ Two things this does *not* mean:
   `/proc/cpuinfo`, so on a host without `/proc` the list is empty and the core
   counts fall back to what Python can see. Treat empty as unknown.
 
+## Threads
+
+Thread count is the dominant CPU latency knob, and `lm7.benchmark` takes one:
+
+```python
+lm7.benchmark(model, args=(x,), target="cpu", backend="inductor", threads=8)
+```
+
+`benchmarks/local.py` sweeps it:
+
+```bash
+python benchmarks/local.py --target cpu --backend eager inductor \
+  --threads 1 2 4 8 16 --batch-size 64 --warmup 5 --repeats 30
+```
+
+On an AMD EPYC 7B13 — 8 physical cores, 16 logical, AVX2 — that gives:
+
+| Threads | eager | inductor | vs 1 thread |
+| --- | --- | --- | --- |
+| 1 | 15.49 ms | 15.27 ms | 1.00x |
+| 2 | 8.82 ms | 9.25 ms | 1.71x |
+| 4 | 5.27 ms | 5.33 ms | 2.90x |
+| 8 | **3.47 ms** | **3.39 ms** | **4.50x** |
+| 16 | 3.80 ms | 3.71 ms | 4.15x |
+
+Two things to take from it:
+
+- **Scaling stops at the physical core count.** Going from 8 threads to 16 —
+  one per logical CPU — is about 9% *slower*, not faster. The two SMT siblings
+  of a core share one vector unit, so a compute-bound GEMM gains nothing from
+  the second and pays for the contention. A larger MLP on the same host showed
+  the same shape at 31%, so treat the size of the penalty as workload-dependent
+  and the direction as reliable.
+- **Torch's default is usually already right.** It picks the physical core
+  count, which is the optimum above, so passing `threads` is for measuring the
+  curve or for hosts where that default guesses wrong — a cgroup CPU limit, for
+  instance, which `nproc` reports but `/proc/cpuinfo` does not.
+
+`threads` is a benchmark parameter, not a `compile` one. `torch.set_num_threads`
+is process-global, so a compiled module cannot own a thread count without
+silently changing every other module in the process. `lm7.benchmark` pins it for
+the duration of one measurement and restores it afterwards, which is what keeps
+a sweep from reporting its first number five times.
+
+Every CPU result records the host it came from — `device_name`, `vendor_id`,
+`physical_cpu_count`, `isa_extensions`, `total_memory_bytes`, and the
+`torch_threads` actually used — so a saved run can be compared against one from
+another machine without guessing at what produced it.
+
 ## Validate CPU and GPU locally
 
 The correctness example runs identical weights and inputs through CPU
