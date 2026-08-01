@@ -178,6 +178,7 @@ on GPU, because the CPU baseline is FP32 rather than BF16:
 | SmolLM2-135M | 4/4 | 1.36 | 513 → 210 MiB (2.44x) | 49.9 ms | 75.8 ms (**1.52x**) |
 | Llama-3.2-1B | 4/4 | 0.76 | 4943 → 2026 MB (2.44x) | 411.2 ms | 928.5 ms (**2.26x**) |
 | DeepSeek-Coder-1.3B | 4/4 | 0.67 | 5386 → 1746 MB (3.09x) | — | — |
+| Llama-3.1-8B | 4/4 | **0.50** | 32121 → 11190 MB (2.87x) | 2237.1 ms | 5957.5 ms (**2.66x**) |
 
 Intel i7-8086K, 6 threads, sequence length 16, compiled through `inductor`,
 median of 20 after warmup, one configuration per process. The DeepSeek row was
@@ -185,6 +186,47 @@ measured on a different host for accuracy and footprint only; its latency is lef
 blank rather than filled with a number from another machine. Its
 better-than-2.44x ratio comes from a wider model with proportionally less weight
 sitting in the untouched `lm_head`.
+
+**The Llama-3.1-8B row is from a different host** — an AMD EPYC 7B13 (Zen 3, 8
+cores, AVX2), where a 30 GiB FP32 baseline fits in RAM. Its FP32 and INT8 legs
+were measured in the same process on that machine, so the 2.66x ratio is
+internally valid; the absolute milliseconds are not comparable with the rows
+above.
+
+On the shared `"The capital of France is"` prompt this model's greedy next token
+is `" a"`, not the `" Paris"` the smaller models produce. That is the instruct
+checkpoint continuing raw text without its chat template, and it is not a
+quantization artifact: FP32 and INT8 agree on it, which is all this check asks.
+
+### Size makes INT8 more accurate and no faster
+
+The 8B row was run to test an obvious hypothesis: that weight-only INT8 should
+pay off at scale, where a decode step is more bandwidth-bound and the
+dequantization overhead is amortized over more arithmetic. **It does not.**
+
+| model | parameters | max logit diff | INT8 latency |
+| --- | --- | --- | --- |
+| SmolLM2-135M | 0.135B | 1.36 | 1.52x slower |
+| Llama-3.2-1B | 1.24B | 0.76 | 2.26x slower |
+| Llama-3.1-8B | 8.03B | 0.50 | 2.66x slower |
+
+Across a 60x range of model size the regression gets *worse*, not better, though
+the growth is flattening. It never reverses. The explanation in the VNNI section
+below is size-independent — an FP32 GEMM against a dequantize-then-FP32-GEMM is
+strictly more work at any scale — so there is no model size at which this path
+becomes a speedup on CPU.
+
+Accuracy moves the other way, and cleanly: the maximum logit difference falls
+monotonically as the model grows, and 8B is the tightest INT8 result measured
+anywhere in this document, on either target. That matches the usual account of
+weight redundancy rising with scale, and it is the part of the "quantization
+works better on big models" intuition that survives contact with these
+measurements.
+
+The practical read: on CPU, INT8 weight-only buys footprint — 32.1 GB down to
+11.2 GB, which is the difference between a model fitting in RAM and not — at a
+cost of roughly 2.7x latency. That is a good trade when the alternative is not
+running the model at all, and a bad one otherwise.
 
 > [!NOTE]
 > An earlier revision of this table reported SmolLM2-135M INT8 at `~50 ms`, i.e.
@@ -377,9 +419,16 @@ That combination has not been measured: no NPU was available. See
 > [!NOTE]
 > This path is validated per **(model, mode)** pair and rejects everything else.
 > Currently validated: `HuggingFaceTB/SmolLM2-135M-Instruct` (`int8`, `fp8`),
-> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`), and
-> `deepseek-ai/deepseek-coder-1.3b-instruct` (`int8`, `fp8`). Every `int8` entry
-> was measured on NVIDIA sm89 *and* on x86-64 CPU.
+> `unsloth/Llama-3.2-1B-Instruct` (`int8`, `fp8`, `nvfp4`),
+> `deepseek-ai/deepseek-coder-1.3b-instruct` (`int8`, `fp8`), and
+> `unsloth/Llama-3.1-8B-Instruct` (`int8`). Every `int8` entry below 8B was
+> measured on NVIDIA sm89 *and* on x86-64 CPU.
+>
+> **Llama-3.1-8B is CPU-only.** Its FP32 baseline is 30 GiB of weights, which no
+> GPU on hand can hold, so the NVIDIA half of that pair is unmeasured rather than
+> passing. The gate is keyed on the mode and not the model, so INT8 on an 8B
+> model will still be *permitted* on an NVIDIA target — treat that combination as
+> unvalidated.
 
 ### What "validated" means here
 

@@ -120,6 +120,7 @@ for details.
 | [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization |
 | [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
+| [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization on CPU only — 30 GiB FP32 baseline, see [quantization](docs/quantization.md) |
 
 ## 1. Install
 
@@ -272,6 +273,11 @@ Validated compact, ungated models: `HuggingFaceTB/SmolLM2-135M-Instruct`,
 Silicon, with slightly wider float16 tolerance on MPS than CUDA; DeepSeek was
 validated on CPU and NVIDIA only, across every backend installable on one host —
 see [DeepSeek coverage](docs/deepseek.md).
+
+`unsloth/Llama-3.1-8B-Instruct` is validated too, but only on CPU and only for
+INT8: at FP32 it needs 30 GiB of weights and roughly 40 GiB of RAM to load and
+quantize, which is a large-memory host rather than a compact one. Expect a
+multi-second forward pass — 2.2 s at sequence length 16 on eight AVX2 cores.
 
 For greedy token generation, use the static KV-cache path:
 

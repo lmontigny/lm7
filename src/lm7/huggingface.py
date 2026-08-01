@@ -80,14 +80,21 @@ _BF16_MINIMUM_CAPABILITY = 80
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
 # (0/4 prompts agreed with BF16, max logit difference 22.4 on NVIDIA sm89). A
 # model earns an entry here only after its outputs have been compared against an
-# unquantized baseline on real hardware. Every INT8 entry was measured on NVIDIA
-# sm89 *and* on x86-64 CPU; the narrower formats are NVIDIA-only, so
+# unquantized baseline on real hardware. The narrower formats are NVIDIA-only, so
 # _QUANTIZATION_VENDORS carries the target half of the gate. See
 # docs/quantization.md.
+#
+# Every INT8 entry below 8B was measured on NVIDIA sm89 *and* on x86-64 CPU.
+# Llama-3.1-8B is the exception and is CPU-only: its FP32 baseline needs 30 GiB
+# of weights, which no GPU here can hold, so the NVIDIA half of that pair is
+# unmeasured rather than passing. INT8 stays permitted on NVIDIA for it because
+# _QUANTIZATION_VENDORS is keyed on the mode and not the model -- treat an 8B
+# INT8 run on a GPU as unvalidated.
 VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
     "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8, FP8}),
     "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8, FP8, NVFP4}),
     "deepseek-ai/deepseek-coder-1.3b-instruct": frozenset({INT8, FP8}),
+    "unsloth/Llama-3.1-8B-Instruct": frozenset({INT8}),
 }
 WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 
