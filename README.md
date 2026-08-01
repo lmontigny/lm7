@@ -117,10 +117,12 @@ for details.
 | `hf_Bert` (BERT) | `torch.compile` parity (CI) |
 | `timm_vision_transformer` (ViT) | `torch.compile` parity (CI) |
 | Mixtral, tiny (sparse MoE) | `torch.compile` parity, CPU + NVIDIA (CI) |
+| OLMoE, tiny (sparse MoE) | `torch.compile` parity plus `aot_inductor` export, CPU + NVIDIA |
 | [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization |
 | [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
 | [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization on CPU only — 30 GiB FP32 baseline, see [quantization](docs/quantization.md) |
+| [OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct) | Sparse MoE at 6.9B — `eager`, `inductor`, `zentorch` on AMD CPU |
 
 ## 1. Install
 

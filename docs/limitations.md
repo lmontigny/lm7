@@ -34,19 +34,51 @@ coverage is CPU.
   `torch.export.load`.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
-- **Sparse Mixture-of-Experts models compile, but do not export.** The
-  reference transformers implementation (e.g. Mixtral) routes tokens to
-  experts with a data-dependent Python loop (`for expert_idx in expert_hit:
-  ...`) — the number of iterations is only known at runtime. `torch.compile`
-  tolerates that: Dynamo graph-breaks around the loop and falls back to eager
-  for it, so `inductor` and `tensorrt` (both JIT, both Dynamo-based) compile
-  and run these models correctly. `torch.export` cannot: it must capture one
-  static graph and hard-fails with `GuardOnDataDependentSymNode` on the same
-  loop. Every export-based backend — `aot_inductor`, `openvino`,
-  `onnxruntime`, `executorch`, `iree_vulkan`, `litert`, `stablehlo` — calls
-  `torch.export` internally, so none of them support this architecture today.
-  See [`examples/sparse_moe.py`](../examples/sparse_moe.py) for a compiling
-  example on CPU and NVIDIA.
+- **Sparse Mixture-of-Experts models always compile; whether they *export*
+  depends on the transformers version and the architecture.** Measured with
+  `torch 2.13` on two-layer models through `lm7.export`:
+
+  | transformers | Mixtral | OLMoE |
+  | --- | --- | --- |
+  | 4.57.3 (the CI pin) | JIT only — export fails | JIT **and** export |
+  | 5.14.1 | JIT **and** export | JIT **and** export |
+
+  The failing cell is the one this project originally generalized from. Mixtral's
+  pre-5.x implementation routes tokens with a data-dependent Python loop (`for
+  expert_idx in expert_hit: ...`) whose iteration count is only known at runtime.
+  `torch.compile` tolerates it — Dynamo graph-breaks around the loop and runs it
+  eagerly — so `inductor` and `tensorrt` were always fine. `torch.export` must
+  capture one static graph and hard-fails on it, and every export-based backend
+  (`aot_inductor`, `openvino`, `onnxruntime`, `executorch`, `iree_vulkan`,
+  `litert`, `stablehlo`) calls `torch.export` internally.
+
+  Two things make the old blanket claim wrong. **OLMoE never had the problem**,
+  even on the pinned transformers — its routing does not use that loop, so
+  "sparse MoE cannot export" was an over-generalization from a single reference
+  implementation. And **transformers 5.x removed the loop from Mixtral too**,
+  replacing it with a `grouped_mm` formulation that exports cleanly. On 5.x both
+  architectures export through `aot_inductor` and reload with outputs matching
+  eager.
+
+  So treat exportability as a property of the specific model and transformers
+  version, not of MoE as a class, and check it rather than assuming either way.
+  See [`examples/sparse_moe.py`](../examples/sparse_moe.py), which covers both
+  architectures on CPU and NVIDIA.
+
+  At real scale, `allenai/OLMoE-1B-7B-0924-Instruct` (6.92B total, 64 experts, 8
+  active) runs on an AMD EPYC CPU through `eager` (525.1 ms), `inductor`
+  (506.8 ms) and `zentorch` (522.1 ms), all agreeing on the greedy next token.
+  Compiling buys almost nothing on an MoE — Dynamo graph-breaks around the
+  routing regardless of backend, so most of the model runs eagerly either way,
+  and `zentorch`'s usual small-model advantage disappears. Exporting that model
+  is **not** verified: the attempt destabilized a 62 GB host twice during weight
+  loading and was abandoned rather than retried.
+
+  > [!NOTE]
+  > `grouped_mm` on transformers 5.x requires tensor strides that are multiples
+  > of 16 bytes, so very small hand-built configs (an `intermediate_size` of 37,
+  > say) now fail in *eager* with `strides should be multiple of 16 bytes`. That
+  > is a config constraint, not an LM7 or export limitation.
 
 ## Per-backend scope
 

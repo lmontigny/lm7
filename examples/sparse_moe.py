@@ -1,13 +1,19 @@
-"""Validate a tiny sparse Mixture-of-Experts model (Mixtral architecture) through
-LM7's JIT compile backends.
+"""Validate tiny sparse Mixture-of-Experts models through LM7's JIT backends.
 
-MoE routing (``for expert_idx in expert_hit: ...`` in the reference transformers
-implementation) is data-dependent: the number of expert dispatches is only known
-at runtime. torch.compile tolerates that -- Dynamo graph-breaks around the
-routing loop and runs it eagerly -- but torch.export cannot capture it at all.
-That means this model works through LM7's JIT backends (inductor, tensorrt) but
-not through any export-based backend (aot_inductor, openvino, onnxruntime,
-executorch, iree_vulkan, litert, stablehlo); see docs/limitations.md.
+Two architectures, because they do not behave the same. Mixtral's pre-5.x
+transformers implementation routes tokens with a data-dependent Python loop
+(``for expert_idx in expert_hit: ...``) whose iteration count is only known at
+runtime. torch.compile tolerates that -- Dynamo graph-breaks around the loop and
+runs it eagerly -- but torch.export must capture one static graph and fails,
+which takes every export-based backend down with it. OLMoE's routing never used
+that loop, and transformers 5.x removed it from Mixtral as well.
+
+So JIT works everywhere here, and exportability depends on the pair:
+
+    transformers 4.57.3   mixtral: JIT only      olmoe: JIT and export
+    transformers 5.14.1   mixtral: JIT + export  olmoe: JIT and export
+
+Run with ``--architecture olmoe`` for the second one. See docs/limitations.md.
 """
 
 from __future__ import annotations
@@ -19,27 +25,38 @@ import torch
 
 import lm7
 
-# Small enough to compile quickly on a CPU CI runner: 2 layers, 4 experts,
-# hidden_size=32. Random init, no pretrained weights -- this is an
-# architecture smoke test, not a quality benchmark.
+# Small enough to compile quickly on a CPU CI runner: 2 layers, a handful of
+# experts. Random init, no pretrained weights -- this is an architecture smoke
+# test, not a quality benchmark.
+#
+# Dimensions are multiples of 16 on purpose. The transformers 5.x MoE path goes
+# through `grouped_mm`, which requires strides that are multiples of 16 bytes and
+# raises in *eager* otherwise -- an earlier revision used intermediate_size=37
+# and stopped working when that landed.
 _VOCAB_SIZE = 256
+_ARCHITECTURES = ("mixtral", "olmoe")
 
 
-def model():
-    from transformers import MixtralConfig, MixtralForCausalLM
+def model(architecture: str = "mixtral"):
+    common = {
+        "vocab_size": _VOCAB_SIZE,
+        "hidden_size": 64,
+        "intermediate_size": 64,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "max_position_embeddings": 64,
+    }
+    if architecture == "olmoe":
+        from transformers import OlmoeConfig, OlmoeForCausalLM
 
-    config = MixtralConfig(
-        vocab_size=_VOCAB_SIZE,
-        hidden_size=32,
-        intermediate_size=37,
-        num_hidden_layers=2,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_local_experts=4,
-        num_experts_per_tok=2,
-        max_position_embeddings=64,
-    )
-    built = MixtralForCausalLM(config).eval()
+        built = OlmoeForCausalLM(OlmoeConfig(num_experts=8, num_experts_per_tok=2, **common)).eval()
+    else:
+        from transformers import MixtralConfig, MixtralForCausalLM
+
+        built = MixtralForCausalLM(
+            MixtralConfig(num_local_experts=4, num_experts_per_tok=2, **common)
+        ).eval()
     built.config.use_cache = False
     return built
 
@@ -74,6 +91,12 @@ def main() -> None:
     )
     parser.add_argument("--backend", default="inductor")
     parser.add_argument(
+        "--architecture",
+        choices=_ARCHITECTURES,
+        default="mixtral",
+        help="Which MoE routing implementation to exercise (default: mixtral).",
+    )
+    parser.add_argument(
         "--require-nvidia",
         action="store_true",
         help="Fail instead of skipping when an NVIDIA CUDA GPU is unavailable.",
@@ -86,7 +109,8 @@ def main() -> None:
         raise SystemExit('Install Hugging Face support with: pip install -e ".[hf]"') from None
 
     torch.manual_seed(0)
-    source = model()
+    source = model(arguments.architecture)
+    print(f"architecture: {arguments.architecture}")
     example_inputs = {"input_ids": torch.randint(0, _VOCAB_SIZE, (1, 16))}
     with torch.inference_mode():
         expected = source(**example_inputs).logits
