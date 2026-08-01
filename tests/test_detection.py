@@ -1,4 +1,5 @@
 import importlib
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,10 @@ import torch
 from lm7.detection import (
     _detect_tenstorrent_targets,
     _detect_tpu_targets,
+    detect_cpu_target,
     detect_targets,
+    parse_cpu_info,
+    parse_total_memory_bytes,
     resolve_target,
     torch_device,
 )
@@ -183,3 +187,142 @@ def test_tenstorrent_uses_the_xla_device(monkeypatch):
     target = TargetSpec("tenstorrent", "accelerator", architecture="wormhole", ordinal=1)
 
     assert torch_device(target) == torch.device("xla:1")
+
+
+# Captured from an AMD EPYC 7B13 (Zen 3), trimmed to two of its sixteen logical
+# CPUs: one SMT sibling pair, which is what makes the physical-core count a real
+# assertion rather than a restatement of the block count.
+EPYC_CPUINFO = """processor\t: 0
+vendor_id\t: AuthenticAMD
+cpu family\t: 25
+model name\t: AMD EPYC 7B13
+physical id\t: 0
+siblings\t: 16
+core id\t: 0
+cpu cores\t: 8
+flags\t\t: fpu vme de pse tsc msr pae sse2 ht syscall lm constant_tsc pni ssse3 fma cx16 sse4_1 sse4_2 popcnt aes xsave avx f16c rdrand hypervisor bmi1 avx2 bmi2 erms rdseed adx clflushopt clwb sha_ni xsaveopt vaes vpclmulqdq rdpid fsrm
+bogomips\t: 4899.99
+
+processor\t: 1
+vendor_id\t: AuthenticAMD
+cpu family\t: 25
+model name\t: AMD EPYC 7B13
+physical id\t: 0
+siblings\t: 16
+core id\t: 0
+cpu cores\t: 8
+flags\t\t: fpu vme de pse tsc msr pae sse2 ht syscall lm constant_tsc pni ssse3 fma cx16 sse4_1 sse4_2 popcnt aes xsave avx f16c rdrand hypervisor bmi1 avx2 bmi2 erms rdseed adx clflushopt clwb sha_ni xsaveopt vaes vpclmulqdq rdpid fsrm
+bogomips\t: 4899.99
+"""
+
+# A Sapphire Rapids Xeon, which is the case LM7 cannot reach on any host it owns:
+# AMX and AVX-512 BF16 are exactly the flags that decide whether CPU BF16 is
+# native, so they are covered by fixture or not at all.
+SAPPHIRE_RAPIDS_CPUINFO = """processor\t: 0
+vendor_id\t: GenuineIntel
+model name\t: Intel(R) Xeon(R) Platinum 8480+
+physical id\t: 0
+core id\t: 0
+cpu cores\t: 56
+flags\t\t: fpu vme de pse tsc msr avx avx2 f16c avx512f avx512bw avx512vl avx512_vnni avx512_bf16 avx512_fp16 amx_bf16 amx_tile amx_int8
+
+processor\t: 1
+vendor_id\t: GenuineIntel
+model name\t: Intel(R) Xeon(R) Platinum 8480+
+physical id\t: 1
+core id\t: 0
+cpu cores\t: 56
+flags\t\t: fpu vme de pse tsc msr avx avx2 f16c avx512f avx512bw avx512vl avx512_vnni avx512_bf16 avx512_fp16 amx_bf16 amx_tile amx_int8
+"""
+
+# AArch64 prints "Features", not "flags", and names nothing the x86 vocabulary
+# knows. Graviton and Apple Silicon are both LM7 targets, so the parser has to
+# come back with a vector ISA here rather than an empty tuple.
+AARCH64_CPUINFO = """processor\t: 0
+BogoMIPS\t: 2100.00
+Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp asimddp sve sve2 bf16 i8mm
+CPU implementer\t: 0x41
+CPU architecture: 8
+"""
+
+
+def test_cpu_info_reports_amd_vendor_topology_and_isa():
+    info = parse_cpu_info(EPYC_CPUINFO)
+
+    assert info["vendor_id"] == "AuthenticAMD"
+    assert info["model_name"] == "AMD EPYC 7B13"
+    assert info["logical_cores"] == 2
+    # Both blocks are SMT siblings of one core, so the physical count is 1.
+    assert info["physical_cores"] == 1
+    assert info["isa_extensions"] == ("avx", "avx2", "f16c")
+
+
+def test_cpu_info_reports_avx512_and_amx_on_sapphire_rapids():
+    info = parse_cpu_info(SAPPHIRE_RAPIDS_CPUINFO)
+
+    assert info["vendor_id"] == "GenuineIntel"
+    assert info["physical_cores"] == 2
+    assert set(info["isa_extensions"]) >= {
+        "avx512_bf16",
+        "avx512_vnni",
+        "amx_bf16",
+        "amx_int8",
+        "amx_tile",
+    }
+
+
+def test_cpu_info_reads_the_aarch64_features_line():
+    info = parse_cpu_info(AARCH64_CPUINFO)
+
+    assert info["isa_extensions"] == ("asimd", "asimddp", "asimdhp", "bf16", "i8mm", "sve", "sve2")
+    # AArch64 publishes no vendor_id or model name, and no topology fields, so
+    # those degrade rather than inventing a value.
+    assert info["vendor_id"] is None
+    assert info["physical_cores"] is None
+    assert info["logical_cores"] == 1
+
+
+def test_total_memory_is_read_in_bytes():
+    assert (
+        parse_total_memory_bytes("MemTotal:       65841440 kB\nMemFree: 1 kB\n") == 65841440 * 1024
+    )
+
+
+def test_total_memory_is_absent_when_meminfo_has_no_total():
+    assert parse_total_memory_bytes("MemFree:  123 kB\n") is None
+
+
+def test_cpu_target_carries_the_detected_description(monkeypatch, tmp_path):
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(EPYC_CPUINFO)
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       65841440 kB\n")
+    detection_module = importlib.import_module("lm7.detection")
+    monkeypatch.setattr(detection_module, "CPU_INFO_PATH", cpuinfo)
+    monkeypatch.setattr(detection_module, "MEMORY_INFO_PATH", meminfo)
+
+    device = detect_cpu_target()
+
+    assert device.target.vendor == "cpu"
+    assert device.name == "AMD EPYC 7B13"
+    assert device.total_memory_bytes == 65841440 * 1024
+    assert device.capabilities["vendor_id"] == "AuthenticAMD"
+    assert device.capabilities["physical_cores"] == 1
+    assert device.capabilities["isa_extensions"] == ("avx", "avx2", "f16c")
+
+
+def test_cpu_target_degrades_without_proc(monkeypatch, tmp_path):
+    detection_module = importlib.import_module("lm7.detection")
+    monkeypatch.setattr(detection_module, "CPU_INFO_PATH", tmp_path / "absent")
+    monkeypatch.setattr(detection_module, "MEMORY_INFO_PATH", tmp_path / "absent")
+
+    device = detect_cpu_target()
+
+    # The CPU is LM7's fallback target, so an unreadable /proc must leave a
+    # resolvable device behind rather than removing it.
+    assert device.target.vendor == "cpu"
+    assert device.name
+    assert device.total_memory_bytes is None
+    assert device.capabilities["vendor_id"] is None
+    assert device.capabilities["isa_extensions"] == ()
+    assert device.capabilities["logical_cores"] == os.cpu_count()
