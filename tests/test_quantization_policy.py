@@ -54,6 +54,16 @@ def test_validation_is_per_mode_not_per_model():
         VALIDATED_WEIGHT_ONLY[model_id] = original
 
 
+def test_llama_8b_is_admitted_for_int8_only():
+    """The 8B pair was measured on CPU alone, so only INT8 is claimed for it.
+
+    Its FP32 baseline is 30 GiB of weights, which no GPU here can hold, so the
+    NVIDIA half of the usual two-target check is unmeasured. FP8 and NVFP4 need
+    Ada-class tensor cores and were never run against it at all.
+    """
+    assert VALIDATED_WEIGHT_ONLY["unsloth/Llama-3.1-8B-Instruct"] == frozenset({INT8})
+
+
 def test_long_form_names_normalize_to_short_names():
     """`--quantization int8-weight-only` predates `--quantize int8`; both work."""
     assert normalize_quantization("int8-weight-only") == INT8
