@@ -123,12 +123,21 @@ The initial integration is deliberately narrow:
 - FP32 MLP conversion/reload with maximum error below `6e-8`.
 - Keyword-input and tuple-output reload with exact agreement.
 - LiteRT Torch 0.9.2, LiteRT 2.1.6, and PyTorch 2.12.1 on Linux x86-64.
+- The same `.tflite` executed on a Snapdragon 8 Elite (arm64-v8a, Android 16),
+  agreeing with host eager to 1.2e-07 on CPU and 8.9e-08 through the Adreno GPU
+  delegate. See [android-device-testing.md](android-device-testing.md); the GPU
+  result is a device measurement, not a LM7 GPU backend.
 
 Dynamic shapes are rejected. A bounded dynamic batch prototype reached
 `torch.export` but failed in LiteRT Torch's JAX symbolic-shape lowering. GPU and
-NPU execution are also outside this first backend because `litert_torch.load`
-uses the default LiteRT interpreter/XNNPACK path; using LiteRT's newer Compiled
-Model API needs a separate runtime adapter and hardware validation.
+NPU execution are outside this backend because `litert_torch.load` uses the
+default LiteRT interpreter/XNNPACK path; using LiteRT's newer Compiled Model API
+needs a separate runtime adapter and hardware validation.
+
+That the artifact *can* run on a phone GPU is now measured -- LiteRT's own
+Android runner takes the whole graph onto the Adreno -- but on the validated MLP
+the GPU delegate is roughly 660x slower per inference than the CPU, so nothing
+here argues for building that adapter yet.
 
 Full Hugging Face causal LMs are not claimed. Efficient LiteRT-LM packages use
 model-specific reauthoring/checkpoint mapping, multiple prefill/decode
