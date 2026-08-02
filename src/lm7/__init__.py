@@ -9,16 +9,19 @@ from .exporting import (
     export,
     load_artifact,
 )
+from .inspection import ArtifactInspection, PayloadInspection, inspect_artifact
 from .targets import DeviceInfo, TargetSpec, parse_target
 
 __all__ = [
     "ArtifactBundle",
+    "ArtifactInspection",
     "ArtifactManifest",
     "BenchmarkResult",
     "BundleManifest",
     "DeviceInfo",
     "DynamicDimension",
     "ExportArtifact",
+    "PayloadInspection",
     "ShapeProfile",
     "TargetSpec",
     "backends",
@@ -29,6 +32,7 @@ __all__ = [
     "detect_targets",
     "explain",
     "export",
+    "inspect_artifact",
     "load_artifact",
     "load_bundle",
     "parse_target",
