@@ -117,8 +117,9 @@ coverage is CPU.
 These have measurement harnesses or written plans, and no registered backend:
 
 - [AMD MIGraphX](amd-migraphx.md) — benchmark harness only.
-- [Qualcomm Hexagon](qualcomm-hexagon.md) — evaluation plan; blocked on SDK and
-  device access. ExecuTorch's QNN delegate is likely the cheaper route.
+- [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR evaluation
+  plan. The initial [ExecuTorch QNN backend](qnn.md) supports static FP16 SM8750
+  export but remains SDK-gated and has no automated hardware validation.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — would unpin
   `stablehlo` from a matching PyTorch; evaluated and **not adopted**.
 

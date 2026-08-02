@@ -19,6 +19,8 @@ class TargetSpec:
     def __str__(self) -> str:
         if self.vendor == "cpu":
             return "cpu" + (f":{self.architecture}" if self.architecture else "")
+        if self.vendor == "qualcomm" and self.model:
+            return f"qualcomm:{self.model}"
         if self.kind == "npu":
             # The kind has to survive the round trip: `intel` on its own already
             # means the Intel GPU, so an NPU spec cannot print as its vendor.
@@ -35,7 +37,17 @@ class DeviceInfo:
     capabilities: Mapping[str, Any] = field(default_factory=dict)
 
 
-_VENDORS = {"cpu", "nvidia", "amd", "intel", "apple", "tpu", "tenstorrent", "aws"}
+_VENDORS = {
+    "cpu",
+    "nvidia",
+    "amd",
+    "intel",
+    "apple",
+    "tpu",
+    "tenstorrent",
+    "aws",
+    "qualcomm",
+}
 
 # Tenstorrent qualifiers split into an architecture generation and a board
 # model, so `tenstorrent:blackhole` pins the silicon and `tenstorrent:p150`
@@ -69,6 +81,14 @@ def parse_target(value: str | TargetSpec) -> TargetSpec:
         return TargetSpec("apple", "gpu", architecture="metal")
     if vendor == "aws" and qualifier == "trainium":
         return TargetSpec("aws", "accelerator", model="trainium", remote=True)
+    if vendor == "qualcomm" and qualifier == "sm8750":
+        return TargetSpec(
+            "qualcomm",
+            "npu",
+            architecture="v79",
+            model="sm8750",
+            remote=True,
+        )
     if vendor == "tpu":
         return TargetSpec("tpu", "accelerator", model=qualifier)
     if vendor == "tenstorrent":
@@ -80,6 +100,10 @@ def parse_target(value: str | TargetSpec) -> TargetSpec:
         if qualifier and qualifier.startswith(architecture_prefixes):
             return TargetSpec(vendor, "gpu", architecture=qualifier)
         return TargetSpec(vendor, "gpu", model=qualifier)
+    if vendor == "qualcomm":
+        raise TargetNotFoundError(
+            f"Unsupported Qualcomm target {value!r}; expected 'qualcomm:sm8750'."
+        )
     if qualifier is not None:
         raise TargetNotFoundError(f"Unsupported target qualifier in {value!r}.")
     return TargetSpec(vendor, "gpu")

@@ -14,16 +14,16 @@ phone is not a device the calling process can reach; see [scope](#scope).
 
 ## Why this is the edge path LM7 could actually build
 
-Every other mobile route needs hardware or a vendor SDK before you can tell
-whether it works at all — the [Hexagon plan](qualcomm-hexagon.md) is blocked on
-exactly that. ExecuTorch's XNNPACK delegate needs neither. It targets ARM64 *and*
+Vendor-specific mobile delegates need their platform SDK before they can lower a
+graph. ExecuTorch's XNNPACK delegate needs neither, while LM7's separate
+[QNN backend](qnn.md) explicitly gates on Qualcomm AI Engine Direct SDK. It targets ARM64 *and*
 x86-64, so the same lowering that produces a phone artifact runs on an ordinary
 Linux CI box, and `tests/test_executorch_integration.py` validates numerics
 against eager on every run.
 
-That is also the honest limit of what is claimed here: XNNPACK is a **CPU**
-delegate. Reaching the NPUs — Core ML, Qualcomm QNN, MediaTek, Samsung Exynos —
-means adding those delegates, and each needs a macOS host or a vendor SDK.
+That is also the honest limit of what is claimed for this backend: XNNPACK is a
+**CPU** delegate. Qualcomm HTP export is available through `backend="qnn"` and
+`target="qualcomm:sm8750"`; other vendor delegates remain separate work.
 
 ## Install
 
@@ -166,8 +166,9 @@ claim.
 
 - **Export only.** `lm7.compile()` will not select this backend, and asking for
   it raises. The artifact is the deliverable.
-- **XNNPACK only.** Core ML, QNN, MediaTek, Vulkan, Arm Ethos-U, and Exynos are
-  ExecuTorch delegates LM7 does not wire up.
+- **XNNPACK only.** This backend does not change delegates. Qualcomm HTP uses the
+  separate [QNN backend](qnn.md); Core ML, MediaTek, Vulkan, Arm Ethos-U, and
+  Exynos remain unwired here.
 - **INT8 PTQ only.** There is no INT4, QAT, multi-sample calibration API, or
   backend-specific accuracy gate yet. Quantization support depends on the
   operator patterns recognized by ExecuTorch's XNNPACK quantizer.

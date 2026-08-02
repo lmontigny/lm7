@@ -31,6 +31,12 @@ from .backends.onnxruntime import ONNXRuntimeBackend
 from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
 from .backends.openvino import device_for_target as openvino_device_for_target
+from .backends.qnn import DELEGATE as QNN_DELEGATE
+from .backends.qnn import HTP_ARCH as QNN_HTP_ARCH
+from .backends.qnn import RUNTIME_LIBRARIES as QNN_RUNTIME_LIBRARIES
+from .backends.qnn import SOC_MODEL as QNN_SOC_MODEL
+from .backends.qnn import VTCM_MB as QNN_VTCM_MB
+from .backends.qnn import ExecuTorchQNNBackend
 from .backends.stablehlo import StableHLOBackend
 from .backends.tensorrt import SUPPORTED_VENDORS as TENSORRT_VENDORS
 from .backends.tensorrt import TensorRTBackend
@@ -81,6 +87,7 @@ EXPORT_BACKENDS = frozenset(
         "litert",
         "onnxruntime",
         "openvino",
+        "qnn",
         "stablehlo",
         "tensorrt",
     }
@@ -238,6 +245,14 @@ def export(
             "ExecuTorch artifacts use the XNNPACK delegate, which is a CPU target. "
             "Export with target='cpu'; the .pte then runs on Android and iOS CPUs too."
         )
+    if backend == "qnn" and (
+        resolved_target.vendor != "qualcomm" or resolved_target.model != "sm8750"
+    ):
+        raise BackendUnavailableError("The initial QNN backend requires target='qualcomm:sm8750'.")
+    if backend == "qnn" and (dynamic_shapes is not None or shape_profile is not None):
+        raise BackendUnavailableError(
+            "QNN artifacts currently require static shapes; export one artifact per shape."
+        )
     if backend == "iree_vulkan" and resolved_target.vendor not in IREE_VULKAN_VENDORS:
         raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
     if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
@@ -265,10 +280,10 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
-        if backend in {"iree_vulkan", "litert", "onnxruntime"}:
+        if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn"}:
             # These runtimes own device placement. Capture a host ExportedProgram
-            # even when the artifact targets a discrete GPU, so export needs no
-            # CUDA, ROCm, or XPU to be available on the compiler host.
+            # even when the artifact targets a GPU or NPU, so the accelerator
+            # does not need to be attached to the compiler host.
             model = model.to("cpu")
             args = _map_tensors(args, lambda tensor: tensor.detach().cpu())
             kwargs = _map_tensors(kwargs, lambda tensor: tensor.detach().cpu())
@@ -288,7 +303,7 @@ def export(
             else dynamic_shapes
         )
         try:
-            if backend in {"iree_vulkan", "litert", "onnxruntime"}:
+            if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn"}:
                 with torch.no_grad():
                     exported_program = torch.export.export(
                         model,
@@ -341,6 +356,7 @@ def export(
         executorch_total = None
         executorch_quantization = None
         executorch_quantized_ops = None
+        qnn_lowered = None
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
         litert_settings = None
@@ -412,6 +428,19 @@ def export(
             executorch_total = lowered.total_calls
             executorch_quantization = lowered.quantization
             executorch_quantized_ops = lowered.quantized_ops
+        if backend == "qnn":
+            qnn_backend = _qnn_backend()
+            probe = qnn_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            qnn_lowered = qnn_backend.compile_exported(
+                exported_program,
+                staging / COMPILED_PTE_NAME,
+                target=resolved_target,
+                options=options,
+            )
+            compiled_file = COMPILED_PTE_NAME
+            compiled_sha256 = _file_sha256(qnn_lowered.path)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -579,6 +608,24 @@ def export(
                     if backend == "executorch"
                     else {}
                 ),
+                **(
+                    {
+                        "executorch": _qnn_backend().probe().version,
+                        "delegate": QNN_DELEGATE,
+                        "backend": "htp",
+                        "soc_model": QNN_SOC_MODEL,
+                        "htp_arch": QNN_HTP_ARCH,
+                        "vtcm_mb": QNN_VTCM_MB,
+                        "precision": qnn_lowered.precision,
+                        "delegated_calls": qnn_lowered.delegated_calls,
+                        "total_calls": qnn_lowered.total_calls,
+                        "qnn_sdk": _qnn_backend().sdk_version(),
+                        "runtime_libraries": list(QNN_RUNTIME_LIBRARIES),
+                        "device_bound": True,
+                    }
+                    if backend == "qnn" and qnn_lowered is not None
+                    else {}
+                ),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -624,6 +671,8 @@ def export(
         compiled_callable = _stablehlo_backend().load_package(destination / COMPILED_STABLEHLO_NAME)
     elif backend == "executorch":
         compiled_callable = _executorch_backend().load_pte(destination / COMPILED_PTE_NAME)
+    elif backend == "qnn":
+        compiled_callable = _qnn_backend().load_pte(destination / COMPILED_PTE_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
@@ -782,6 +831,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
         )
         compiled_callable = _executorch_backend().load_pte(compiled_path)
+    elif manifest.backend == "qnn":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _qnn_backend().load_pte(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -845,6 +899,13 @@ def _executorch_backend() -> ExecuTorchBackend:
     backend = registry.get("executorch")
     if not isinstance(backend, ExecuTorchBackend):
         raise BackendUnavailableError("The registered executorch backend is invalid.")
+    return backend
+
+
+def _qnn_backend() -> ExecuTorchQNNBackend:
+    backend = registry.get("qnn")
+    if not isinstance(backend, ExecuTorchQNNBackend):
+        raise BackendUnavailableError("The registered qnn backend is invalid.")
     return backend
 
 
@@ -954,6 +1015,8 @@ def _backend_version(backend: str) -> str | None:
         return _stablehlo_backend().probe().version
     if backend == "executorch":
         return _executorch_backend().probe().version
+    if backend == "qnn":
+        return _qnn_backend().probe().version
     return None
 
 
