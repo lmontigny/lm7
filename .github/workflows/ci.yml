@@ -84,6 +84,60 @@ jobs:
       - name: Export a .pte and validate it against eager on ARM64
         run: python -m pytest tests/test_executorch_integration.py -q
 
+  # LM7 registers fifteen backends and CI exercised two: TorchInductor, and
+  # ExecuTorch on ARM64. Every other backend's tests skip themselves when the
+  # package is absent, so a green run said nothing about them at all -- the
+  # suite reported "46 skipped" and no one could tell which of those mattered.
+  #
+  # These four install on an ordinary CPU runner, so their tests actually run.
+  # What is deliberately not here: CUDA, ROCm, MPS, TPU, Tenstorrent and
+  # TensorRT need hardware; QNN needs the Qualcomm AI Engine Direct SDK, which
+  # is behind a login; apache-tvm's published wheel fails to import with an
+  # undefined symbol in libtvm_runtime.so; zentorch expects an AMD host that a
+  # hosted runner does not guarantee.
+  backend:
+    name: Backend ${{ matrix.extra }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extra: onnxruntime
+            marker: onnxruntime
+          - extra: openvino
+            marker: openvino
+          - extra: iree-vulkan
+            marker: iree_vulkan
+          # LiteRT Torch supports PyTorch >=2.4,<2.13, so this one pins instead
+          # of taking the latest -- see docs/litert.md.
+          - extra: litert
+            marker: litert
+            torch: torch==2.12.*
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7 with the ${{ matrix.extra }} extra
+        run: |
+          python -m pip install "${{ matrix.torch || 'torch' }}" --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,${{ matrix.extra }}]"
+
+      # Reports availability per backend, so a job that installs the extra but
+      # cannot import it fails here with the reason rather than as a wall of
+      # skips.
+      - name: Report backend availability
+        run: python -m lm7 backends
+
+      - name: Run the ${{ matrix.marker }} tests
+        run: python -m pytest -m ${{ matrix.marker }} -v
+
   torchbench-compile:
     name: TorchBench CPU torch.compile
     runs-on: ubuntu-24.04
