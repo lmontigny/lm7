@@ -258,18 +258,24 @@ explicit arguments take precedence.
 
 ### JIT vs. AOT
 
-The difference is *when* compilation happens and *whether the result outlives the
-process*.
+![LM7 compile and export execution modes](docs/assets/execution-modes.svg)
 
-- **JIT** compiles inside your process on the first call, once per input
-  signature. Nothing is written that another process can use, so restarting
-  recompiles.
-- **AOT** (`lm7.export`) compiles up front and writes an `.lm7` directory another
-  process loads with no compile step.
+There are two separate questions: *when a backend does its work*, and *what the
+API returns*.
 
-Use JIT while iterating, AOT when you want the compile cost paid once at build
-time. See [JIT vs. AOT](docs/jit-vs-aot.md) for the export levels, bundles, and
-the signature rules an artifact is pinned to.
+- **`lm7.compile()` returns a callable.** It is always lazy from the caller's
+  perspective: the first call for each input signature invokes the backend.
+  Inductor and OpenXLA generate code JIT; AOTInductor, TensorRT, OpenVINO, and
+  ONNX Runtime may build an engine or package internally, but LM7 loads it into
+  the current process rather than returning persistent files.
+- **`lm7.export()` returns files.** It always writes a versioned `.lm7`
+  directory at build time. The default `backend="export"` only captures a
+  portable graph—it is not a precompiled AOT payload. Choosing a lowering
+  backend adds persistent code, IR, or a runtime-specific model for later use.
+
+Use `compile` while iterating and `export` when you need persistence or
+deployment. See [JIT vs. AOT](docs/jit-vs-aot.md) for export levels, bundles,
+and the signature rules an artifact is pinned to.
 
 ## 4. Run a Hugging Face model
 

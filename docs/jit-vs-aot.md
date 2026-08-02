@@ -1,9 +1,11 @@
 # JIT vs. AOT
 
-Two things distinguish LM7's compilation paths: *when* compilation happens, and
-*whether the result outlives the process*.
+Keep two independent questions separate: *when a backend does code generation*,
+and *what the LM7 API returns*. `lm7.compile()` returns an in-process callable;
+`lm7.export()` writes persistent files. JIT and AOT describe backend timing, so
+they are related to those APIs but are not synonyms for them.
 
-## JIT: compiled in-process, on the first call
+## Compile: a lazy in-process callable
 
 `inductor`, `openxla`, and `tenstorrent` are JIT backends, and so is
 `tensorrt` when reached through `lm7.compile` — it also has an AOT export
@@ -27,19 +29,25 @@ LM7 compiles **one variant per input signature** and caches it, so a model calle
 with several batch sizes pays several compilations. The cache key covers model
 identity, input signature, target, and backend.
 
-Nothing is written that another process can use. Restarting pays the compile cost
-again, and neither TensorRT engines nor `torch.compile` callables can be shipped
-to another machine.
+The API remains lazy even when the selected backend uses an ahead-of-time
+compiler internally. For example, `aot_inductor`, `openvino`, and `tensorrt`
+can build a package or engine on the first call and load it immediately. LM7
+still returns a callable, not a user-owned artifact; restarting invokes the
+backend again.
+
+No persistent output is promised by `lm7.compile()`. Transient compiler files
+may exist, but the callable and its LM7 shape cache cannot be deployed.
 
 One consequence worth knowing: because `torch.compile` is lazy, a *compilation*
 failure surfaces from the first call rather than from `lm7.compile`. LM7 runs a
 warmup call inside its own error boundary so `fallback="warn"` still works — see
 [what LM7 replaces](what-this-replaces.md).
 
-## AOT: compiled up front, into a file
+## Export: persistent files, optionally AOT-lowered
 
-AOT goes through `lm7.export`, which writes an `.lm7` directory. There are two
-levels of it, and conflating them is easy:
+`lm7.export()` is an artifact API, not a synonym for AOT compilation. It always
+writes an `.lm7` directory at build time, but there are multiple lowering
+levels, and conflating them is easy:
 
 ```python
 # Level 1 - capture only (the default, backend="export").
