@@ -67,6 +67,48 @@ def test_int8_export_and_reload_matches_eager(tmp_path):
     assert requirements["calibration_samples"] == 1
     torch.testing.assert_close(artifact(*example), expected, rtol=2e-2, atol=2e-2)
 
+
+class IndexArithmetic(torch.nn.Module):
+    """An integer offset applied to indices before an embedding lookup.
+
+    This is the shape every causal LM has -- positions and cache offsets are
+    integer arithmetic feeding an index -- reduced to something that exports in
+    seconds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed = torch.nn.Embedding(64, 16)
+        self.proj = torch.nn.Linear(16, 8)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.proj(self.embed(input_ids + 1))
+
+
+def test_int8_export_survives_integer_index_arithmetic(tmp_path):
+    """PT2E lifts a literal scalar to a float32 attribute, promoting `ids + 1`.
+
+    The embedding then receives float indices and the export fails. LM7 retypes
+    the lifted scalar, so this must quantize rather than raise.
+    """
+    torch.manual_seed(0)
+    source = IndexArithmetic().eval()
+    example = (torch.randint(0, 32, (1, 5), dtype=torch.long),)
+    with torch.no_grad():
+        expected = source(*example)
+
+    artifact = lm7.export(
+        source,
+        args=example,
+        target="cpu",
+        backend="executorch",
+        output=tmp_path / "model-index-int8.lm7",
+        options={"quantization": "int8"},
+    )
+
+    assert artifact.manifest.runtime_requirements["quantized_ops"] > 0
+    torch.testing.assert_close(artifact(*example), expected, rtol=5e-2, atol=5e-2)
+
     reloaded = lm7.load_artifact(artifact.path)
     torch.testing.assert_close(reloaded(*example), expected, rtol=2e-2, atol=2e-2)
 
