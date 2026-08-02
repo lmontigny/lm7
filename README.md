@@ -35,9 +35,10 @@ the model.
 
 ![LM7 backend and hardware map](docs/assets/backend-hardware-map.svg)
 
-The top lane stays in the current Python process; the bottom lane writes a
-versioned artifact for later loading or deployment. See the full
-[backend table](#backends) for selection priority, requirements, and caveats.
+The stack shows how a PyTorch model moves through LM7, the available compiler
+backends, their lowering/runtime layer, and finally the target hardware.
+`lm7.compile()` and `lm7.export()` share this target map; see the full
+[backend table](#backends) for execution mode, priority, and artifact formats.
 
 ## Why
 
