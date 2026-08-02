@@ -54,11 +54,15 @@ from typing import Any
 import torch
 
 import lm7
-from lm7.exporting import COMPILED_PTE_NAME
+from lm7.exporting import COMPILED_PTE_NAME, COMPILED_TFLITE_NAME
 
 DEVICE_DIR = "/data/local/tmp/lm7"
 
 _ITER_MS = re.compile(r"^iter_ms\s+([0-9.]+)\s*$", re.MULTILINE)
+_LITERT_TIMING = re.compile(
+    r"Inference timings in us:\s*Init:\s*(?P<init>[\d.e+-]+),.*?Inference \(avg\):\s*"
+    r"(?P<average>[\d.e+-]+)"
+)
 _REPORTED = re.compile(
     r"^(output_numel|output_nbytes|output_dtype|output_outputs)\s+(\d+)\s*$", re.MULTILINE
 )
@@ -113,6 +117,7 @@ class DeviceResult:
     export_seconds: float | None = None
     push_seconds: float | None = None
     output_dtype: str | None = None
+    device_delegate: str | None = None
     on_device_ms: dict[str, float] = field(default_factory=dict)
     host_ms: dict[str, float] = field(default_factory=dict)
 
@@ -205,10 +210,50 @@ def run_on_device(
     return adb_shell(serial, command)
 
 
+def litert_signature(tflite: Path) -> tuple[str, str]:
+    """Read the input tensor's name and shape out of a `.tflite`.
+
+    LiteRT's `benchmark_model` addresses inputs by the name the converter chose,
+    so the harness has to read it back rather than assume one.
+    """
+    interpreter_module = importlib.import_module("ai_edge_litert.interpreter")
+    interpreter = interpreter_module.Interpreter(model_path=str(tflite))
+    interpreter.allocate_tensors()
+    details = interpreter.get_input_details()
+    if len(details) != 1:
+        raise RuntimeError(f"expected one input tensor, the .tflite declares {len(details)}")
+    shape = ",".join(str(dimension) for dimension in details[0]["shape"])
+    return str(details[0]["name"]), shape
+
+
+def run_litert_on_device(
+    serial: str | None, *, name: str, shape: str, use_gpu: bool
+) -> tuple[int, str]:
+    """Execute a `.tflite` with LiteRT's prebuilt Android benchmark binary.
+
+    Unlike the ExecuTorch path this needs no cross-compiled runner: LiteRT ships
+    `android_aarch64_benchmark_model` prebuilt. It takes real input through
+    --input_layer_value_files and writes the output through --output_filepath,
+    so the same host-side comparison applies.
+    """
+    flags = (
+        f"--graph={DEVICE_DIR}/model.tflite "
+        f"--input_layer={name} --input_layer_shape={shape} "
+        f"--input_layer_value_files={name}:{DEVICE_DIR}/input0.bin "
+        f"--output_filepath={DEVICE_DIR}/output.bin"
+    )
+    if use_gpu:
+        # Full precision, so a GPU difference is not confused with fp16 rounding.
+        flags += " --use_gpu=true --gpu_backend=cl --gpu_precision_loss_allowed=false"
+    return adb_shell(serial, f"cd {DEVICE_DIR} && ./benchmark_model {flags}")
+
+
 def evaluate(
     *,
     case: ModelCase,
+    backend: str,
     quantization: str,
+    use_gpu: bool,
     serial: str | None,
     runner: Path,
     workdir: Path,
@@ -231,7 +276,7 @@ def evaluate(
         model,
         args=(example,),
         target="cpu",
-        backend="executorch",
+        backend=backend,
         output=artifact_path,
         options=options or None,
     )
@@ -242,8 +287,9 @@ def evaluate(
     result.total_calls = requirements.get("total_calls")
     result.quantized_ops = requirements.get("quantized_ops")
 
-    pte = artifact_path / COMPILED_PTE_NAME
-    result.pte_bytes = pte.stat().st_size
+    payload_name = COMPILED_PTE_NAME if backend == "executorch" else COMPILED_TFLITE_NAME
+    payload = artifact_path / payload_name
+    result.pte_bytes = payload.stat().st_size
 
     # The host runtime running the same .pte. Separating this from eager splits
     # "the export lost accuracy" from "the architecture disagrees".
@@ -270,34 +316,51 @@ def evaluate(
     input_path.write_bytes(example.contiguous().numpy().tobytes())
 
     adb_shell(serial, f"mkdir -p {DEVICE_DIR}")
+    device_payload = "model.pte" if backend == "executorch" else "model.tflite"
+    device_runner = "lm7_runner" if backend == "executorch" else "benchmark_model"
     started = time.perf_counter()
-    adb(serial, "push", str(pte), f"{DEVICE_DIR}/model.pte")
+    adb(serial, "push", str(payload), f"{DEVICE_DIR}/{device_payload}")
     result.push_seconds = round(time.perf_counter() - started, 1)
     adb(serial, "push", str(input_path), f"{DEVICE_DIR}/input0.bin")
-    adb(serial, "push", str(runner), f"{DEVICE_DIR}/lm7_runner")
-    adb_shell(serial, f"chmod 755 {DEVICE_DIR}/lm7_runner")
+    adb(serial, "push", str(runner), f"{DEVICE_DIR}/{device_runner}")
+    adb_shell(serial, f"chmod 755 {DEVICE_DIR}/{device_runner}")
 
-    status, stream = run_on_device(serial, input_count=1, repeats=repeats, warmup=warmup)
-    if status != 0:
-        result.detail = f"lm7_runner exited {status}: {stream.strip()[-400:]}"
-        return result
-
-    reported = {key: int(value) for key, value in _REPORTED.findall(stream)}
-    if reported.get("output_numel") != eager.numel():
-        result.detail = (
-            f"device reported {reported.get('output_numel')} output elements, "
-            f"host expected {eager.numel()}"
-        )
-        return result
-
-    durations = [float(value) for value in _ITER_MS.findall(stream)]
-    if durations:
-        result.on_device_ms = {
-            "median": round(statistics.median(durations), 4),
-            "min": round(min(durations), 4),
-            "max": round(max(durations), 4),
-            "iterations": len(durations),
-        }
+    reported: dict[str, int] = {}
+    if backend == "executorch":
+        status, stream = run_on_device(serial, input_count=1, repeats=repeats, warmup=warmup)
+        if status != 0:
+            result.detail = f"lm7_runner exited {status}: {stream.strip()[-400:]}"
+            return result
+        reported = {key: int(value) for key, value in _REPORTED.findall(stream)}
+        if reported.get("output_numel") != eager.numel():
+            result.detail = (
+                f"device reported {reported.get('output_numel')} output elements, "
+                f"host expected {eager.numel()}"
+            )
+            return result
+        durations = [float(value) for value in _ITER_MS.findall(stream)]
+        if durations:
+            result.on_device_ms = {
+                "median": round(statistics.median(durations), 4),
+                "min": round(min(durations), 4),
+                "max": round(max(durations), 4),
+                "iterations": len(durations),
+            }
+    else:
+        name, shape = litert_signature(payload)
+        status, stream = run_litert_on_device(serial, name=name, shape=shape, use_gpu=use_gpu)
+        if status != 0:
+            result.detail = f"benchmark_model exited {status}: {stream.strip()[-400:]}"
+            return result
+        # benchmark_model reports an average over as many runs as fit its
+        # minimum duration, in microseconds, rather than per-iteration lines.
+        timing = _LITERT_TIMING.search(stream)
+        if timing:
+            result.on_device_ms = {
+                "median": round(float(timing.group("average")) / 1000.0, 4),
+                "init": round(float(timing.group("init")) / 1000.0, 4),
+            }
+        result.device_delegate = "gpu-opencl" if use_gpu else "cpu-xnnpack"
 
     local_output = workdir / "output.bin"
     pulled = adb(serial, "pull", f"{DEVICE_DIR}/output.bin", str(local_output), check=False)
@@ -305,15 +368,24 @@ def evaluate(
         result.detail = "could not pull the device output"
         return result
 
-    reported_dtype = _SCALAR_TYPES.get(reported.get("output_dtype", -1))
-    if reported_dtype is None:
-        result.detail = f"unhandled device output ScalarType {reported.get('output_dtype')}"
-        return result
+    if backend == "executorch":
+        # lm7_runner reports the ScalarType it wrote; reading the buffer at the
+        # wrong width silently yields the wrong element count.
+        reported_dtype = _SCALAR_TYPES.get(reported.get("output_dtype", -1))
+        if reported_dtype is None:
+            result.detail = f"unhandled device output ScalarType {reported.get('output_dtype')}"
+            return result
+        expected_bytes = reported.get("output_nbytes")
+    else:
+        # benchmark_model writes the output tensor raw with no header, and the
+        # LiteRT converter keeps the exported dtype.
+        reported_dtype = eager.dtype
+        expected_bytes = eager.numel() * eager.element_size()
     result.output_dtype = str(reported_dtype).removeprefix("torch.")
 
     raw = local_output.read_bytes()
-    if len(raw) != reported.get("output_nbytes"):
-        result.detail = f"pulled {len(raw)} bytes, device wrote {reported.get('output_nbytes')}"
+    if len(raw) != expected_bytes:
+        result.detail = f"pulled {len(raw)} bytes, expected {expected_bytes}"
         return result
 
     device = torch.frombuffer(bytearray(raw), dtype=reported_dtype).reshape(eager.shape)
@@ -360,7 +432,23 @@ def device_properties(serial: str | None) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--runner", required=True, type=Path, help="arm64 lm7_runner binary")
+    parser.add_argument(
+        "--runner",
+        required=True,
+        type=Path,
+        help="arm64 lm7_runner (executorch) or benchmark_model (litert) binary",
+    )
+    parser.add_argument(
+        "--backend",
+        default="executorch",
+        choices=["executorch", "litert"],
+        help="LM7 export backend to validate on the device",
+    )
+    parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="litert only: run through the GPU delegate on the Adreno instead of CPU",
+    )
     parser.add_argument(
         "--serial", default=None, help="adb serial; required when several are attached"
     )
@@ -401,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     label = args.model if args.model == "mlp" else f"{args.model} ({args.dtype})"
     print(f"model:  {label}")
+    print(f"backend: {args.backend}" + (" (gpu delegate)" if args.use_gpu else ""))
 
     results = []
     with tempfile.TemporaryDirectory() as raw:
@@ -408,7 +497,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n== {quantization} ==")
             result = evaluate(
                 case=case,
+                backend=args.backend,
                 quantization=quantization,
+                use_gpu=args.use_gpu,
                 serial=args.serial,
                 runner=args.runner,
                 workdir=Path(raw),
@@ -437,14 +528,25 @@ def main(argv: list[str] | None = None) -> int:
                     f"(host {result.next_token_host}, device {result.next_token_device})"
                 )
                 print(f"  top-5 overlap with host:       {result.top5_overlap}/5")
+            if result.device_delegate:
+                print(f"  device delegate:               {result.device_delegate}")
             if result.on_device_ms:
+                # The two runners report differently: lm7_runner emits a line per
+                # iteration, benchmark_model an average over its own run count.
+                extra = ""
+                if "min" in result.on_device_ms:
+                    extra = (
+                        f" ({result.on_device_ms['min']}-{result.on_device_ms['max']}, "
+                        f"n={result.on_device_ms['iterations']})"
+                    )
+                elif "init" in result.on_device_ms:
+                    extra = f" (init {result.on_device_ms['init']} ms)"
                 print(
-                    f"  on-device forward:             {result.on_device_ms['median']} ms median "
-                    f"({result.on_device_ms['min']}-{result.on_device_ms['max']}, "
-                    f"n={result.on_device_ms['iterations']})"
+                    f"  on-device forward:             "
+                    f"{result.on_device_ms['median']} ms median{extra}"
                 )
             if result.host_ms:
-                print(f"  host forward, same .pte:       {result.host_ms['median']} ms median")
+                print(f"  host forward, same payload:    {result.host_ms['median']} ms median")
             if result.detail:
                 print(f"  {result.detail}")
 

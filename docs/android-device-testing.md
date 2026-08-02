@@ -13,6 +13,11 @@ The device never sees LM7, PyTorch, or Python. It sees a `.pte`, its inputs as
 raw tensor bytes, and `lm7_runner` — the small C++ binary in
 `tools/android_runner`. That is the same deployment surface a phone app has.
 
+`--backend litert` validates the other edge export path the same way. That one
+needs no cross-compile at all: LiteRT ships a prebuilt Android binary, and
+`--use-gpu` reaches the Adreno GPU through its OpenCL delegate. See
+[LiteRT on the device](#litert-on-the-device).
+
 ## Measured on this project
 
 Snapdragon 8 Elite (SM8750), Android 16, arm64-v8a, 8 Oryon cores, reached
@@ -71,6 +76,42 @@ first measurement of what that ratio costs in wall-clock on a phone.
 > five-token prompt with no KV cache and no decode loop, so it is not a
 > token-generation rate. The MLP figures at ~0.002 ms are far too small to be
 > meaningful as timings and are reported only to show the path works.
+
+## LiteRT on the device
+
+[litert.md](litert.md) records its validated scope as "LiteRT Torch 0.9.2,
+LiteRT 2.1.6, and PyTorch 2.12.1 on Linux x86-64" — the same host-only gap the
+ExecuTorch backend had. The same 3-layer MLP, exported with `backend="litert"`
+and run on the Snapdragon 8 Elite:
+
+| | LiteRT CPU (XNNPACK) | LiteRT GPU (Adreno, OpenCL) |
+| --- | --- | --- |
+| Max abs diff vs host eager | 1.2e-07 | 8.9e-08 |
+| Max abs diff vs host LiteRT runtime | 3.7e-08 | 9.9e-08 |
+| On-device forward | 0.0004 ms | 0.2649 ms |
+| Init | 1.45 ms | 90.5 ms |
+| `.tflite` size | 4,432 B | 4,432 B |
+
+Both are correct. The GPU delegate takes the whole graph — `benchmark_model`
+reports "Replacing 3 out of 3 node(s) with delegate" — and is nevertheless
+**~660x slower per inference than the CPU, with 62x the initialisation cost.**
+
+That is not a defect. A 3-layer MLP is far too small to amortise kernel dispatch
+and shader compilation, and it is the honest shape of the result: a mobile GPU
+delegate is a throughput device, and on a model this size the CPU wins outright.
+Whether it inverts on a real model is unmeasured — the LiteRT backend rejects
+dynamic shapes and does not claim Hugging Face causal LMs, so a transformer
+could not be put through this path today.
+
+Unlike the ExecuTorch path this needs **no cross-compile**. LiteRT publishes the
+runner prebuilt:
+
+```bash
+curl -o benchmark_model_arm64 https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/android_aarch64_benchmark_model
+```
+
+It also needs the separate LiteRT environment from [litert.md](litert.md),
+because LiteRT Torch and ExecuTorch pin incompatible PyTorch ranges.
 
 ## INT8 does not work for language models
 
@@ -195,6 +236,16 @@ python benchmarks/android_device.py --runner ./lm7_runner_arm64 --serial <serial
 python benchmarks/android_device.py --runner ./lm7_runner_arm64 --serial <serial> --model HuggingFaceTB/SmolLM2-135M-Instruct --dtype float32 --output artifacts/benchmarks/android-sm8750.json
 ```
 
+LiteRT instead, from the LiteRT environment, on CPU and then the Adreno GPU:
+
+```bash
+python benchmarks/android_device.py --backend litert --runner ./benchmark_model_arm64 --serial <serial>
+```
+
+```bash
+python benchmarks/android_device.py --backend litert --use-gpu --runner ./benchmark_model_arm64 --serial <serial>
+```
+
 The exit status is non-zero if any configuration exceeds its tolerance, so this
 works as a gate. Tolerances are `1e-4` for float32 — matching the host test —
 and `2e-2` for INT8.
@@ -234,7 +285,11 @@ both limits and improves two things:
   lowering on ARM64 Linux — on every commit.
 - **One device class.** Snapdragon 8 Elite only. Other SoCs, and iOS, are
   unmeasured.
-- **CPU only.** XNNPACK is a CPU delegate, so this exercises the Oryon cores.
+- **The Adreno GPU is reached only through LiteRT.** LM7's own `iree_vulkan`
+  backend is unvalidated on this device; that needs an NDK cross-compile of the
+  IREE runtime, which has no prebuilt Android binary.
+- **ExecuTorch is CPU only.** XNNPACK is a CPU delegate, so that path exercises
+  the Oryon cores.
   The Hexagon NPU is untouched — see [qualcomm-hexagon.md](qualcomm-hexagon.md).
   A cloud Snapdragon is, however, exactly the hardware that plan was blocked on.
 - **INT8 is MLP-only**, for the reason above.
