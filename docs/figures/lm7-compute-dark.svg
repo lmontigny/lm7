@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1028" height="825" viewBox="0 0 1028 825" role="img" aria-label="LM7 architecture: model, orchestrator, backends, lowering and runtime, hardware">
+<defs><marker id="arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 1 L 6 4 L 0 7 z" fill="#6f7f8f"/></marker></defs>
+<rect x="0" y="0" width="1028" height="825" rx="0" fill="#0d1117"/>
+<text x="22" y="16" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#98a5b3" text-anchor="start" letter-spacing="0.1em">01  MODEL</text>
+<rect x="22" y="22" width="984" height="60" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="42" y="48" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#e6edf3" text-anchor="start">PyTorch / Hugging Face model</text>
+<text x="42" y="66" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="400" fill="#98a5b3" text-anchor="start">nn.Module, or an lm7 hf:// model id, with representative inputs</text>
+<text x="986" y="48" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="800" fill="#6ea8fe" text-anchor="end">LM7</text>
+<text x="986" y="66" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#98a5b3" text-anchor="end">PyTorch-first compiler orchestrator</text>
+<path d="M 514.0 82 L 514.0 108" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<text x="22" y="106" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#98a5b3" text-anchor="start" letter-spacing="0.1em">02  ORCHESTRATOR</text>
+<rect x="22" y="112" width="984" height="88" rx="8" fill="#132033"/>
+<text x="42" y="142" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="20" font-weight="800" fill="#e6edf3" text-anchor="start">lm7</text>
+<text x="96" y="142" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="500" fill="#e6edf3" text-anchor="start">one model, one target string</text>
+<text x="42" y="184" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8.5" font-weight="500" fill="#e6edf3" text-anchor="start">target detection  ·  backend selection  ·  shape and compile cache  ·  safe eager fallback  ·  artifact manifest</text>
+<rect x="720" y="122" width="134" height="40" rx="6" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="787" y="139" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#e6edf3" text-anchor="middle">lm7.compile()</text>
+<text x="787" y="153" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8.5" font-weight="400" fill="#98a5b3" text-anchor="middle">run it here</text>
+<rect x="865" y="122" width="134" height="40" rx="6" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="932" y="139" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#e6edf3" text-anchor="middle">lm7.export()</text>
+<text x="932" y="153" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8.5" font-weight="400" fill="#98a5b3" text-anchor="middle">ship an artifact</text>
+<rect x="14" y="226" width="1000" height="332" rx="9" fill="#161b22"/>
+<rect x="14" y="572" width="1000" height="113" rx="9" fill="#161b22"/>
+<rect x="14" y="699" width="1000" height="74" rx="9" fill="#161b22"/>
+<text x="22" y="226" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#98a5b3" text-anchor="start" letter-spacing="0.1em">03  BACKENDS</text>
+<text x="22" y="572" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#98a5b3" text-anchor="start" letter-spacing="0.1em">04  LOWERING</text>
+<text x="22" y="699" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#98a5b3" text-anchor="start" letter-spacing="0.1em">05  HARDWARE</text>
+<path d="M 116.0 200 L 116.0 222" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="22" y="240" width="188" height="127" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="32" y="256" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">CPU</text>
+<text x="32" y="267" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">x86-64</text>
+<text x="32" y="279" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#0068b5" text-anchor="start">target=cpu</text>
+<text x="32" y="294" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="158" y="286" width="27" height="12" rx="3" fill="#123122"/><text x="171.5" y="295" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="32" y="309" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="158" y="301" width="27" height="12" rx="3" fill="#33270d"/><text x="171.5" y="310" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="32" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">openvino</text>
+<rect x="158" y="316" width="27" height="12" rx="3" fill="#33270d"/><text x="171.5" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="32" y="339" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">onnxruntime</text>
+<rect x="158" y="331" width="27" height="12" rx="3" fill="#33270d"/><text x="171.5" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="32" y="354" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">tvm</text>
+<rect x="158" y="346" width="27" height="12" rx="3" fill="#123122"/><text x="171.5" y="355" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<rect x="22" y="377" width="188" height="82" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="32" y="393" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">GPU</text>
+<text x="32" y="404" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">Arc, XPU</text>
+<text x="32" y="416" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#0068b5" text-anchor="start">target=intel</text>
+<text x="32" y="431" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="158" y="423" width="27" height="12" rx="3" fill="#123122"/><text x="171.5" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="32" y="446" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">iree_vulkan</text>
+<rect x="158" y="438" width="44" height="12" rx="3" fill="#2c1636"/><text x="180.0" y="447" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#dda9f0" text-anchor="middle" letter-spacing="0.03em">EXPORT</text>
+<rect x="22" y="469" width="188" height="67" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="32" y="485" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">NPU</text>
+<text x="32" y="496" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">Core Ultra AI Boost</text>
+<text x="32" y="508" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#0068b5" text-anchor="start">target=intel:npu</text>
+<text x="32" y="523" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">openvino</text>
+<rect x="158" y="515" width="27" height="12" rx="3" fill="#33270d"/><text x="171.5" y="524" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<path d="M 116.0 550 L 116.0 578" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="22" y="584" width="188" height="101" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="32" y="603" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">C++ / OpenMP</text>
+<text x="32" y="618" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">oneDNN</text>
+<text x="32" y="633" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">SYCL (XPU)</text>
+<text x="32" y="648" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">OpenVINO IR</text>
+<text x="32" y="663" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Vulkan / SPIR-V</text>
+<path d="M 116.0 685 L 116.0 705" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="22" y="711" width="188" height="62" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<rect x="22" y="711" width="4" height="62" rx="2" fill="#0068b5"/>
+<text x="36" y="733" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#e6edf3" text-anchor="start">Intel</text>
+<text x="36" y="749" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9" font-weight="400" fill="#98a5b3" text-anchor="start">CPU, GPU, NPU</text>
+<path d="M 315.0 200 L 315.0 222" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="221" y="240" width="188" height="127" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="231" y="256" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">CPU</text>
+<text x="231" y="267" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">x86-64, EPYC / Ryzen</text>
+<text x="231" y="279" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#c8102e" text-anchor="start">target=cpu</text>
+<text x="231" y="294" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="357" y="286" width="27" height="12" rx="3" fill="#123122"/><text x="370.5" y="295" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="231" y="309" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="357" y="301" width="27" height="12" rx="3" fill="#33270d"/><text x="370.5" y="310" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="231" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">zentorch</text>
+<rect x="357" y="316" width="27" height="12" rx="3" fill="#123122"/><text x="370.5" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="231" y="339" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">onnxruntime</text>
+<rect x="357" y="331" width="27" height="12" rx="3" fill="#33270d"/><text x="370.5" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="231" y="354" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">tvm</text>
+<rect x="357" y="346" width="27" height="12" rx="3" fill="#123122"/><text x="370.5" y="355" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<rect x="221" y="377" width="188" height="82" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="231" y="393" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">GPU</text>
+<text x="231" y="404" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">ROCm</text>
+<text x="231" y="416" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#c8102e" text-anchor="start">target=amd</text>
+<text x="231" y="431" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="357" y="423" width="27" height="12" rx="3" fill="#123122"/><text x="370.5" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="231" y="446" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">iree_vulkan</text>
+<rect x="357" y="438" width="44" height="12" rx="3" fill="#2c1636"/><text x="379.0" y="447" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#dda9f0" text-anchor="middle" letter-spacing="0.03em">EXPORT</text>
+<path d="M 315.0 550 L 315.0 578" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="221" y="584" width="188" height="101" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="231" y="603" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">C++ / OpenMP</text>
+<text x="231" y="618" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">ZenDNN</text>
+<text x="231" y="633" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Triton / ROCm, HIP</text>
+<text x="231" y="648" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Vulkan / SPIR-V</text>
+<path d="M 315.0 685 L 315.0 705" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="221" y="711" width="188" height="62" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<rect x="221" y="711" width="4" height="62" rx="2" fill="#c8102e"/>
+<text x="235" y="733" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#e6edf3" text-anchor="start">AMD</text>
+<text x="235" y="749" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9" font-weight="400" fill="#98a5b3" text-anchor="start">CPU, GPU</text>
+<path d="M 514.0 200 L 514.0 222" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="420" y="240" width="188" height="127" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="430" y="256" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">GPU</text>
+<text x="430" y="267" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">Ampere and newer</text>
+<text x="430" y="279" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#76b900" text-anchor="start">target=nvidia</text>
+<text x="430" y="294" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="556" y="286" width="27" height="12" rx="3" fill="#123122"/><text x="569.5" y="295" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="430" y="309" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="556" y="301" width="27" height="12" rx="3" fill="#33270d"/><text x="569.5" y="310" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="430" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">tensorrt</text>
+<rect x="556" y="316" width="27" height="12" rx="3" fill="#33270d"/><text x="569.5" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="430" y="339" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">onnxruntime</text>
+<rect x="556" y="331" width="27" height="12" rx="3" fill="#33270d"/><text x="569.5" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="430" y="354" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">iree_vulkan</text>
+<rect x="556" y="346" width="44" height="12" rx="3" fill="#2c1636"/><text x="578.0" y="355" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#dda9f0" text-anchor="middle" letter-spacing="0.03em">EXPORT</text>
+<path d="M 514.0 550 L 514.0 578" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="420" y="584" width="188" height="101" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="430" y="603" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Triton / CUDA</text>
+<text x="430" y="618" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">cuBLAS, cuDNN</text>
+<text x="430" y="633" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">TensorRT engine</text>
+<text x="430" y="648" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Vulkan / SPIR-V</text>
+<path d="M 514.0 685 L 514.0 705" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="420" y="711" width="188" height="62" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<rect x="420" y="711" width="4" height="62" rx="2" fill="#76b900"/>
+<text x="434" y="733" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#e6edf3" text-anchor="start">NVIDIA</text>
+<text x="434" y="749" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9" font-weight="400" fill="#98a5b3" text-anchor="start">GPU</text>
+<path d="M 713.0 200 L 713.0 222" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="619" y="240" width="188" height="112" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="629" y="256" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">CPU</text>
+<text x="629" y="267" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">Apple silicon, ARM64</text>
+<text x="629" y="279" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#6e6e73" text-anchor="start">target=cpu</text>
+<text x="629" y="294" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="755" y="286" width="27" height="12" rx="3" fill="#123122"/><text x="768.5" y="295" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="629" y="309" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="755" y="301" width="27" height="12" rx="3" fill="#33270d"/><text x="768.5" y="310" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="629" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">onnxruntime</text>
+<rect x="755" y="316" width="27" height="12" rx="3" fill="#33270d"/><text x="768.5" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="629" y="339" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">tvm</text>
+<rect x="755" y="331" width="27" height="12" rx="3" fill="#123122"/><text x="768.5" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<rect x="619" y="362" width="188" height="82" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="629" y="378" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">GPU</text>
+<text x="629" y="389" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">Metal</text>
+<text x="629" y="401" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#6e6e73" text-anchor="start">target=apple</text>
+<text x="629" y="416" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="755" y="408" width="27" height="12" rx="3" fill="#123122"/><text x="768.5" y="417" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="629" y="431" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="755" y="423" width="27" height="12" rx="3" fill="#33270d"/><text x="768.5" y="432" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<path d="M 713.0 550 L 713.0 578" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="619" y="584" width="188" height="101" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="629" y="603" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">C++ / OpenMP</text>
+<text x="629" y="618" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">Metal / MPS</text>
+<path d="M 713.0 685 L 713.0 705" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="619" y="711" width="188" height="62" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<rect x="619" y="711" width="4" height="62" rx="2" fill="#6e6e73"/>
+<text x="633" y="733" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#e6edf3" text-anchor="start">Apple</text>
+<text x="633" y="749" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9" font-weight="400" fill="#98a5b3" text-anchor="start">CPU, GPU</text>
+<path d="M 912.0 200 L 912.0 222" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="818" y="240" width="188" height="142" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="828" y="256" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#e6edf3" text-anchor="start">CPU</text>
+<text x="828" y="267" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="7.5" font-weight="400" fill="#98a5b3" text-anchor="start">ARM64 servers, SBCs</text>
+<text x="828" y="279" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="8.5" font-weight="700" fill="#0091bd" text-anchor="start">target=cpu</text>
+<text x="828" y="294" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">inductor</text>
+<rect x="954" y="286" width="27" height="12" rx="3" fill="#123122"/><text x="967.5" y="295" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="828" y="309" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">aot_inductor</text>
+<rect x="954" y="301" width="27" height="12" rx="3" fill="#33270d"/><text x="967.5" y="310" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="828" y="324" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">onnxruntime</text>
+<rect x="954" y="316" width="27" height="12" rx="3" fill="#33270d"/><text x="967.5" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#f0c674" text-anchor="middle" letter-spacing="0.03em">AOT</text>
+<text x="828" y="339" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">tvm</text>
+<rect x="954" y="331" width="27" height="12" rx="3" fill="#123122"/><text x="967.5" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#7ee2a8" text-anchor="middle" letter-spacing="0.03em">JIT</text>
+<text x="828" y="354" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">executorch</text>
+<rect x="954" y="346" width="44" height="12" rx="3" fill="#2c1636"/><text x="976.0" y="355" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#dda9f0" text-anchor="middle" letter-spacing="0.03em">EXPORT</text>
+<text x="828" y="369" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">litert</text>
+<rect x="954" y="361" width="44" height="12" rx="3" fill="#2c1636"/><text x="976.0" y="370" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="7.5" font-weight="700" fill="#dda9f0" text-anchor="middle" letter-spacing="0.03em">EXPORT</text>
+<path d="M 912.0 550 L 912.0 578" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="818" y="584" width="188" height="101" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<text x="828" y="603" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">C++ / OpenMP</text>
+<text x="828" y="618" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">XNNPACK (NEON, KleidiAI)</text>
+<text x="828" y="633" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#e6edf3" text-anchor="start">ExecuTorch runtime</text>
+<path d="M 912.0 685 L 912.0 705" stroke="#6f7f8f" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+<rect x="818" y="711" width="188" height="62" rx="7" fill="#1b222b" stroke="#39414b" stroke-width="1"/>
+<rect x="818" y="711" width="4" height="62" rx="2" fill="#0091bd"/>
+<text x="832" y="733" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#e6edf3" text-anchor="start">Arm</text>
+<text x="832" y="749" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="9" font-weight="400" fill="#98a5b3" text-anchor="start">CPU</text>
+<text x="832" y="763" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8" font-weight="600" fill="#0091bd" text-anchor="start">Same cpu target as x86-64</text>
+<text x="514.0" y="803" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8.5" font-weight="400" fill="#98a5b3" text-anchor="middle">JIT compiles in-process  ·  AOT also writes a reloadable .lm7  ·  EXPORT cannot run in-process</text>
+<text x="514.0" y="815" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="8.5" font-weight="400" fill="#98a5b3" text-anchor="middle">eager is the fallback on every target and is omitted above</text>
+</svg>
