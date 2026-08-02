@@ -9,6 +9,11 @@ from .exporting import (
     export,
     load_artifact,
 )
+from .hexagon import (
+    HexagonDiagnosticCheck,
+    HexagonToolchainDiagnostics,
+    diagnose_hexagon_toolchain,
+)
 from .inspection import ArtifactInspection, PayloadInspection, inspect_artifact
 from .targets import DeviceInfo, TargetSpec, parse_target
 
@@ -21,6 +26,8 @@ __all__ = [
     "DeviceInfo",
     "DynamicDimension",
     "ExportArtifact",
+    "HexagonDiagnosticCheck",
+    "HexagonToolchainDiagnostics",
     "PayloadInspection",
     "ShapeProfile",
     "TargetSpec",
@@ -30,6 +37,7 @@ __all__ = [
     "compile",
     "create_bundle",
     "detect_targets",
+    "diagnose_hexagon_toolchain",
     "explain",
     "export",
     "inspect_artifact",
