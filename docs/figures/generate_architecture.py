@@ -122,6 +122,7 @@ class Column:
     hardware: list[Hardware]
     runtime: list[str]
     footnote: str = ""
+    summary: str = ""
     extra: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -276,6 +277,7 @@ COLUMNS = [
         ],
         runtime=["ExecuTorch runtime", "QNN SDK, Hexagon HTP", "XNNPACK, LiteRT"],
         footnote="Export only; runs off-host",
+        summary="Hexagon HTP, ARM64 CPU",
     ),
 ]
 
@@ -401,11 +403,11 @@ LOGOS: dict[str, tuple[str, str]] = {
 
 # --- geometry --------------------------------------------------------------
 
-COL_W = 232
-COL_GAP = 14
-PAD = 24
-RAIL_W = 78
-TOP = 26
+COL_W = 164
+COL_GAP = 11
+PAD = 22
+RAIL_W = 66
+TOP = 24
 
 FONT = (
     "ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, "
@@ -447,12 +449,15 @@ def _circle_num(cx: float, cy: float, n: int, theme: Theme) -> str:
     )
 
 
+LABELS = {"JIT": "JIT", "AOT": "AOT", "EXPORT": "EXP"}
+
+
 def _badge(x, y, kind, theme):
     fg, bg = (BADGE_DARK if theme.name == "dark" else BADGES)[kind]
-    w = 52 if kind == "EXPORT" else 32
+    w = 36 if kind == "EXPORT" else 30
     out = [
         _rect(x, y - 10, w, 14, bg, r=3),
-        _t(x + w / 2, y + 1, kind, 9, fg, "700", "middle", MONO, "0.03em"),
+        _t(x + w / 2, y + 1, LABELS[kind], 8, fg, "700", "middle", MONO, "0.02em"),
     ]
     return "".join(out), w
 
@@ -464,14 +469,8 @@ def _arrow(x1, y1, x2, y2, colour, marker="arrow"):
     )
 
 
-GROUPS = {
-    "compute": ("Intel", "AMD", "NVIDIA", "Apple"),
-    "edge": ("Arm", "Google", "Tenstorrent", "Qualcomm"),
-}
-
-
-def render(theme: Theme, vendors: tuple[str, ...]) -> str:
-    columns = [c for c in COLUMNS if c.vendor in vendors]
+def render(theme: Theme) -> str:
+    columns = COLUMNS
     n = len(columns)
     grid_w = n * COL_W + (n - 1) * COL_GAP
     width = RAIL_W + grid_w + PAD * 2
@@ -479,16 +478,16 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
 
     # measure the backend layer: tallest column decides the band height
     def hw_block_h(hw: Hardware) -> int:
-        return 54 + len(hw.backends) * 19 + 12
+        return 50 + len(hw.backends) * 17 + 10
 
-    header_h = 30
+    header_h = 27
     backend_h = (
         max(sum(hw_block_h(h) for h in c.hardware) + 10 * (len(c.hardware) - 1) for c in columns)
         + 22
         + header_h
     )
-    runtime_h = max(len(c.runtime) for c in columns) * 18 + 32
-    hw_h = 86
+    runtime_h = max(len(c.runtime) for c in columns) * 16 + 30
+    hw_h = 74
 
     y_model = TOP
     model_h = 68
@@ -514,7 +513,7 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
 
     def rail(y, num, label):
         s.append(_t(PAD, y + 18, num, 23, theme.rail_num, "800", family=MONO))
-        s.append(_t(PAD, y + 34, label, 7.5, theme.muted, "700", spacing="0.06em"))
+        s.append(_t(PAD, y + 34, label, 6.8, theme.muted, "700", spacing="0.03em"))
 
     # 01 model
     rail(y_model, "01", "MODEL")
@@ -607,25 +606,25 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
         # 03 backends: name the column, or the cards below read as anonymous
         # "CPU / GPU / NPU" boxes and only layer 05 says whose they are.
         if col.logo:
-            s.append(_logo(col.logo, cx + 2, y_backend - 1, 18, theme))
-            s.append(_t(cx + 26, y_backend + 13, col.vendor, 14, col.tint, "800"))
+            s.append(_logo(col.logo, cx + 1, y_backend, 15, theme))
+            s.append(_t(cx + 21, y_backend + 12, col.vendor, 12.5, col.tint, "800"))
         else:
-            s.append(_t(cx + 2, y_backend + 13, col.vendor, 14, col.tint, "800"))
-        s.append(_rect(cx, y_backend + 20, COL_W, 2, col.tint, r=0))
+            s.append(_t(cx + 1, y_backend + 12, col.vendor, 12.5, col.tint, "800"))
+        s.append(_rect(cx, y_backend + 18, COL_W, 2, col.tint, r=0))
 
         y = y_backend + header_h
         for hw in col.hardware:
             h = hw_block_h(hw)
             s.append(_rect(cx, y, COL_W, h, theme.card, theme.card_line))
-            s.append(_t(cx + 14, y + 21, hw.label, 13.5, theme.ink, "700"))
-            s.append(_t(cx + 14, y + 34, hw.detail, 9.5, theme.muted))
-            s.append(_t(cx + 14, y + 49, f"target={hw.target}", 11, col.tint, "700", family=MONO))
-            by = y + 70
+            s.append(_t(cx + 12, y + 20, hw.label, 12.5, theme.ink, "700"))
+            s.append(_t(cx + 12, y + 32, hw.detail, 8.5, theme.muted))
+            s.append(_t(cx + 12, y + 46, f"target={hw.target}", 9.5, col.tint, "700", family=MONO))
+            by = y + 65
             for name, kind in hw.backends:
-                s.append(_t(cx + 14, by, name, 11.5, theme.ink, family=MONO))
-                badge, _ = _badge(cx + COL_W - 62, by, kind, theme)
+                s.append(_t(cx + 12, by, name, 10.5, theme.ink, family=MONO))
+                badge, _ = _badge(cx + COL_W - 44, by, kind, theme)
                 s.append(badge)
-                by += 19
+                by += 17
             y += h + 10
         s.append(
             _arrow(
@@ -637,8 +636,8 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
         s.append(_rect(cx, y_runtime, COL_W, runtime_h, theme.card, theme.card_line))
         ry = y_runtime + 24
         for line in col.runtime:
-            s.append(_t(cx + 14, ry, line, 11.5, theme.ink, family=MONO))
-            ry += 18
+            s.append(_t(cx + 12, ry, line, 10.5, theme.ink, family=MONO))
+            ry += 16
         s.append(
             _arrow(cx + COL_W / 2, y_runtime + runtime_h, cx + COL_W / 2, y_hw - 6, theme.rail)
         )
@@ -646,16 +645,16 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
         # 05 hardware
         s.append(_rect(cx, y_hw, COL_W, hw_h, theme.card, theme.card_line))
         s.append(_rect(cx, y_hw, 4, hw_h, col.tint, r=2))
-        s.append(_circle_num(cx + 24, y_hw + 24, i + 1, theme))
+        s.append(_circle_num(cx + 19, y_hw + 21, i + 1, theme))
         if col.logo:
-            s.append(_logo(col.logo, cx + 44, y_hw + 11, 28, theme))
-            s.append(_t(cx + 80, y_hw + 32, col.vendor, 16, theme.ink, "700"))
+            s.append(_logo(col.logo, cx + 35, y_hw + 9, 24, theme))
+            s.append(_t(cx + 64, y_hw + 27, col.vendor, 13.5, theme.ink, "700"))
         else:
-            s.append(_t(cx + 44, y_hw + 32, col.vendor, 16, theme.ink, "700"))
-        parts = ", ".join(h.label for h in col.hardware)
-        s.append(_t(cx + 18, y_hw + 57, parts, 11, theme.muted))
+            s.append(_t(cx + 35, y_hw + 27, col.vendor, 13.5, theme.ink, "700"))
+        parts = col.summary or ", ".join(h.label for h in col.hardware)
+        s.append(_t(cx + 14, y_hw + 48, parts, 9.5, theme.muted))
         if col.footnote:
-            s.append(_t(cx + 18, y_hw + 74, col.footnote, 10, col.tint, "700"))
+            s.append(_t(cx + 14, y_hw + 63, col.footnote, 8.5, col.tint, "700"))
 
     s.append(
         _t(
@@ -685,11 +684,9 @@ def render(theme: Theme, vendors: tuple[str, ...]) -> str:
 
 def main() -> None:
     here = Path(__file__).parent
-    for group, vendors in GROUPS.items():
-        for theme in (LIGHT, DARK):
-            path = here / f"lm7-{group}-{theme.name}.svg"
-            path.write_text(render(theme, vendors), encoding="utf-8")
-            print(f"wrote {path.name} ({path.stat().st_size:,} bytes)")
+    path = here / "lm7-architecture.svg"
+    path.write_text(render(LIGHT), encoding="utf-8")
+    print(f"wrote {path.name} ({path.stat().st_size:,} bytes)")
 
 
 if __name__ == "__main__":
