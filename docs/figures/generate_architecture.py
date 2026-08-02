@@ -41,6 +41,8 @@ class Theme:
     line_runtime: str
     band_hw: str
     line_hw: str
+    chip_bg: str
+    chip_ink: str
 
 
 LIGHT = Theme(
@@ -62,6 +64,8 @@ LIGHT = Theme(
     line_runtime="#ddd5f3",
     band_hw="#eef8f1",
     line_hw="#cfe8d8",
+    chip_bg="#1c2b45",
+    chip_ink="#ffffff",
 )
 
 DARK = Theme(
@@ -83,6 +87,8 @@ DARK = Theme(
     line_runtime="#332c4d",
     band_hw="#101f18",
     line_hw="#23402f",
+    chip_bg="#cbd7e3",
+    chip_ink="#0d1117",
 )
 
 # Badge colours are shared: they encode execution mode, not vendor.
@@ -469,9 +475,11 @@ def render(theme: Theme) -> str:
     def hw_block_h(hw: Hardware) -> int:
         return 44 + len(hw.backends) * 15 + 8
 
+    header_h = 22
     backend_h = (
         max(sum(hw_block_h(h) for h in c.hardware) + 10 * (len(c.hardware) - 1) for c in columns)
         + 22
+        + header_h
     )
     runtime_h = max(len(c.runtime) for c in columns) * 15 + 26
     hw_h = 70
@@ -590,8 +598,16 @@ def render(theme: Theme) -> str:
             _arrow(cx + COL_W / 2, y_orch + orch_h, cx + COL_W / 2, y_backend - 18, theme.rail)
         )
 
-        # 03 backends, one card per piece of silicon
-        y = y_backend
+        # 03 backends: name the column, or the cards below read as anonymous
+        # "CPU / GPU / NPU" boxes and only layer 05 says whose they are.
+        if col.logo:
+            s.append(_logo(col.logo, cx + 1, y_backend - 2, 13, theme))
+            s.append(_t(cx + 18, y_backend + 9, col.vendor, 11, col.tint, "800"))
+        else:
+            s.append(_t(cx + 1, y_backend + 9, col.vendor, 11, col.tint, "800"))
+        s.append(_rect(cx, y_backend + 14, COL_W, 1.5, col.tint, r=0))
+
+        y = y_backend + header_h
         for hw in col.hardware:
             h = hw_block_h(hw)
             s.append(_rect(cx, y, COL_W, h, theme.card, theme.card_line))
