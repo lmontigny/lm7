@@ -45,6 +45,9 @@ This index covers everything else.
 
 ## Features
 
+- [Artifact inspection](artifact-inspection.md) -- verify payload integrity,
+  portability, delegate coverage, and deployment requirements without loading
+  an optional runtime.
 - [Hugging Face model compatibility](model-compatibility.md) -- config-only
   preflight for model type, workflows, target/backend selection, and quantization.
 - [TorchInductor options](inductor-options.md) — compile modes, CUDA Graphs,

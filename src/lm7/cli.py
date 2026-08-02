@@ -27,6 +27,7 @@ from .huggingface import (
     generate_hf_model,
     run_hf_model,
 )
+from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
 from .targets import DeviceInfo, TargetSpec
 
@@ -197,6 +198,34 @@ def _print_bundle(data: dict[str, Any]) -> None:
     print(f"Entries ({len(data['entries'])}):")
     for entry in data["entries"]:
         print(f"  {entry['key']}: {entry['target']['target']} / {entry['backend']}")
+
+
+def _print_artifact_inspection(result: ArtifactInspection) -> None:
+    requirements = result.runtime_requirements
+    print(f"Backend:          {result.backend}")
+    print(f"Target:           {result.target}")
+    print(f"Payload:          {result.payload or 'none'}")
+    print(f"Device-bound:     {'yes' if result.device_bound else 'no'}")
+    if precision := requirements.get("precision"):
+        print(f"Precision:        {precision}")
+    if result.delegated_calls is not None and result.total_calls is not None:
+        print(f"Delegation:       {result.delegated_calls} / {result.total_calls} calls")
+    if sdk := requirements.get("qnn_sdk"):
+        print(f"QNN SDK:          {sdk}")
+    if soc := requirements.get("soc_model"):
+        print(f"QNN SoC:          {soc}")
+    if htp := requirements.get("htp_arch"):
+        print(f"HTP architecture: {htp}")
+    libraries = requirements.get("runtime_libraries")
+    if isinstance(libraries, list):
+        print(f"Runtime libraries: {', '.join(str(item) for item in libraries)}")
+    print(f"Host executable:  {'yes' if result.host_executable else 'no'}")
+    print(f"Deployment:       {result.deployment}")
+    print(f"Checksums:        {result.checksum_status}")
+    for warning in result.warnings:
+        print(f"Warning:          {warning}")
+    for error in result.errors:
+        print(f"Error:            {error}")
 
 
 def _print_model_run(result: HuggingFaceRunResult) -> None:
@@ -482,6 +511,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     bundle_inspect_parser.add_argument("bundle", help="bundle directory")
     _add_json_argument(bundle_inspect_parser)
+    artifact_parser = subparsers.add_parser("artifact", help="inspect LM7 artifacts")
+    artifact_subparsers = artifact_parser.add_subparsers(dest="artifact_command", required=True)
+    artifact_inspect_parser = artifact_subparsers.add_parser(
+        "inspect", help="show artifact integrity and deployment requirements"
+    )
+    artifact_inspect_parser.add_argument("artifact", help="artifact directory")
+    _add_json_argument(artifact_inspect_parser)
     return parser
 
 
@@ -561,6 +597,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "bundle" and args.bundle_command == "inspect":
             data = _bundle_data(args.bundle)
             _emit_json(data) if args.json else _print_bundle(data)
+        elif args.command == "artifact" and args.artifact_command == "inspect":
+            inspection = inspect_artifact(args.artifact)
+            (
+                _emit_json(inspection.to_dict())
+                if args.json
+                else _print_artifact_inspection(inspection)
+            )
+            if not inspection.valid:
+                return 1
     except LM7Error as exc:
         if args.json:
             _emit_json({"error": {"type": type(exc).__name__, "message": str(exc)}})

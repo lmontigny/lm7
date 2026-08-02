@@ -103,6 +103,17 @@ ExecuTorch backend, QNN System/HTP libraries, v79 stub and skeleton, and HTP
 prepare library. Use ExecuTorch's Qualcomm build/deployment scripts to package
 them; do not mix a `.pte` built with one QNN SDK version with another runtime.
 
+Inspect the deployment contract and verify every payload without installing or
+initializing QNN:
+
+```bash
+lm7 artifact inspect model-sm8750.lm7
+lm7 artifact inspect model-sm8750.lm7 --json
+```
+
+See [Inspecting LM7 artifacts](artifact-inspection.md) for output fields and
+exit statuses.
+
 Loading the LM7 artifact verifies checksums and exposes the source
 `ExportedProgram`, but calling it raises an explicit deployment-only error. A
 QNN `.pte` must run through an Android ExecuTorch runtime linked with the QNN
