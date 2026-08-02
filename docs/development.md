@@ -21,6 +21,36 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
+## What CI covers
+
+A backend's tests skip themselves when its package is absent, so `python -m
+pytest` in a plain `[dev]` environment reports dozens of skips and proves
+nothing about most backends. CI installs the extras that work on a hosted CPU
+runner and runs each backend's marker:
+
+| Job | Covers |
+| --- | --- |
+| `Python 3.10` / `Python 3.12` | The portable suite, ruff, and mypy |
+| `Backend onnxruntime` / `openvino` / `iree-vulkan` / `litert` | One job per extra, running `pytest -m <marker>` |
+| `ExecuTorch ARM64` | The ExecuTorch export on real ARM64 hardware |
+| `Linux CPU AOTInductor` | The AOT artifact, written then reloaded in a fresh process |
+| `TorchBench CPU torch.compile` | ResNet/MobileNet, and BERT/ViT/Mixtral in the slow job |
+
+To reproduce one locally, install just that extra and select its marker:
+
+```bash
+python -m pip install -e ".[dev,openvino]"
+python -m pytest -m openvino
+```
+
+Several backends are deliberately absent. CUDA, ROCm, MPS, TPU, Tenstorrent and
+TensorRT need hardware. QNN needs the Qualcomm AI Engine Direct SDK, which is
+behind a login. `apache-tvm`'s published wheel fails to import with an
+undefined symbol in `libtvm_runtime.so`. `zentorch` expects an AMD host a
+hosted runner does not guarantee. The device gate in
+[android-device-testing.md](android-device-testing.md) is manual for the same
+class of reason.
+
 ## CPU compilation
 
 The basic example exercises lazy compilation and fallback:
