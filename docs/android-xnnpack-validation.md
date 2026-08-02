@@ -34,7 +34,7 @@ This performs all host-side work without invoking `adb`:
 ## Build the ARM64 runner
 
 The ExecuTorch source checkout and installed runtime must use the same release.
-The following build configuration targets ExecuTorch 1.3.1 and Android NDK r27c for ExecuTorch 1.3.1 and Android NDK
+The following build configuration targets ExecuTorch 1.3.1 and Android NDK
 r27c; adjust paths without mixing ExecuTorch versions.
 
 ```bash
@@ -72,7 +72,7 @@ cmake -B cmake-android-out/examples/devtools -G Ninja \
 cmake --build cmake-android-out/examples/devtools -j"$(nproc)"
 ```
 
-Strip the runner before sending it through a cloud tunnel:
+Strip the runner before copying it to a device:
 
 ```bash
 "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
@@ -80,38 +80,14 @@ Strip the runner before sending it through a cloud tunnel:
   cmake-android-out/examples/devtools/example_runner
 ```
 
-## Qualcomm Device Cloud
-
-QDC forwards a remote adb server over SSH. Use a local port that does not
-conflict with another adb server or tunnel, and keep the SSH process separate
-from the harness:
-
-```bash
-ssh -i /path/to/qdc-key.pem \
-  -L 5039:<session-host>:5037 \
-  -N -o ExitOnForwardFailure=yes \
-  sshtunnel@ssh.qdc.qualcomm.com
-```
-
-Keep private keys outside the repository and set their mode to `600`. Do not run
-`adb kill-server` through this tunnel: it targets the cloud-side adb server.
-
-Confirm the forwarded endpoint without using the default local adb server:
-
-```bash
-adb -H 127.0.0.1 -P 5039 devices -l
-```
-
 ## Validate on the device later
 
-Once the device is idle, run:
+Once an Android device is connected and idle, run:
 
 ```bash
 python benchmarks/android_xnnpack.py \
   --runner /path/to/example_runner_arm64 \
   --adb /path/to/adb \
-  --adb-host 127.0.0.1 \
-  --adb-port 5039 \
   --serial <device-serial> \
   --output-dir artifacts/android-xnnpack
 ```
@@ -133,5 +109,5 @@ not report adb wall time as inference latency.
 - It validates a small float32 MLP; it does not establish transformer coverage.
 - XNNPACK uses the Snapdragon CPU. Adreno GPU and Hexagon HTP require separate
   Vulkan or QNN work.
-- It does not start, stop, or discover SSH tunnels, and it never handles keys.
+- It does not provision devices or manage external connectivity.
 - Static positional tensor inputs are inherited from the ExecuTorch artifact.

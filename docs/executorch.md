@@ -197,7 +197,7 @@ python benchmarks/android_xnnpack.py --prepare-only
 ```
 
 See [Android XNNPACK validation](android-xnnpack-validation.md) for the runner
-build and forwarded-adb workflow.
+build and manual Android workflow.
 
 To take the same artifact all the way to a phone, see
 [android-device-testing.md](android-device-testing.md).

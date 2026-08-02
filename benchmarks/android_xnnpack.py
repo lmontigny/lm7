@@ -7,9 +7,8 @@ as an ExecuTorch BundledProgram containing its input and expected output. With
 pushes the bundle and an ARM64 ``example_runner`` to an adb-reachable device and
 uses the runner's strict output verification as the on-device correctness gate.
 
-For Qualcomm Device Cloud, forward the remote adb server over SSH and pass the
-local endpoint explicitly, for example ``--adb-host 127.0.0.1 --adb-port 5039``.
-This script never starts or stops the SSH tunnel itself.
+An optional externally managed adb endpoint can be supplied with ``--adb-host``
+and ``--adb-port``. The script does not provision devices or connectivity.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ class DeviceValidation:
 
 
 class AdbClient:
-    """Small adb transport supporting local and SSH-forwarded adb servers."""
+    """Small adb transport supporting local and externally managed adb servers."""
 
     def __init__(
         self,
