@@ -249,6 +249,120 @@ def _delegate_counts(lowered: Any) -> tuple[int, int]:
     return len(delegated), len(calls)
 
 
+def _is_floating(node: torch.fx.Node) -> bool:
+    """Whether a graph node carries a floating-point tensor.
+
+    Nodes without tensor metadata are treated as floating so that an unannotated
+    graph is never silently narrowed; the caller only uses this to *remove*
+    quantization from things that are definitely integral.
+    """
+    value = node.meta.get("val")
+    dtype = getattr(value, "dtype", None)
+    if dtype is None:
+        return True
+    return bool(dtype.is_floating_point)
+
+
+def _resolve_attr(module: torch.nn.Module, target: str) -> Any:
+    value: Any = module
+    for part in target.split("."):
+        value = getattr(value, part, None)
+        if value is None:
+            return None
+    return value
+
+
+def _retype_integer_scalar_lifts(model: torch.fx.GraphModule) -> int:
+    """Put lifted scalar constants back on the dtype of the op they feed.
+
+    PT2E's `transform_for_annotation` rewrites literal scalars into tensor
+    attributes so they can be observed, and it creates them as float32. For
+    `input_ids + 1` that turns an int64 add into a float one by promotion, and
+    the embedding lookup downstream then rejects float indices.
+
+    A scalar lifted beside integral tensor operands is retyped to match them.
+    Only exact integral values are converted, so a genuine float scalar in an
+    integer expression is left alone rather than silently truncated.
+    """
+    repaired = 0
+    for node in model.graph.nodes:
+        if node.op != "call_function":
+            continue
+        lifted, operands = [], []
+        for argument in node.args:
+            if not isinstance(argument, torch.fx.Node):
+                continue
+            if argument.op == "get_attr":
+                lifted.append(argument)
+            else:
+                operands.append(argument)
+        if not lifted or not operands:
+            continue
+        dtypes = {getattr(operand.meta.get("val"), "dtype", None) for operand in operands}
+        dtypes.discard(None)
+        if len(dtypes) != 1:
+            continue
+        target_dtype = dtypes.pop()
+        if target_dtype is None or target_dtype.is_floating_point:
+            continue
+        for constant in lifted:
+            tensor = _resolve_attr(model, str(constant.target))
+            if not isinstance(tensor, torch.Tensor) or not tensor.dtype.is_floating_point:
+                continue
+            if not bool(torch.equal(tensor, tensor.round())):
+                continue
+            retyped = tensor.to(target_dtype)
+            owner, _, attribute = str(constant.target).rpartition(".")
+            setattr(_resolve_attr(model, owner) if owner else model, attribute, retyped)
+            value = constant.meta.get("val")
+            if value is not None:
+                constant.meta["val"] = value.to(target_dtype)
+            repaired += 1
+    return repaired
+
+
+def _float_only_quantizer(quantizer_module: Any) -> Any:
+    """XNNPACKQuantizer that refuses to quantize integer-valued nodes.
+
+    XNNPACKQuantizer annotates arithmetic patterns -- `add` among them -- without
+    regard to dtype. A transformer computes positions and cache offsets with
+    integer arithmetic and then uses the result to index an embedding, so
+    annotating those nodes inserts an observer that converts an int64 tensor to
+    float and the embedding lookup fails with
+
+        Expected tensor for argument #1 'indices' to have one of the following
+        scalar types: Long, Int; but got torch.FloatTensor instead
+
+    Quantizing an index is meaningless regardless, so the annotations are dropped
+    rather than repaired: any node whose value is not floating point loses its
+    annotation, and any surviving annotation loses integral entries from its
+    input map.
+    """
+
+    class FloatOnlyXNNPACKQuantizer(quantizer_module.XNNPACKQuantizer):
+        def transform_for_annotation(self, model: torch.fx.GraphModule) -> torch.fx.GraphModule:
+            model = super().transform_for_annotation(model)
+            _retype_integer_scalar_lifts(model)
+            return model
+
+        def annotate(self, model: torch.fx.GraphModule) -> torch.fx.GraphModule:
+            annotated = super().annotate(model)
+            for node in annotated.graph.nodes:
+                annotation = node.meta.get("quantization_annotation")
+                if annotation is None:
+                    continue
+                if not _is_floating(node):
+                    del node.meta["quantization_annotation"]
+                    continue
+                input_map = getattr(annotation, "input_qspec_map", None)
+                if input_map:
+                    for source in [n for n in input_map if not _is_floating(n)]:
+                        del input_map[source]
+            return annotated
+
+    return FloatOnlyXNNPACKQuantizer()
+
+
 def _quantize_int8(
     exported_program: torch.export.ExportedProgram,
 ) -> tuple[torch.export.ExportedProgram, int]:
@@ -266,7 +380,7 @@ def _quantize_int8(
 
     try:
         example_args, example_kwargs = exported_program.example_inputs
-        quantizer = quantizer_module.XNNPACKQuantizer().set_global(
+        quantizer = _float_only_quantizer(quantizer_module).set_global(
             quantizer_module.get_symmetric_quantization_config(is_per_channel=True)
         )
         prepared = quantize_module.prepare_pt2e(exported_program.module(), quantizer)

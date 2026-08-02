@@ -113,20 +113,18 @@ curl -o benchmark_model_arm64 https://storage.googleapis.com/tensorflow-nightly-
 It also needs the separate LiteRT environment from [litert.md](litert.md),
 because LiteRT Torch and ExecuTorch pin incompatible PyTorch ranges.
 
-## INT8 does not work for language models
+## INT8 on a language model completes but is unusable
 
-`--quantize int8` succeeds on the MLP and **fails on every causal LM**:
+`--quantize int8` used to fail outright for any causal LM. That was a dtype bug
+in PT2E's scalar lifting and is fixed; see
+[executorch.md](executorch.md#int8-on-a-language-model).
 
-```
-ExecuTorch INT8 prepare/calibrate/convert failed: tensors used as indices
-must be long, int, byte or bool tensors.
-```
-
-LM7 applies `XNNPACKQuantizer().set_global(...)`, so `prepare_pt2e` observes
-every input including `input_ids` and converts it to float, which breaks the
-embedding lookup. This affects the `lm7 model export ... --quantize int8`
-command as well as the Python API. Until it is fixed, the INT8 device numbers
-above exist only for the MLP.
+What replaced it is not better news. SmolLM2 now quantizes to a 238 MiB `.pte`
+that loads and runs, and predicts `'emetery'` where eager predicts `' Paris'`,
+sharing none of eager's top five candidates. Single-sample calibration cannot
+set ranges for 1359 quantized operators. The INT8 device figures above are
+therefore the MLP's alone, and no quantized language model has been put on the
+device -- there would be nothing to learn from running one.
 
 ## Connect a device
 

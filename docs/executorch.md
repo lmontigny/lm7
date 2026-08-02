@@ -50,22 +50,12 @@ the situation either way.
 
 ```bash
 lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target cpu --backend executorch
+  --target cpu --backend executorch --quantize int8
 ```
 
 > [!WARNING]
-> Adding `--quantize int8` to the command above **fails**, and so does the
-> equivalent Python call, for any causal LM:
->
-> ```
-> ExecuTorch INT8 prepare/calibrate/convert failed: tensors used as indices
-> must be long, int, byte or bool tensors.
-> ```
->
-> `_quantize_int8` applies `XNNPACKQuantizer().set_global(...)`, so
-> `prepare_pt2e` observes every input including `input_ids` and converts it to
-> float, which the embedding lookup rejects. INT8 export currently works only
-> for models whose inputs are all floating point.
+> `--quantize int8` **completes** for a causal LM but the result is not usable.
+> See [INT8 on a language model](#int8-on-a-language-model) before shipping one.
 
 ```python
 artifact = lm7.export(
@@ -107,12 +97,61 @@ for the Python API, pass a representative tensor batch. One sample is a useful
 first export, not an accuracy guarantee. Compare the quantized model on the
 dataset and shapes that matter before shipping it.
 
-INT8 currently requires a fixed capture shape, and it requires floating-point
-inputs — see the warning above; a causal LM's integer `input_ids` fail the
-quantizer outright. LM7 also fails the export when the quantizer inserts no
-quantized operators, instead of silently producing a float artifact.
-Unsupported operators can remain as portable ExecuTorch kernels, so inspect
-both `quantized_ops` and delegate coverage in the manifest.
+INT8 currently requires a fixed capture shape. LM7 also fails the export when
+the quantizer inserts no quantized operators, instead of silently producing a
+float artifact. Unsupported operators can remain as portable ExecuTorch
+kernels, so inspect both `quantized_ops` and delegate coverage in the manifest.
+
+LM7 repairs one PT2E rewrite before quantizing. `transform_for_annotation`
+lifts literal scalars into tensor attributes so they can be observed, and it
+creates them as float32 whatever the surrounding dtypes are. In a causal LM
+that turns `input_ids + 1` into an `int64 + float32` add, which promotes to
+float, and the embedding lookup then rejects float indices:
+
+```
+Expected tensor for argument #1 'indices' to have one of the following scalar
+types: Long, Int; but got torch.FloatTensor instead
+```
+
+`_retype_integer_scalar_lifts` puts such a scalar back on the dtype of the
+operands it feeds, and only when its value is exactly integral, so a genuine
+fractional scalar is never truncated. LM7 also drops quantization annotations
+from integer-valued nodes, since observing an index is meaningless and would
+re-introduce the same promotion.
+
+## INT8 on a language model
+
+Quantizing a full causal LM now runs to completion. The output is not usable.
+
+SmolLM2-135M-Instruct, exported through the command above, against eager
+float32 on the prompt `"The capital of France is"`:
+
+| | float32 | INT8 |
+| --- | --- | --- |
+| `.pte` size | 622 MiB | 238 MiB |
+| Max abs logit difference vs eager | 1.4e-04 | **39.5** |
+| Next token | `' Paris'` | `'emetery'` |
+| Top-5 overlap with eager | 5 / 5 | **0 / 5** |
+| Quantized operators | 0 | 1359 |
+
+The size reduction is real and the artifact loads and runs. It has also stopped
+predicting the right token, and shares none of eager's top five candidates, so
+it is worthless for generation.
+
+The cause is the calibration this backend performs, not the arithmetic. LM7
+runs **one** sample through the prepared graph, which cannot set activation
+ranges for 1359 quantized operators spread across a transformer. A multi-sample
+calibration API is listed under [scope](#scope) as missing, and this is what
+its absence costs. Until it exists, treat INT8 here as validated for small
+float models only — the MLP figures below, not this table.
+
+> [!WARNING]
+> Loading this artifact aborts the process with `double free or corruption` at
+> interpreter teardown, **after** inference completes and results are returned.
+> It reproduces with a fresh interpreter that never imports LM7, running the
+> `.pte` through `executorch.runtime` alone, so it is an ExecuTorch runtime
+> issue rather than an LM7 one. It does not reproduce on synthetic models up to
+> 194 quantized operators.
 
 The `.pte` is the deployable, quantized payload. LM7 still retains the original
 float `exported_program.pt2` for reproducibility and debugging, so total `.lm7`
@@ -174,9 +213,10 @@ The artifact is nearly twice the `.pte`, because LM7 always writes
 `exported_program.pt2` beside the compiled payload. Only the `.pte` ships to a
 device; the `.pt2` is what makes the artifact reloadable as a torch program.
 
-And 622 MiB is float32 weights written verbatim. The new INT8 path addresses
-that deployment cost, but the SmolLM2 numbers above remain the float baseline;
-full-model INT8 accuracy and latency have not yet been characterized.
+And 622 MiB is float32 weights written verbatim. The INT8 path addresses that
+deployment cost -- the same model quantizes to a 238 MiB `.pte` -- but it does
+so at an accuracy that makes the artifact unusable; see
+[INT8 on a language model](#int8-on-a-language-model).
 
 A separate 256→512→64 MLP check reduced the deployable `.pte` from 660,480 to
 174,976 bytes (73.5%) and had 0.0082 maximum absolute error against eager FP32.
@@ -190,8 +230,9 @@ claim.
 - **XNNPACK only.** This backend does not change delegates. Qualcomm HTP uses the
   separate [QNN backend](qnn.md); Core ML, MediaTek, Vulkan, Arm Ethos-U, and
   Exynos remain unwired here.
-- **INT8 PTQ only.** There is no INT4, QAT, multi-sample calibration API, or
-  backend-specific accuracy gate yet. Quantization support depends on the
+- **INT8 PTQ only, single-sample.** There is no INT4, QAT, multi-sample
+  calibration API, or backend-specific accuracy gate yet. The single sample is
+  the reason a quantized language model comes out unusable. Quantization support depends on the
   operator patterns recognized by ExecuTorch's XNNPACK quantizer.
 - **Static shapes.** Whatever `torch.export` captured is what the `.pte` accepts;
   INT8 export explicitly rejects dynamic sequence capture.
