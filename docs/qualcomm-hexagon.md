@@ -77,6 +77,18 @@ Nothing in this plan can be validated on macOS, on arm64, or without the
 Qualcomm SDK downloads. The harness is written so that its host CPU paths still
 run anywhere and the Hexagon paths report themselves unavailable.
 
+Run the comprehensive preflight before building or executing a model:
+
+```bash
+lm7 hexagon doctor
+lm7 hexagon doctor --mode simulator
+lm7 hexagon doctor --mode device --json
+```
+
+The device mode checks local configuration only; it does not run `adb`, open a
+connection, or contact Qualcomm Device Cloud. See [Hexagon-MLIR toolchain
+diagnostics](hexagon-toolchain-diagnostics.md) for every check and exit status.
+
 ## Candidate integration paths
 
 - **torch-mlir to `TorchMLIRHexagonLauncher`**: the preferred first path and the

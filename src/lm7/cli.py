@@ -19,6 +19,7 @@ from .compatibility import ModelCompatibilityResult, inspect_hf_model
 from .detection import detect_targets, resolve_target
 from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
+from .hexagon import HexagonToolchainDiagnostics, diagnose_hexagon_toolchain
 from .huggingface import (
     HuggingFaceExportResult,
     HuggingFaceGenerateResult,
@@ -190,6 +191,26 @@ def _print_doctor(data: dict[str, Any]) -> None:
     )
     print()
     _print_backends(data["backends"])
+
+
+def _print_hexagon_doctor(result: HexagonToolchainDiagnostics, mode: str) -> None:
+    print("Hexagon-MLIR toolchain diagnostics")
+    print(f"Host:        {result.host['distribution']} / {result.host['machine']}")
+    print(f"Python:      {result.host['python']}")
+    print(f"PyTorch:     {result.host.get('pytorch', 'unknown')}")
+    print(f"Compilation: {'ready' if result.compile_ready else 'not ready'}")
+    print(f"Simulator:   {'ready' if result.simulator_ready else 'not ready'}")
+    print(f"Device:      {'ready' if result.device_ready else 'not ready'}")
+    print(f"Requested:   {mode} ({'ready' if result.ready_for(mode) else 'not ready'})")
+    print()
+    print("Checks:")
+    for check in result.checks:
+        value = f" = {check.value}" if check.value else ""
+        print(f"  [{check.status}] {check.category}/{check.name}{value}")
+        if check.detail:
+            print(f"    {check.detail}")
+        if check.status != "ok" and check.remediation:
+            print(f"    Fix: {check.remediation}")
 
 
 def _print_bundle(data: dict[str, Any]) -> None:
@@ -518,6 +539,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     artifact_inspect_parser.add_argument("artifact", help="artifact directory")
     _add_json_argument(artifact_inspect_parser)
+
+    hexagon_parser = subparsers.add_parser(
+        "hexagon", help="inspect the experimental Hexagon-MLIR toolchain"
+    )
+    hexagon_subparsers = hexagon_parser.add_subparsers(dest="hexagon_command", required=True)
+    hexagon_doctor_parser = hexagon_subparsers.add_parser(
+        "doctor", help="check compile, simulator, and device prerequisites"
+    )
+    hexagon_doctor_parser.add_argument(
+        "--mode",
+        choices=("compile", "simulator", "device"),
+        default="compile",
+        help="readiness mode that controls the exit status (default: compile)",
+    )
+    _add_json_argument(hexagon_doctor_parser)
     return parser
 
 
@@ -605,6 +641,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else _print_artifact_inspection(inspection)
             )
             if not inspection.valid:
+                return 1
+        elif args.command == "hexagon" and args.hexagon_command == "doctor":
+            diagnostics = diagnose_hexagon_toolchain()
+            data = diagnostics.to_dict()
+            data["requested_mode"] = args.mode
+            data["ready"] = diagnostics.ready_for(args.mode)
+            _emit_json(data) if args.json else _print_hexagon_doctor(diagnostics, args.mode)
+            if not diagnostics.ready_for(args.mode):
                 return 1
     except LM7Error as exc:
         if args.json:

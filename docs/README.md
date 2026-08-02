@@ -45,6 +45,8 @@ This index covers everything else.
 
 ## Features
 
+- [Hexagon-MLIR toolchain diagnostics](hexagon-toolchain-diagnostics.md) --
+  actionable compile, simulator, and device preflight without opening a connection.
 - [Artifact inspection](artifact-inspection.md) -- verify payload integrity,
   portability, delegate coverage, and deployment requirements without loading
   an optional runtime.
