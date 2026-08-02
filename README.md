@@ -59,6 +59,89 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 
 ## How it works
 
+Two call sites: one runs a model on the machine you are on, the other builds an
+artifact for somewhere else. Both take the same `target` string.
+
+```mermaid
+flowchart TB
+    M["<b>Your PyTorch model</b><br/><i>nn.Module or Hugging Face causal LM</i>"]
+    L["<b>lm7.compile(model, target='auto')</b><br/><i>detect &rarr; plan &rarr; compile &rarr; cache &rarr; fall back to eager</i>"]
+    M --> L
+    L --> CPU
+    L --> GPU
+    L --> ACC
+
+    subgraph CPU["CPU &mdash; target=cpu"]
+        direction TB
+        C1["<b>inductor</b><br/>C++ / OpenMP"]
+        C2["openvino &nbsp; onnxruntime"]
+        C3["zentorch (AMD Zen) &nbsp; tvm"]
+    end
+
+    subgraph GPU["GPU"]
+        direction TB
+        G1["<b>nvidia</b><br/>inductor (Triton, cuBLAS/cuDNN)<br/>tensorrt &nbsp; onnxruntime"]
+        G2["<b>amd</b><br/>inductor (ROCm)"]
+        G3["<b>intel</b><br/>inductor (XPU)"]
+        G4["<b>apple</b><br/>inductor (Metal / MPS)"]
+    end
+
+    subgraph ACC["Accelerators"]
+        direction TB
+        A1["<b>tpu</b><br/>openxla (PyTorch/XLA)"]
+        A2["<b>tenstorrent</b><br/>tt-xla, tt-mlir, tt-metal"]
+        A3["<b>intel:npu</b><br/>openvino NPU plugin"]
+    end
+
+    style M fill:#dbeafe,stroke:#3b82f6
+    style L fill:#dbeafe,stroke:#3b82f6
+    style CPU fill:#f6f8fa,stroke:#d0d7de
+    style GPU fill:#f6f8fa,stroke:#d0d7de
+    style ACC fill:#f6f8fa,stroke:#d0d7de
+```
+
+`lm7.export` writes a `.lm7` directory instead &mdash; the compiled payload, a
+manifest with checksums and versions, and the source graph &mdash; so the
+compile happens once at build time and the result ships.
+
+```mermaid
+flowchart TB
+    M2["<b>Your PyTorch model</b>"]
+    E["<b>lm7.export(model, target=..., backend=...)</b><br/><i>writes a .lm7 artifact: payload + manifest + checksums</i>"]
+    M2 --> E
+    E --> EDGE
+    E --> HOST
+    E --> IR
+
+    subgraph EDGE["Phones and embedded"]
+        direction TB
+        D1["<b>executorch</b> &rarr; .pte<br/>XNNPACK, ARM64 and x86-64"]
+        D2["<b>qnn</b> &rarr; .pte<br/>Snapdragon HTP v79"]
+        D3["<b>litert</b> &rarr; .tflite<br/>CPU and Adreno GPU"]
+    end
+
+    subgraph HOST["Servers and workstations"]
+        direction TB
+        D4["<b>aot_inductor</b> &rarr; .pt2"]
+        D5["<b>tensorrt</b> &rarr; .trt.pt2"]
+        D6["<b>openvino</b> &rarr; .xml + .bin"]
+        D7["<b>onnxruntime</b> &rarr; .onnx"]
+    end
+
+    subgraph IR["Vendor-neutral IR"]
+        direction TB
+        D8["<b>stablehlo</b> &rarr; .stablehlo.zip"]
+        D9["<b>iree_vulkan</b> &rarr; .vmfb"]
+    end
+
+    style M2 fill:#dbeafe,stroke:#3b82f6
+    style E fill:#dbeafe,stroke:#3b82f6
+    style EDGE fill:#f6f8fa,stroke:#d0d7de
+    style HOST fill:#f6f8fa,stroke:#d0d7de
+    style IR fill:#f6f8fa,stroke:#d0d7de
+```
+
+
 - **Target and backend are separate.** A *target* is where the model runs
   (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used to get
   there (`inductor`, `tensorrt`, `openxla`, …). Pin either, or let LM7 choose.
