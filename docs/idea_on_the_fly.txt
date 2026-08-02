@@ -48,6 +48,7 @@ Qualcomm Hexagon NPU via ExecuTorch's QNN delegate
 optimizer Adam, SGD?
 test on saturnCloud, AWS, lightningAI
 add prompt size>1 for decode - unclear
+clarify .compile limtation, moE graph break?!
 
 ### Done ###
 add config-only Hugging Face model compatibility preflight
