@@ -84,6 +84,7 @@ inconsistencies, and the behaviour you would otherwise have to know about — se
 | Google | TPU | `tpu` | `openxla`, `eager` |
 | Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` |
 | Android, iOS, embedded | CPU (ARM64, x86-64) | `cpu` | `executorch` (export only) |
+| Qualcomm | Snapdragon 8 Elite HTP v79 | `qualcomm:sm8750` | `qnn` (export only) |
 | AWS | Trainium | `aws:trainium` | parses only, never executed |
 
 Any x86-64 or ARM64 CPU runs through `cpu`, Intel and AMD included. A vendor
@@ -100,9 +101,9 @@ and it has [its own guide](docs/intel-npu.md).
 
 Run `lm7 targets` to see what is actually present on your machine.
 
-Not supported, with written plans:
-[Qualcomm Hexagon NPU](docs/qualcomm-hexagon.md) and
-[AMD MIGraphX](docs/amd-migraphx.md).
+Qualcomm HTP export is available through [ExecuTorch QNN](docs/qnn.md); the
+lower-level [Hexagon-MLIR route](docs/qualcomm-hexagon.md) remains an evaluation
+plan. [AMD MIGraphX](docs/amd-migraphx.md) is also evaluated, not adopted.
 
 ## Tested model coverage
 
@@ -191,6 +192,7 @@ print(compiled.target, compiled.selected_backend)
 | `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel | export only |
 | `litert` | LiteRT Torch + XNNPACK | persistent `.tflite` model | **AOT**, export only | cpu | export only |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | export only |
+| `qnn` | ExecuTorch + Qualcomm QNN | device-bound `.pte` for Snapdragon HTP | **AOT**, export only | qualcomm:sm8750 | export only |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | export only |
 | `tvm` | Apache TVM (Relax) | TVM VM module | JIT | cpu | explicit |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
@@ -207,7 +209,7 @@ Tune TorchInductor through `options={"compile_mode": "max-autotune"}`. The
 [TorchInductor options guide](docs/inductor-options.md) for every preset,
 lower-level controls, and the distinction from LM7's own `mode` argument.
 
-Two rows in that table are not `lm7.compile` backends at all. **Export only**
+Rows marked **Export only** are not `lm7.compile` backends. **Export only**
 means the backend is reachable solely through `lm7.export(..., backend=...)` —
 asking `lm7.compile` for one raises. **Explicit** means it works with
 `lm7.compile` but is never chosen by `backend="auto"`; `tvm` is the only one,
@@ -330,12 +332,14 @@ PyTorch `.pt2` program. Pick a backend to add a compiled payload beside it:
 | `iree_vulkan` | Vulkan VMFB with SPIR-V | yes, GPU | [IREE Vulkan](docs/iree-vulkan.md) |
 | `litert` | `.tflite` flatbuffer | yes, CPU | [LiteRT](docs/litert.md) |
 | `executorch` | `.pte` for Android, iOS, embedded | yes, any CPU | [ExecuTorch](docs/executorch.md) |
+| `qnn` | device-bound `.pte` for SM8750 HTP | yes, matching Android QNN runtime | [QNN](docs/qnn.md) |
 | `stablehlo` | portable StableHLO for any PJRT plugin | yes, any | [StableHLO](docs/stablehlo-pjrt-evaluation.md) |
 
 Two payloads are not bound to the machine that built them: `stablehlo`, whose
 plugin is chosen at load time, and `executorch`, whose XNNPACK delegate covers
-ARM64 and x86-64 alike. Everything else is specific to compatible compiler,
-runtime, and hardware versions — artifacts are **not** a stable cross-version
+ARM64 and x86-64 alike. QNN is explicitly bound to SM8750 plus matching
+ExecuTorch and QNN runtime versions. Everything else is specific to compatible
+compiler, runtime, and hardware versions — artifacts are **not** a stable cross-version
 ABI.
 
 ### From the CLI

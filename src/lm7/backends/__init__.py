@@ -7,6 +7,7 @@ from .litert import LiteRTBackend
 from .onnxruntime import ONNXRuntimeBackend
 from .openvino import OpenVINOBackend
 from .openxla import OpenXLABackend
+from .qnn import ExecuTorchQNNBackend
 from .registry import BackendRegistry
 from .stablehlo import StableHLOBackend
 from .tensorrt import TensorRTBackend
@@ -26,6 +27,7 @@ registry.register(OpenVINOBackend())
 registry.register(OpenXLABackend())
 registry.register(StableHLOBackend())
 registry.register(ExecuTorchBackend())
+registry.register(ExecuTorchQNNBackend())
 registry.register(TenstorrentBackend())
 registry.register(TVMBackend())
 registry.register(ZenTorchBackend())

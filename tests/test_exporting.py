@@ -215,7 +215,9 @@ def test_matching_architecture_loads(monkeypatch, tmp_path):
     )
 
 
-@pytest.mark.parametrize("backend", ["export", "openvino", "executorch", "stablehlo", "litert"])
+@pytest.mark.parametrize(
+    "backend", ["export", "openvino", "executorch", "qnn", "stablehlo", "litert"]
+)
 def test_portable_backends_are_not_architecture_gated(monkeypatch, tmp_path, backend):
     """Only compiled-per-architecture payloads are gated; portable ones must not be."""
     monkeypatch.setattr(

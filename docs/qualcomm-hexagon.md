@@ -6,9 +6,9 @@
 > SDK and no device, which is why it shipped first, and it has since been
 > validated on a real Snapdragon 8 Elite — see
 > [android-device-testing.md](android-device-testing.md). This plan remains the
-> route to the Hexagon **NPU** specifically. ExecuTorch also has a Qualcomm QNN
-> delegate, which is likely a cheaper way in than hexagon-mlir and should be
-> compared before this plan is executed.
+> route to the lower-level Hexagon-MLIR stack specifically. LM7 now exposes the
+> preferred ExecuTorch Qualcomm path as the [QNN backend](qnn.md); it is SDK-gated
+> and intentionally separate from this evaluation plan.
 >
 > The device-access half of the blocker below is now cheap: Qualcomm Device
 > Cloud provides adb-reachable Snapdragon hardware on free minutes, and the
@@ -16,7 +16,8 @@
 > blocking is the toolchain — hexagon-mlir builds from source, and QNN needs the
 > Qualcomm SDK.
 
-LM7 has no Qualcomm NPU path today. [Hexagon-MLIR](https://github.com/qualcomm/hexagon-mlir)
+LM7 now has an initial ExecuTorch QNN export path for SM8750 HTP. This document
+evaluates the lower-level alternative. [Hexagon-MLIR](https://github.com/qualcomm/hexagon-mlir)
 is Qualcomm's open-source compiler toolchain for running Triton kernels and
 PyTorch models on Hexagon NPUs, and it should be evaluated before a Qualcomm
 target or backend is added to automatic planning.
@@ -81,9 +82,9 @@ run anywhere and the Hexagon paths report themselves unavailable.
 - **torch-mlir to `TorchMLIRHexagonLauncher`**: the preferred first path and the
   one the harness implements. It is the only PyTorch-native route, it keeps the
   input an `nn.Module`, and it is what Qualcomm's own tutorials exercise.
-- **Qualcomm AI Engine Direct (QNN) via ONNX**: worth comparing if runtime
-  packaging or Android app deployment becomes the priority. It is a separate,
-  largely closed stack and does not reuse the torch-mlir work.
+- **ExecuTorch QNN**: adopted as LM7's initial SM8750 HTP export path; see
+  [qnn.md](qnn.md). It is SDK-gated, device-bound, and does not reuse the
+  torch-mlir work.
 - **`linalg-hexagon-opt` and `linalg-hexagon-translate` CLIs**: offline lowering
   and assembly inspection. Requires no device, so it is the cheapest way to see
   whether a model's operators lower at all before chasing hardware access.
@@ -130,7 +131,7 @@ on them yet.
 
 ## First implementation slice
 
-Do not register an LM7 backend until an evaluation on real hardware shows a
+Do not register a Hexagon-MLIR LM7 backend until an evaluation on real hardware shows a
 clear use case. `benchmarks/hexagon.py` is the first slice. It runs one workload
 through four paths under a single harness:
 

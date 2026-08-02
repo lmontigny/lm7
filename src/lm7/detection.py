@@ -78,6 +78,10 @@ def detect_targets() -> list[DeviceInfo]:
 
 def resolve_target(requested: str | TargetSpec) -> TargetSpec:
     parsed = parse_target(requested)
+    if parsed.remote:
+        # AOT-only targets describe the deployment device, not hardware attached
+        # to this compiler host. Their backend performs the dependency checks.
+        return parsed
     devices = detect_targets()
     if parsed.vendor == "auto":
         # "npu" is deliberately absent: an Intel NPU is a low-power accelerator

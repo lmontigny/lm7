@@ -607,7 +607,7 @@ def export_hf_model(
     # PyTorch/XLA cannot lower a program captured with keyword inputs to
     # StableHLO, so that backend is fed the same tensors positionally. The order
     # is _LogitsOnly.forward's, and the reloaded artifact takes them the same way.
-    positional = backend == "stablehlo"
+    positional = backend in {"qnn", "stablehlo"}
     capture_args = tuple(inputs[name] for name in _CAPTURED_INPUTS if name in inputs)
 
     started = time.perf_counter()

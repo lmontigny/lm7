@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from lm7 import detection
 from lm7.detection import (
     _detect_tenstorrent_targets,
     _detect_tpu_targets,
@@ -326,3 +327,16 @@ def test_cpu_target_degrades_without_proc(monkeypatch, tmp_path):
     assert device.capabilities["vendor_id"] is None
     assert device.capabilities["isa_extensions"] == ()
     assert device.capabilities["logical_cores"] == os.cpu_count()
+
+
+def test_explicit_remote_target_does_not_require_local_detection(monkeypatch):
+    monkeypatch.setattr(
+        detection,
+        "detect_targets",
+        lambda: pytest.fail("remote target must not inspect local devices"),
+    )
+
+    target = resolve_target("qualcomm:sm8750")
+
+    assert str(target) == "qualcomm:sm8750"
+    assert target.remote is True

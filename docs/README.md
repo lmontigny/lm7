@@ -26,6 +26,7 @@ This index covers everything else.
 | Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
 | Google TPU | [google-tpu.md](google-tpu.md) |
 | Tenstorrent | [tenstorrent.md](tenstorrent.md) |
+| Qualcomm Snapdragon 8 Elite HTP | [qnn.md](qnn.md) |
 
 ## Backends
 
@@ -36,6 +37,7 @@ This index covers everything else.
 | `iree_vulkan` | [iree-vulkan.md](iree-vulkan.md) |
 | `litert` | [litert.md](litert.md) |
 | `executorch` (Android, iOS, embedded) | [executorch.md](executorch.md) |
+| `qnn` (Snapdragon HTP) | [qnn.md](qnn.md) |
 | `tenstorrent` | [tenstorrent.md](tenstorrent.md) |
 | `tvm` | [tvm.md](tvm.md) |
 | `zentorch` | [zentorch.md](zentorch.md) |
@@ -59,7 +61,7 @@ Measured investigations, including the ones that did not become backends.
 
 - [NVIDIA TensorRT](nvidia-tensorrt-evaluation.md) — measured against Inductor.
 - [AMD MIGraphX](amd-migraphx.md) — harness, no backend.
-- [Qualcomm Hexagon](qualcomm-hexagon.md) — plan, blocked on SDK and device access.
+- [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR plan; the QNN export path is documented in [qnn.md](qnn.md).
 - [StableHLO and PJRT](stablehlo-pjrt-evaluation.md) — became the `stablehlo` backend.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — evaluated, not adopted.
 
