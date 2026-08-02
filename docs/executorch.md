@@ -189,6 +189,16 @@ python -m pytest tests/test_executorch_integration.py -q
 The third test loads the `.pte` in a fresh interpreter that never imports LM7,
 which is the property that makes the artifact worth producing.
 
+To prepare the same artifact for a later ARM64 Android check without contacting a
+device:
+
+```bash
+python benchmarks/android_xnnpack.py --prepare-only
+```
+
+See [Android XNNPACK validation](android-xnnpack-validation.md) for the runner
+build and forwarded-adb workflow.
+
 To take the same artifact all the way to a phone, see
 [android-device-testing.md](android-device-testing.md).
 
