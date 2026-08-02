@@ -12,6 +12,7 @@ This index covers everything else.
 | [JIT vs. AOT](jit-vs-aot.md) | When compilation happens, the two export levels, bundles, and signature rules. |
 | [What LM7 replaces](what-this-replaces.md) | The per-vendor code you would otherwise write yourself. |
 | [Development and testing](development.md) | Environment checks, GPU integration tests, compiler IR output. |
+| [Android device testing](android-device-testing.md) | Running an exported artifact on a real phone and checking it against the host. |
 
 ## Hardware setup
 

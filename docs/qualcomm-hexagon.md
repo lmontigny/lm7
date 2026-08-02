@@ -3,10 +3,18 @@
 > [!NOTE]
 > LM7 now reaches Snapdragon devices through their **CPU**, via
 > [ExecuTorch](executorch.md)'s XNNPACK delegate. That path needed no Qualcomm
-> SDK and no device, which is why it shipped first. This plan remains the route
-> to the Hexagon **NPU** specifically. ExecuTorch also has a Qualcomm QNN
+> SDK and no device, which is why it shipped first, and it has since been
+> validated on a real Snapdragon 8 Elite — see
+> [android-device-testing.md](android-device-testing.md). This plan remains the
+> route to the Hexagon **NPU** specifically. ExecuTorch also has a Qualcomm QNN
 > delegate, which is likely a cheaper way in than hexagon-mlir and should be
 > compared before this plan is executed.
+>
+> The device-access half of the blocker below is now cheap: Qualcomm Device
+> Cloud provides adb-reachable Snapdragon hardware on free minutes, and the
+> harness in `benchmarks/android_device.py` already drives it. What remains
+> blocking is the toolchain — hexagon-mlir builds from source, and QNN needs the
+> Qualcomm SDK.
 
 LM7 has no Qualcomm NPU path today. [Hexagon-MLIR](https://github.com/qualcomm/hexagon-mlir)
 is Qualcomm's open-source compiler toolchain for running Triton kernels and

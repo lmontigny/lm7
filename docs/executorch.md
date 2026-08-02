@@ -122,7 +122,9 @@ Two fields are worth reading before shipping an artifact.
 `device_bound` is `false`. Every other compiled LM7 payload is pinned to the
 machine that produced it; a `.pte` carries its program and its weights and the
 delegate spans ARM64 and x86-64, so the same bytes run on the build host and the
-phone.
+phone. This has been checked on a Snapdragon 8 Elite rather than assumed:
+[android-device-testing.md](android-device-testing.md) reports the device
+agreeing with the host x86-64 runtime to 5e-07 on the same `.pte`.
 
 `delegated_calls` / `total_calls` is **partition coverage**, and it is usually
 not 1.0. Operators XNNPACK does not implement stay on ExecuTorch's portable
@@ -173,9 +175,10 @@ claim.
   INT8 export explicitly rejects dynamic sequence capture.
 - **No on-device execution or deployment.** LM7 writes the artifact; getting it
   onto a phone and into an app is ExecuTorch's Android and iOS tooling.
-- **No physical-device CI.** Validation is host XNNPACK. The delegate is the same
-  one used on ARM, but "runs correctly on x86-64" is not "runs correctly on a
-  Pixel", and this project has not measured the latter.
+- **No physical-device CI.** CI validation is host XNNPACK on x86-64. A `.pte`
+  has been run on a real ARM64 phone and agreed with the host — see
+  [android-device-testing.md](android-device-testing.md) — but that is a manual
+  gate on one device, not continuous coverage.
 
 ## Validate an artifact
 
@@ -185,6 +188,9 @@ python -m pytest tests/test_executorch_integration.py -q
 
 The third test loads the `.pte` in a fresh interpreter that never imports LM7,
 which is the property that makes the artifact worth producing.
+
+To take the same artifact all the way to a phone, see
+[android-device-testing.md](android-device-testing.md).
 
 ## References
 
