@@ -1,0 +1,71 @@
+--- a/docs/assets/backend-hardware-map.svg
++++ b/docs/assets/backend-hardware-map.svg
+@@ -53,9 +53,2 @@
+-  <defs>
+-    <marker id="jit-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#168f93"/></marker>
+-    <marker id="aot-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#756e8f"/></marker>
+-  </defs>
+   <style>
+-    .jit-route{fill:none;stroke:#168f93;stroke-width:2.4}.jit-flow{fill:none;stroke:#168f93;stroke-width:2;marker-end:url(#jit-arrow)}
+-    .aot-route{fill:none;stroke:#756e8f;stroke-width:2.4}.aot-flow{fill:none;stroke:#756e8f;stroke-width:2;marker-end:url(#aot-arrow)}
+-    .route-label{font-size:17px;font-weight:760}.jit-label{fill:#13777b}.aot-label{fill:#665f80}
+     .backend-line{font-size:15px;font-weight:600}.backend-section{font-size:13px;font-weight:760;letter-spacing:.6px;fill:var(--muted)}
+@@ -78,6 +71,1 @@
+-  <path class="jit-route" d="M1322 241V334H244M1322 334H1366"/>
+-  <text class="route-label jit-label" x="255" y="326">JIT / in-process execution</text>
+-  <path class="jit-flow" d="M236 334V389"/><path class="jit-flow" d="M423 334V389"/><path class="jit-flow" d="M610 334V389"/><path class="jit-flow" d="M797 334V389"/><path class="jit-flow" d="M984 334V389"/><path class="jit-flow" d="M1171 334V389"/><path class="jit-flow" d="M1358 334V389"/>
+-  <path class="aot-route" d="M1517 241V364H244M1517 364H1553"/>
+-  <text class="route-label aot-label" x="1050" y="356">AOT / artifact creation</text>
+-  <path class="aot-flow" d="M252 364V389"/><path class="aot-flow" d="M439 364V389"/><path class="aot-flow" d="M626 364V389"/><path class="aot-flow" d="M813 364V389"/><path class="aot-flow" d="M1000 364V389"/><path class="aot-flow" d="M1187 364V389"/><path class="aot-flow" d="M1374 364V389"/><path class="aot-flow" d="M1561 364V389"/>
++  <path class="flow" d="M899 300V389"/>
+@@ -99,7 +87,8 @@
+-  <rect class="card" x="157" y="407" width="174" height="248" rx="15"/><text class="card-head" x="244" y="438">Arm CPU</text>
+-  <text class="backend-line" x="170" y="468">Inductor</text><rect class="mode-pill-jit" x="281" y="452" width="38" height="22" rx="7"/><text class="mode-text" x="300" y="463">JIT</text>
+-  <text class="backend-line" x="170" y="498">AOTInductor</text><rect class="mode-pill-aot" x="281" y="482" width="38" height="22" rx="7"/><text class="mode-text" x="300" y="493">AOT</text>
+-  <text class="backend-line" x="170" y="528">ONNX Runtime</text><rect class="mode-pill-both" x="276" y="512" width="43" height="22" rx="7"/><text class="mode-text" x="297" y="523">J+A</text>
+-  <text class="backend-line" x="170" y="558">TVM</text><rect class="mode-pill-jit" x="276" y="542" width="43" height="22" rx="7"/><text class="mode-text" x="297" y="553">JIT*</text><text class="backend-line" x="170" y="590">Eager fallback</text>
++  <rect class="card" x="157" y="407" width="174" height="248" rx="15"/><text class="card-head" x="244" y="438">Intel</text>
++  <text class="backend-line" x="170" y="468">Inductor</text><rect class="mode-pill-jit" x="281" y="452" width="38" height="22" rx="7"/><text class="mode-text" x="300" y="463">JIT</text>
++  <text class="backend-line" x="170" y="498">AOTInductor</text><rect class="mode-pill-aot" x="281" y="482" width="38" height="22" rx="7"/><text class="mode-text" x="300" y="493">AOT</text>
++  <text class="backend-line" x="170" y="528">OpenVINO</text><rect class="mode-pill-aot" x="281" y="512" width="38" height="22" rx="7"/><text class="mode-text" x="300" y="523">AOT</text>
++  <text class="backend-line" x="170" y="558">ONNX Runtime</text><rect class="mode-pill-both" x="276" y="542" width="43" height="22" rx="7"/><text class="mode-text" x="297" y="553">J+A</text>
++  <text class="backend-line" x="170" y="588">TVM</text><rect class="mode-pill-jit" x="276" y="572" width="43" height="22" rx="7"/><text class="mode-text" x="297" y="583">JIT*</text><text class="backend-line" x="170" y="620">Eager fallback</text>
+ 
+-  <rect class="card" x="344" y="407" width="174" height="248" rx="15"/><text class="card-head" x="431" y="438">NVIDIA GPU</text>
++  <rect class="card" x="344" y="407" width="174" height="248" rx="15"/><text class="card-head" x="431" y="438">NVIDIA</text>
+@@ -130,1 +119,1 @@
+-  <rect class="card" x="531" y="407" width="174" height="248" rx="15"/><text class="card-head" x="618" y="438">AMD CPU / GPU</text>
++  <rect class="card" x="531" y="407" width="174" height="248" rx="15"/><text class="card-head" x="618" y="438">AMD</text>
+@@ -136,6 +125,5 @@
+-  <rect class="card" x="718" y="407" width="174" height="248" rx="15"/><text class="card-head" x="805" y="438">Intel CPU / GPU / NPU</text>
+-  <text class="backend-line" x="732" y="468">Inductor</text><rect class="mode-pill-jit" x="842" y="452" width="38" height="22" rx="7"/><text class="mode-text" x="861" y="463">JIT</text>
+-  <text class="backend-line" x="732" y="498">AOTInductor</text><rect class="mode-pill-aot" x="842" y="482" width="38" height="22" rx="7"/><text class="mode-text" x="861" y="493">AOT</text>
+-  <text class="backend-line" x="732" y="528">OpenVINO</text><rect class="mode-pill-aot" x="842" y="512" width="38" height="22" rx="7"/><text class="mode-text" x="861" y="523">AOT</text>
+-  <text class="backend-line" x="732" y="558">ONNX Runtime</text><rect class="mode-pill-both" x="837" y="542" width="43" height="22" rx="7"/><text class="mode-text" x="858" y="553">J+A</text>
+-  <text class="backend-line" x="732" y="588">TVM</text><rect class="mode-pill-jit" x="837" y="572" width="43" height="22" rx="7"/><text class="mode-text" x="858" y="583">JIT*</text><text class="backend-line" x="732" y="620">Eager fallback</text>
++  <rect class="card" x="718" y="407" width="174" height="248" rx="15"/><text class="card-head" x="805" y="438">Arm</text>
++  <text class="backend-line" x="732" y="468">Inductor</text><rect class="mode-pill-jit" x="842" y="452" width="38" height="22" rx="7"/><text class="mode-text" x="861" y="463">JIT</text>
++  <text class="backend-line" x="732" y="498">AOTInductor</text><rect class="mode-pill-aot" x="842" y="482" width="38" height="22" rx="7"/><text class="mode-text" x="861" y="493">AOT</text>
++  <text class="backend-line" x="732" y="528">ONNX Runtime</text><rect class="mode-pill-both" x="837" y="512" width="43" height="22" rx="7"/><text class="mode-text" x="858" y="523">J+A</text>
++  <text class="backend-line" x="732" y="558">TVM</text><rect class="mode-pill-jit" x="837" y="542" width="43" height="22" rx="7"/><text class="mode-text" x="858" y="553">JIT*</text><text class="backend-line" x="732" y="590">Eager fallback</text>
+@@ -164,4 +152,2 @@
+-  <rect class="export-card" x="157" y="669" width="174" height="66" rx="13"/><text class="export-name" x="244" y="694">Portable CPU export</text><text class="export-note" x="244" y="718">LiteRT · ExecuTorch · ARM64/x86</text>
+-  <rect class="export-card" x="344" y="669" width="174" height="66" rx="13"/><text class="export-name" x="431" y="694">IREE Vulkan</text><text class="export-note" x="431" y="718">AOT export only · SPIR-V</text>
+-  <rect class="export-card" x="531" y="669" width="174" height="66" rx="13"/><text class="export-name" x="618" y="694">IREE Vulkan</text><text class="export-note" x="618" y="718">AOT export only · SPIR-V</text>
+-  <rect class="export-card" x="718" y="669" width="174" height="66" rx="13"/><text class="export-name" x="805" y="694">IREE Vulkan</text><text class="export-note" x="805" y="718">AOT export only · SPIR-V</text>
++  <rect class="export-card" x="157" y="669" width="548" height="66" rx="13"/><text class="export-name" x="431" y="694">IREE Vulkan</text><text class="export-note" x="431" y="718">shared AOT export path · NVIDIA / AMD / Intel · SPIR-V</text>
++  <rect class="export-card" x="718" y="669" width="174" height="66" rx="13"/><text class="export-name" x="805" y="694">Portable CPU export</text><text class="export-note" x="805" y="718">LiteRT · ExecuTorch · ARM64/x86</text>
+@@ -181,4 +167,4 @@
+-  <rect class="card" x="157" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="244" y="847"><tspan x="244">C++ / OpenMP</tspan><tspan x="244" dy="27">LLVM · XNNPACK</tspan><tspan x="244" dy="27">ONNX Runtime</tspan></text>
++  <rect class="card" x="157" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="244" y="840"><tspan x="244">CPU: C++ · ORT</tspan><tspan x="244" dy="27">GPU: XPU · Vulkan</tspan><tspan x="244" dy="27">NPU: OpenVINO</tspan><tspan x="244" dy="27">SPIR-V</tspan></text>
+   <rect class="card" x="344" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="431" y="840"><tspan x="431">Triton / CUDA</tspan><tspan x="431" dy="27">cuBLAS / cuDNN</tspan><tspan x="431" dy="27">TensorRT · ORT</tspan><tspan x="431" dy="27">Vulkan / SPIR-V</tspan></text>
+   <rect class="card" x="531" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="618" y="840"><tspan x="618">CPU: C++ · ZenTorch</tspan><tspan x="618" dy="27">GPU: Triton · ROCm</tspan><tspan x="618" dy="27">AMDGPU</tspan><tspan x="618" dy="27">Vulkan / SPIR-V</tspan></text>
+-  <rect class="card" x="718" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="805" y="840"><tspan x="805">CPU: C++ · ORT</tspan><tspan x="805" dy="27">GPU: XPU · Vulkan</tspan><tspan x="805" dy="27">NPU: OpenVINO</tspan><tspan x="805" dy="27">SPIR-V</tspan></text>
++  <rect class="card" x="718" y="814" width="174" height="142" rx="15"/><text class="runtime-copy" x="805" y="847"><tspan x="805">C++ / OpenMP</tspan><tspan x="805" dy="27">LLVM · XNNPACK</tspan><tspan x="805" dy="27">ONNX Runtime</tspan></text>
+@@ -194,4 +180,4 @@
+-  <rect class="card" x="157" y="1028" width="174" height="148" rx="15"/><use href="#logo-arm" class="arm" x="206" y="1050" width="76" height="42"/><text class="hardware-title" x="244" y="1123">Arm CPU</text><text class="hardware-sub" x="244" y="1149">ARM64</text>
++  <rect class="card" x="157" y="1028" width="174" height="148" rx="15"/><use href="#logo-intel" class="intel" x="206" y="1050" width="76" height="42"/><text class="hardware-title" x="244" y="1123">Intel</text><text class="hardware-sub" x="244" y="1149">CPU · GPU · NPU</text>
+   <rect class="card" x="344" y="1028" width="174" height="148" rx="15"/><use href="#logo-nvidia" class="nvidia" x="409" y="1048" width="44" height="44"/><text class="hardware-title" x="431" y="1123">NVIDIA GPU</text><text class="hardware-sub" x="431" y="1149">CUDA</text>
+   <rect class="card" x="531" y="1028" width="174" height="148" rx="15"/><use href="#logo-amd" class="amd" x="580" y="1050" width="76" height="42"/><text class="hardware-title" x="618" y="1123">AMD CPU + GPU</text><text class="hardware-sub" x="618" y="1149">x86-64 · ROCm · Vulkan</text>
+-  <rect class="card" x="718" y="1028" width="174" height="148" rx="15"/><use href="#logo-intel" class="intel" x="767" y="1050" width="76" height="42"/><text class="hardware-title" x="805" y="1123">Intel CPU + GPU + NPU</text><text class="hardware-sub" x="805" y="1149">x86-64 · XPU · AI Boost</text>
++  <rect class="card" x="718" y="1028" width="174" height="148" rx="15"/><use href="#logo-arm" class="arm" x="767" y="1050" width="76" height="42"/><text class="hardware-title" x="805" y="1123">Arm CPU</text><text class="hardware-sub" x="805" y="1149">ARM64</text>
