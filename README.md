@@ -33,6 +33,12 @@ the model.
 > with CI coverage. See [limitations](docs/limitations.md) before depending on
 > it.
 
+![LM7 backend and hardware map](docs/assets/backend-hardware-map.svg)
+
+The top lane stays in the current Python process; the bottom lane writes a
+versioned artifact for later loading or deployment. See the full
+[backend table](#backends) for selection priority, requirements, and caveats.
+
 ## Why
 
 **LM7 writes no kernels and no compiler of its own.** Every vendor already ships

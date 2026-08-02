@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1160" viewBox="0 0 1280 1160" role="img" aria-labelledby="title desc">
+  <title id="title">LM7 backend and hardware map</title>
+  <desc id="desc">A PyTorch model enters LM7, which either compiles it into a local callable or exports a deployable artifact. Hardware cards list the LM7 backends available for each target.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --canvas: #f8fafc;
+        --ink: #172033;
+        --muted: #5b6475;
+        --line: #cbd5e1;
+        --card: #ffffff;
+        --compile: #2563eb;
+        --compile-soft: #e8f0ff;
+        --export: #7c3aed;
+        --export-soft: #f1eafe;
+        --chip: #eef2f7;
+        --chip-ink: #263247;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas: #0d1117;
+          --ink: #f0f3f6;
+          --muted: #a7b0bf;
+          --line: #3b4657;
+          --card: #161b22;
+          --compile: #77a7ff;
+          --compile-soft: #15294d;
+          --export: #c39bff;
+          --export-soft: #2e1c47;
+          --chip: #252c36;
+          --chip-ink: #e6edf3;
+        }
+      }
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--ink); }
+      .canvas { fill: var(--canvas); }
+      .source { fill: var(--card); stroke: var(--line); stroke-width: 2; }
+      .lm7 { fill: var(--ink); }
+      .lm7-label { fill: var(--canvas); font-size: 28px; font-weight: 750; letter-spacing: 0.4px; }
+      .source-title { font-size: 24px; font-weight: 700; }
+      .source-subtitle { font-size: 16px; fill: var(--muted); }
+      .flow { stroke: var(--line); stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .arrow-head { fill: var(--line); }
+      .panel { fill: var(--card); stroke: var(--line); stroke-width: 2; }
+      .compile-panel { stroke: var(--compile); }
+      .export-panel { stroke: var(--export); }
+      .panel-rule.compile { stroke: var(--compile); }
+      .panel-rule.export { stroke: var(--export); }
+      .panel-rule { stroke-width: 5; }
+      .panel-title { font-size: 25px; font-weight: 760; }
+      .panel-subtitle { font-size: 17px; fill: var(--muted); }
+      .compile-label { fill: var(--compile); }
+      .export-label { fill: var(--export); }
+      .target-card { fill: var(--canvas); stroke: var(--line); stroke-width: 1.5; }
+      .target-title { font-size: 19px; font-weight: 720; }
+      .target-subtitle { font-size: 14px; fill: var(--muted); }
+      .chip { fill: var(--chip); }
+      .chip-text { fill: var(--chip-ink); font-size: 14px; font-weight: 650; text-anchor: middle; dominant-baseline: middle; }
+      .format { font-size: 14px; fill: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .note { font-size: 15px; fill: var(--muted); }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="1280" height="1160" rx="24"/>
+
+  <g filter="url(#shadow)">
+    <rect class="source" x="230" y="34" width="330" height="84" rx="18"/>
+    <text class="source-title" x="395" y="72" text-anchor="middle">PyTorch model</text>
+    <text class="source-subtitle" x="395" y="97" text-anchor="middle">nn.Module or exported program</text>
+
+    <rect class="lm7" x="720" y="34" width="330" height="84" rx="18"/>
+    <text class="lm7-label" x="885" y="84" text-anchor="middle">LM7</text>
+  </g>
+  <path class="flow" d="M 560 76 H 704"/>
+  <path class="flow" d="M 885 118 V 144"/>
+
+  <!-- Local/JIT path -->
+  <rect class="panel compile-panel" x="40" y="160" width="1200" height="385" rx="22" filter="url(#shadow)"/>
+  <line class="panel-rule compile" x1="62" y1="160" x2="190" y2="160"/>
+  <text class="panel-title compile-label" x="72" y="202">lm7.compile()</text>
+  <text class="panel-subtitle" x="260" y="202">lazy JIT → a normal callable in the current process</text>
+
+  <rect class="target-card" x="72" y="230" width="350" height="125" rx="16"/>
+  <text class="target-title" x="94" y="259">CPU</text>
+  <text class="target-subtitle" x="94" y="281">x86-64 and ARM64</text>
+  <rect class="chip" x="94" y="296" width="82" height="28" rx="14"/><text class="chip-text" x="135" y="310">Inductor</text>
+  <rect class="chip" x="184" y="296" width="90" height="28" rx="14"/><text class="chip-text" x="229" y="310">OpenVINO</text>
+  <rect class="chip" x="282" y="296" width="116" height="28" rx="14"/><text class="chip-text" x="340" y="310">ONNX Runtime</text>
+  <text class="target-subtitle" x="94" y="343">Also: TVM · ZenTorch · eager</text>
+
+  <rect class="target-card" x="465" y="230" width="350" height="125" rx="16"/>
+  <text class="target-title" x="487" y="259">NVIDIA GPU</text>
+  <text class="target-subtitle" x="487" y="281">CUDA</text>
+  <rect class="chip" x="487" y="296" width="82" height="28" rx="14"/><text class="chip-text" x="528" y="310">Inductor</text>
+  <rect class="chip" x="577" y="296" width="88" height="28" rx="14"/><text class="chip-text" x="621" y="310">TensorRT</text>
+  <rect class="chip" x="673" y="296" width="116" height="28" rx="14"/><text class="chip-text" x="731" y="310">ONNX Runtime</text>
+  <text class="target-subtitle" x="487" y="343">Fallback: eager</text>
+
+  <rect class="target-card" x="858" y="230" width="350" height="125" rx="16"/>
+  <text class="target-title" x="880" y="259">AMD · Intel · Apple GPU</text>
+  <text class="target-subtitle" x="880" y="281">ROCm · XPU · Metal/MPS</text>
+  <rect class="chip" x="880" y="296" width="82" height="28" rx="14"/><text class="chip-text" x="921" y="310">Inductor</text>
+  <rect class="chip" x="970" y="296" width="62" height="28" rx="14"/><text class="chip-text" x="1001" y="310">eager</text>
+
+  <rect class="target-card" x="72" y="378" width="350" height="125" rx="16"/>
+  <text class="target-title" x="94" y="407">Intel NPU</text>
+  <text class="target-subtitle" x="94" y="429">Core Ultra AI Boost</text>
+  <rect class="chip" x="94" y="444" width="90" height="28" rx="14"/><text class="chip-text" x="139" y="458">OpenVINO</text>
+
+  <rect class="target-card" x="465" y="378" width="350" height="125" rx="16"/>
+  <text class="target-title" x="487" y="407">Google TPU</text>
+  <text class="target-subtitle" x="487" y="429">OpenXLA runtime</text>
+  <rect class="chip" x="487" y="444" width="86" height="28" rx="14"/><text class="chip-text" x="530" y="458">OpenXLA</text>
+  <rect class="chip" x="581" y="444" width="62" height="28" rx="14"/><text class="chip-text" x="612" y="458">eager</text>
+
+  <rect class="target-card" x="858" y="378" width="350" height="125" rx="16"/>
+  <text class="target-title" x="880" y="407">Tenstorrent</text>
+  <text class="target-subtitle" x="880" y="429">Wormhole and Blackhole</text>
+  <rect class="chip" x="880" y="444" width="108" height="28" rx="14"/><text class="chip-text" x="934" y="458">Tenstorrent</text>
+  <rect class="chip" x="996" y="444" width="62" height="28" rx="14"/><text class="chip-text" x="1027" y="458">eager</text>
+
+  <!-- Export/AOT path -->
+  <rect class="panel export-panel" x="40" y="580" width="1200" height="520" rx="22" filter="url(#shadow)"/>
+  <line class="panel-rule export" x1="62" y1="580" x2="190" y2="580"/>
+  <text class="panel-title export-label" x="72" y="622">lm7.export()</text>
+  <text class="panel-subtitle" x="254" y="622">AOT → a versioned LM7 artifact with a deployable payload</text>
+
+  <rect class="target-card" x="72" y="652" width="260" height="132" rx="16"/>
+  <text class="target-title" x="92" y="681">Portable PyTorch</text>
+  <text class="target-subtitle" x="92" y="703">capture without lowering</text>
+  <rect class="chip" x="92" y="718" width="108" height="28" rx="14"/><text class="chip-text" x="146" y="732">torch.export</text>
+  <text class="format" x="92" y="769">.pt2</text>
+
+  <rect class="target-card" x="364" y="652" width="260" height="132" rx="16"/>
+  <text class="target-title" x="384" y="681">CPU · Apple · NVIDIA</text>
+  <text class="target-subtitle" x="384" y="703">native ahead-of-time package</text>
+  <rect class="chip" x="384" y="718" width="116" height="28" rx="14"/><text class="chip-text" x="442" y="732">AOTInductor</text>
+  <text class="format" x="384" y="769">.pt2</text>
+
+  <rect class="target-card" x="656" y="652" width="260" height="132" rx="16"/>
+  <text class="target-title" x="676" y="681">CPU · NVIDIA</text>
+  <text class="target-subtitle" x="676" y="703">portable graph + runtime</text>
+  <rect class="chip" x="676" y="718" width="116" height="28" rx="14"/><text class="chip-text" x="734" y="732">ONNX Runtime</text>
+  <text class="format" x="676" y="769">.onnx</text>
+
+  <rect class="target-card" x="948" y="652" width="260" height="132" rx="16"/>
+  <text class="target-title" x="968" y="681">Intel CPU · NPU</text>
+  <text class="target-subtitle" x="968" y="703">OpenVINO runtime</text>
+  <rect class="chip" x="968" y="718" width="90" height="28" rx="14"/><text class="chip-text" x="1013" y="732">OpenVINO</text>
+  <text class="format" x="968" y="769">.xml + .bin</text>
+
+  <rect class="target-card" x="72" y="806" width="260" height="132" rx="16"/>
+  <text class="target-title" x="92" y="835">NVIDIA GPU</text>
+  <text class="target-subtitle" x="92" y="857">TensorRT engine package</text>
+  <rect class="chip" x="92" y="872" width="88" height="28" rx="14"/><text class="chip-text" x="136" y="886">TensorRT</text>
+  <text class="format" x="92" y="923">.trt.pt2</text>
+
+  <rect class="target-card" x="364" y="806" width="260" height="132" rx="16"/>
+  <text class="target-title" x="384" y="835">Vulkan GPU</text>
+  <text class="target-subtitle" x="384" y="857">NVIDIA · AMD · Intel</text>
+  <rect class="chip" x="384" y="872" width="104" height="28" rx="14"/><text class="chip-text" x="436" y="886">IREE Vulkan</text>
+  <text class="format" x="384" y="923">.vmfb / SPIR-V</text>
+
+  <rect class="target-card" x="656" y="806" width="260" height="132" rx="16"/>
+  <text class="target-title" x="676" y="835">Mobile · embedded CPU</text>
+  <text class="target-subtitle" x="676" y="857">Android · iOS · edge</text>
+  <rect class="chip" x="676" y="872" width="70" height="28" rx="14"/><text class="chip-text" x="711" y="886">LiteRT</text>
+  <rect class="chip" x="754" y="872" width="104" height="28" rx="14"/><text class="chip-text" x="806" y="886">ExecuTorch</text>
+  <text class="format" x="676" y="923">.tflite / .pte</text>
+
+  <rect class="target-card" x="948" y="806" width="260" height="132" rx="16"/>
+  <text class="target-title" x="968" y="835">Qualcomm HTP</text>
+  <text class="target-subtitle" x="968" y="857">Snapdragon 8 Elite</text>
+  <rect class="chip" x="968" y="872" width="58" height="28" rx="14"/><text class="chip-text" x="997" y="886">QNN</text>
+  <text class="format" x="968" y="923">.pte</text>
+
+  <rect class="target-card" x="364" y="960" width="552" height="108" rx="16"/>
+  <text class="target-title" x="384" y="990">PJRT runtimes</text>
+  <text class="target-subtitle" x="384" y="1013">target selected when the artifact is loaded</text>
+  <rect class="chip" x="724" y="979" width="94" height="28" rx="14"/><text class="chip-text" x="771" y="993">StableHLO</text>
+  <text class="format" x="724" y="1038">.stablehlo.zip</text>
+
+  <text class="note" x="640" y="1133" text-anchor="middle">Backend availability still depends on the matching compiler, runtime, drivers, and model/operator coverage.</text>
+</svg>
