@@ -50,8 +50,22 @@ the situation either way.
 
 ```bash
 lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target cpu --backend executorch --quantize int8
+  --target cpu --backend executorch
 ```
+
+> [!WARNING]
+> Adding `--quantize int8` to the command above **fails**, and so does the
+> equivalent Python call, for any causal LM:
+>
+> ```
+> ExecuTorch INT8 prepare/calibrate/convert failed: tensors used as indices
+> must be long, int, byte or bool tensors.
+> ```
+>
+> `_quantize_int8` applies `XNNPACKQuantizer().set_global(...)`, so
+> `prepare_pt2e` observes every input including `input_ids` and converts it to
+> float, which the embedding lookup rejects. INT8 export currently works only
+> for models whose inputs are all floating point.
 
 ```python
 artifact = lm7.export(
@@ -93,10 +107,12 @@ for the Python API, pass a representative tensor batch. One sample is a useful
 first export, not an accuracy guarantee. Compare the quantized model on the
 dataset and shapes that matter before shipping it.
 
-INT8 currently requires a fixed capture shape. LM7 also fails the export when
-the quantizer inserts no quantized operators, instead of silently producing a
-float artifact. Unsupported operators can remain as portable ExecuTorch
-kernels, so inspect both `quantized_ops` and delegate coverage in the manifest.
+INT8 currently requires a fixed capture shape, and it requires floating-point
+inputs — see the warning above; a causal LM's integer `input_ids` fail the
+quantizer outright. LM7 also fails the export when the quantizer inserts no
+quantized operators, instead of silently producing a float artifact.
+Unsupported operators can remain as portable ExecuTorch kernels, so inspect
+both `quantized_ops` and delegate coverage in the manifest.
 
 The `.pte` is the deployable, quantized payload. LM7 still retains the original
 float `exported_program.pt2` for reproducibility and debugging, so total `.lm7`
@@ -143,6 +159,11 @@ An `x86-64` Linux host, ExecuTorch 1.3.1, PyTorch 2.12.1+cpu, float32.
 | Delegate coverage | whole graph | 155 of 1970 calls |
 | Max logit difference vs eager | 1e-4 | 1.4e-4 |
 | Steady latency | 0.14 ms | 106 ms |
+
+The host latency here is effectively single-threaded. Running the same SmolLM2
+`.pte` on a phone measured 13.75 ms across eight cores and ~110 ms pinned to
+one, against ~132 ms on this host — so the host figure describes one core, not
+the machine. See [android-device-testing.md](android-device-testing.md).
 
 Three things to take from the SmolLM2 column.
 
