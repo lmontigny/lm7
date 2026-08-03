@@ -79,18 +79,45 @@ SUPER (sm89), still with PyTorch absent:
 | Plugin | Compile | Weight load | First call | Median | Top-1 |
 | --- | --- | --- | --- | --- | --- |
 | CPU | 1.14 s | 581 ms | 646 ms | 77.9 ms | match |
-| CUDA (sm89) | 8.79 s | 3.20 s | 310 ms | **6.0 ms** | match |
+| CUDA (sm89) | 8.79 s | 3.20 s | 310 ms | 6.0 ms | match |
+| **TPU v6e** | 2.02 s | 188 ms | 11.6 ms | **1.32 ms** | match |
 
-One file, two vendors, 13x faster on the GPU with no re-export. That is the
-property no other LM7 artifact has: an AOTInductor package is built for one
-device, and OpenVINO IR is Intel-only.
+One file, three vendors, 59x faster on the TPU than on the CPU and 4.5x faster
+than on an RTX 4070 SUPER, with no re-export. That is the property no other LM7
+artifact has: an AOTInductor package is built for one device, and OpenVINO IR is
+Intel-only.
 
-Numerics differ by device. Against the same CPU eager reference the CPU plugin
-agreed to 9.2e-05 and the CUDA plugin to 2.3e-02 on fp32 logits, with the
-predicted token identical. Forcing `NVIDIA_TF32_OVERRIDE=0` did not close the
-gap (2.5e-02), so this is ordinary cross-device fp32 reassociation rather than
-TF32 — the same order as the 0.059 fp16 difference recorded for the NVIDIA
-AOTInductor path. Validate per target before trusting an artifact.
+The TPU row closes what was previously this document's largest open question —
+it was written as "ROCm, TPU, and Neuron are not testable on this host, so their
+support is inferred from PJRT's design rather than observed." TPU is now
+observed. The artifact was not rebuilt or adapted; the same
+`functions/forward.bytecode` exported on an x86 host went to a third vendor's
+plugin in a process where `importlib.util.find_spec("torch")` returns `None`,
+and still predicted `' Paris'`.
+
+Numerics differ by device, and the spread is wider than two vendors suggested.
+Against the same CPU eager reference, on fp32 logits:
+
+| Plugin | Max abs difference | Top-1 |
+| --- | --- | --- |
+| CPU | 9.2e-05 | match |
+| CUDA (sm89) | 2.3e-02 | match |
+| TPU v6e | **2.4e-01** | match |
+
+Forcing `NVIDIA_TF32_OVERRIDE=0` did not close the CUDA gap (2.5e-02), so that
+one is ordinary cross-device fp32 reassociation rather than TF32 — the same
+order as the 0.059 fp16 difference recorded for the NVIDIA AOTInductor path.
+
+The TPU's 0.24 is a different thing and much larger: XLA lowers fp32 matmuls to
+bf16 passes on TPU by default, and 30 transformer layers compound it. It is not
+a property of the artifact — the identical figure appears whether the payload is
+executed through raw PJRT with no PyTorch present or through torch_xla's own
+runtime as a control. The predicted token survives it here, but 0.24 on logits
+is close enough to mattering that it should not be assumed for another model.
+See [Google TPU](google-tpu.md) for the precision control and what it costs.
+
+**Validate per target before trusting an artifact.** Three vendors now, three
+different answers to "how close is close".
 
 ## Artifact layout
 
@@ -160,9 +187,18 @@ None of these are fatal, but all of them are real:
   PyTorch/XLA at run time but still depends on it at build time, so it does not
   escape the dependency that motivated the evaluation. Path 2 (torch-mlir) is
   the way out and is unevaluated.
-- **Two plugins were exercised, not five.** CPU and CUDA are measured above;
-  ROCm, TPU, and Neuron are not testable on this host, so their support is
-  inferred from PJRT's design rather than observed.
+- **Three plugins were exercised, not five.** CPU, CUDA and TPU are measured
+  above. ROCm and Neuron remain inferred from PJRT's design rather than
+  observed. The TPU measurement also cost nothing in portability work — the
+  artifact was exported on x86 and handed over unmodified — which is the
+  strongest evidence so far that the remaining two are a matter of access
+  rather than of engineering.
+- **The TPU round trip cannot run under pytest.** A TPU chip is claimed by one
+  process, and merely probing the runtime claims it, so
+  `test_payload_runs_without_pytorch` cannot spawn a PJRT child on a TPU host
+  and skips there with that reason. The coverage comes from
+  `benchmarks/stablehlo_pjrt.py`, whose export and execute stages are separate
+  processes by design.
 - **Dynamic shapes were not exercised.** The metadata carries a `dynamic_dims`
   field per input and `torch_xla.stablehlo` exposes
   `exported_program_has_symbolic_input_shape`, so the bounded sequence dimension
@@ -196,6 +232,24 @@ PJRT_DEVICE=CPU .venv-pjrt/bin/python benchmarks/stablehlo_pjrt.py execute \
 
 The `execute` stage fails loudly if PyTorch is importable, so a passing run is
 evidence about the artifact rather than about a convenient environment.
+
+On a TPU VM the same two-environment split applies, with `jax[tpu]` as the
+torch-free client. Nothing about the artifact or the commands changes — only
+which plugin `get_backend()` finds:
+
+```bash
+uv venv --python 3.12 .venv-pjrt-tpu       # deliberately no torch
+uv pip install --python .venv-pjrt-tpu/bin/python "jax[tpu]" numpy
+
+.venv-tpu/bin/python benchmarks/stablehlo_pjrt.py export \
+  --model smollm2 --output artifacts/stablehlo/smollm2
+
+.venv-pjrt-tpu/bin/python benchmarks/stablehlo_pjrt.py execute \
+  artifacts/stablehlo/smollm2
+```
+
+The export and execute stages must not overlap: both want the TPU, and only one
+process can have it.
 
 ## Status
 
