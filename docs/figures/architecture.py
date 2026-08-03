@@ -49,24 +49,36 @@ BADGE = {
 
 
 @dataclass(frozen=True)
-class Column:
-    """One vendor: what it is called, what compiles for it, and what it runs on."""
+class Silicon:
+    """One piece of silicon in a vendor column, and what compiles for it."""
 
-    title: str
-    logo: str
+    label: str
+    detail: str
+    target: str
     backends: list[tuple[str, str]]
-    plain: list[str]
+
+
+@dataclass(frozen=True)
+class Column:
+    """One vendor: its silicon, what lowers beneath it, and what it runs on."""
+
+    vendor: str
+    tint: str
+    logo: str
+    silicon: list[Silicon]
     runtime: list[str]
     hardware: str
     hardware_detail: str
-    export: tuple[str, str] | None = None
     extra: list[str] = field(default_factory=list)
 
 
 # --- content ---------------------------------------------------------------
 #
-# Backend names are the strings you pass to `backend=`, not prettified labels,
-# because the point of the figure is to tell you what to type.
+# Grouped by silicon rather than by vendor alone, because the target string is
+# what selects it and a vendor has more than one. Intel's CPU is `cpu` like
+# everyone else's; `intel` is the GPU and `intel:npu` the NPU.
+#
+# Backend names are the strings you pass to `backend=`, not prettified labels.
 #
 # JIT   compiles in this process
 # AOT   writes a reloadable .lm7 artifact
@@ -75,105 +87,171 @@ class Column:
 
 COLUMNS = [
     Column(
-        title="Arm CPU",
-        logo="arm",
-        backends=[
-            ("inductor", "JIT"),
-            ("aot_inductor", "AOT"),
-            ("onnxruntime", "J+A"),
-            ("tvm", "JIT*"),
-        ],
-        plain=["eager fallback"],
-        runtime=["C++ / OpenMP", "XNNPACK · NEON", "KleidiAI"],
-        hardware="Arm CPU",
-        hardware_detail="ARM64 servers · SBCs · phones",
-        export=("portable CPU export", "litert · executorch · ARM64/x86"),
-    ),
-    Column(
-        title="NVIDIA GPU",
-        logo="nvidia",
-        backends=[
-            ("inductor", "JIT"),
-            ("aot_inductor", "AOT"),
-            ("tensorrt", "J+A"),
-            ("onnxruntime", "J+A"),
-        ],
-        plain=["eager fallback"],
-        runtime=["Triton / CUDA", "cuBLAS · cuDNN", "TensorRT engine"],
-        hardware="NVIDIA GPU",
-        hardware_detail="CUDA · Ampere and newer",
-        export=("iree_vulkan", "export only · SPIR-V"),
-    ),
-    Column(
-        title="AMD CPU / GPU",
-        logo="amd",
-        backends=[
-            ("inductor", "JIT"),
-            ("aot_inductor", "AOT"),
-            ("onnxruntime", "J+A"),
-            ("zentorch", "JIT*"),
-        ],
-        plain=["eager fallback"],
-        runtime=["CPU: C++ · ZenDNN", "GPU: Triton · ROCm", "HIP · AMDGPU"],
-        hardware="AMD CPU + GPU",
-        hardware_detail="x86-64 · ROCm · Vulkan",
-        export=("iree_vulkan", "export only · SPIR-V"),
-    ),
-    Column(
-        title="Intel CPU / GPU / NPU",
+        vendor="Intel",
+        tint="#0071c5",
         logo="intel",
-        backends=[
-            ("inductor", "JIT"),
-            ("aot_inductor", "AOT"),
-            ("openvino", "J+A"),
-            ("onnxruntime", "J+A"),
-            ("tvm", "JIT*"),
+        silicon=[
+            Silicon(
+                "CPU",
+                "x86-64",
+                "cpu",
+                [
+                    ("inductor", "JIT"),
+                    ("aot_inductor", "AOT"),
+                    ("openvino", "J+A"),
+                    ("onnxruntime", "J+A"),
+                    ("tvm", "JIT*"),
+                ],
+            ),
+            Silicon("GPU", "Arc / XPU", "intel", [("inductor", "JIT"), ("iree_vulkan", "EXPORT")]),
+            Silicon("NPU", "Core Ultra AI Boost", "intel:npu", [("openvino", "J+A")]),
         ],
-        plain=["eager fallback"],
-        runtime=["CPU: C++ · oneDNN", "GPU: SYCL / XPU", "NPU: OpenVINO"],
+        runtime=["CPU: C++ · oneDNN", "GPU: SYCL / XPU", "NPU: OpenVINO", "Vulkan / SPIR-V"],
         hardware="Intel CPU + GPU + NPU",
         hardware_detail="x86-64 · Arc · AI Boost",
-        export=("iree_vulkan", "export only · SPIR-V"),
     ),
     Column(
-        title="Apple CPU / GPU",
+        vendor="NVIDIA",
+        tint="#76b900",
+        logo="nvidia",
+        silicon=[
+            Silicon(
+                "GPU",
+                "Ampere and newer",
+                "nvidia",
+                [
+                    ("inductor", "JIT"),
+                    ("aot_inductor", "AOT"),
+                    ("tensorrt", "J+A"),
+                    ("onnxruntime", "J+A"),
+                    ("iree_vulkan", "EXPORT"),
+                ],
+            ),
+        ],
+        runtime=["Triton / CUDA", "cuBLAS · cuDNN", "TensorRT engine", "Vulkan / SPIR-V"],
+        hardware="NVIDIA GPU",
+        hardware_detail="CUDA · Ampere and newer",
+    ),
+    Column(
+        vendor="AMD",
+        tint="#ed1c24",
+        logo="amd",
+        silicon=[
+            Silicon(
+                "CPU",
+                "x86-64 · EPYC / Ryzen",
+                "cpu",
+                [
+                    ("inductor", "JIT"),
+                    ("aot_inductor", "AOT"),
+                    ("zentorch", "JIT*"),
+                    ("onnxruntime", "J+A"),
+                    ("tvm", "JIT*"),
+                ],
+            ),
+            Silicon("GPU", "ROCm", "amd", [("inductor", "JIT"), ("iree_vulkan", "EXPORT")]),
+        ],
+        runtime=["CPU: C++ · ZenDNN", "GPU: Triton · ROCm", "HIP · AMDGPU", "Vulkan / SPIR-V"],
+        hardware="AMD CPU + GPU",
+        hardware_detail="x86-64 · ROCm · Vulkan",
+    ),
+    Column(
+        vendor="Arm",
+        tint="#0091bd",
+        logo="arm",
+        silicon=[
+            Silicon(
+                "CPU",
+                "ARM64 servers / SBCs",
+                "cpu",
+                [
+                    ("inductor", "JIT"),
+                    ("aot_inductor", "AOT"),
+                    ("onnxruntime", "J+A"),
+                    ("tvm", "JIT*"),
+                    ("executorch", "EXPORT"),
+                    ("litert", "EXPORT"),
+                ],
+            ),
+        ],
+        runtime=["C++ / OpenMP", "XNNPACK · NEON", "KleidiAI", "ExecuTorch runtime"],
+        hardware="Arm CPU",
+        hardware_detail="ARM64 servers · SBCs · phones",
+    ),
+    Column(
+        vendor="Apple",
+        tint="#6e6e73",
         logo="apple",
-        backends=[("inductor", "JIT"), ("aot_inductor", "AOT")],
-        plain=["eager fallback"],
+        silicon=[
+            Silicon(
+                "CPU",
+                "Apple silicon · ARM64",
+                "cpu",
+                [
+                    ("inductor", "JIT"),
+                    ("aot_inductor", "AOT"),
+                    ("onnxruntime", "J+A"),
+                    ("tvm", "JIT*"),
+                ],
+            ),
+            Silicon("GPU", "Metal", "apple", [("inductor", "JIT"), ("aot_inductor", "AOT")]),
+        ],
         runtime=["CPU: C++ / OpenMP", "GPU: Metal / MPS"],
         hardware="Apple CPU + GPU",
         hardware_detail="Apple silicon · Metal",
     ),
     Column(
-        title="Google TPU",
+        vendor="Google",
+        tint="#4285f4",
         logo="google",
-        backends=[("openxla", "JIT")],
-        plain=["eager fallback"],
+        silicon=[
+            Silicon(
+                "TPU",
+                "via PyTorch/XLA",
+                "tpu",
+                [("openxla", "JIT"), ("stablehlo", "EXPORT")],
+            ),
+        ],
         runtime=["PJRT plugin", "OpenXLA", "StableHLO"],
         hardware="Google TPU",
         hardware_detail="via PyTorch/XLA",
-        export=("stablehlo", "export only · portable PJRT"),
     ),
     Column(
-        title="Tenstorrent",
+        vendor="Tenstorrent",
+        tint="#7c68ee",
         logo="",
-        backends=[("tenstorrent", "JIT")],
-        plain=["eager fallback"],
+        silicon=[
+            Silicon(
+                "Accelerator card",
+                "Wormhole · Blackhole",
+                "tenstorrent",
+                [("tenstorrent", "JIT"), ("stablehlo", "EXPORT")],
+            ),
+        ],
         runtime=["tt-xla · PJRT", "tt-mlir", "tt-metal"],
         hardware="Tenstorrent",
         hardware_detail="Wormhole · Blackhole",
-        export=("stablehlo", "export only · portable PJRT"),
     ),
     Column(
-        title="Qualcomm",
+        vendor="Qualcomm",
+        tint="#3253dc",
         logo="qualcomm",
-        backends=[("qnn", "EXPORT"), ("executorch", "EXPORT")],
-        plain=["export only"],
-        runtime=["ExecuTorch runtime", "QNN SDK", "Hexagon HTP"],
-        hardware="Snapdragon HTP",
-        hardware_detail="SM8750 · v79",
+        silicon=[
+            Silicon("Snapdragon HTP", "8 Elite · v79", "qualcomm:sm8750", [("qnn", "EXPORT")]),
+            Silicon(
+                "Snapdragon CPU",
+                "ARM64 phones",
+                "cpu",
+                [("executorch", "EXPORT"), ("litert", "EXPORT")],
+            ),
+        ],
+        runtime=["ExecuTorch runtime", "QNN SDK", "Hexagon HTP", "XNNPACK · LiteRT"],
+        hardware="Snapdragon",
+        hardware_detail="HTP NPU · ARM64 CPU",
     ),
 ]
+
+
 # Brand marks from Simple Icons (https://simpleicons.org). The path data is
 # CC0; the marks themselves remain the trademarks of their respective owners.
 # Each entry is the brand colour and a 24x24 viewBox path.
@@ -353,10 +431,15 @@ def render() -> str:
     width = RAIL_W + grid_w + PAD
     x0 = RAIL_W
 
-    rows = max(len(c.backends) + len(c.plain) for c in COLUMNS)
-    backend_card_h = 46 + rows * 25 + 14
-    export_h = 50
-    backend_band_h = backend_card_h + 16 + export_h + 30
+    def card_h(si: Silicon) -> int:
+        return 56 + len(si.backends) * 25 + 14
+
+    head_h = 34
+    backend_band_h = (
+        head_h
+        + max(sum(card_h(si) for si in c.silicon) + 12 * (len(c.silicon) - 1) for c in COLUMNS)
+        + 34
+    )
     runtime_h = max(len(c.runtime) for c in COLUMNS) * 24 + 34
     hw_h = 128
 
@@ -459,31 +542,28 @@ def render() -> str:
     )
     for i, col in enumerate(COLUMNS):
         cx = x0 + i * (COL_W + COL_GAP)
-        s.append(_rect(cx, y_backend, COL_W, backend_card_h, CARD, CARD_LINE, r=12))
-        s.append(_t(cx + COL_W / 2, y_backend + 30, col.title, 15, INK, "800", "middle"))
-        by = y_backend + 62
-        for name, kind in col.backends:
-            s.append(_t(cx + 16, by, name, 13, INK))
-            pill, _ = _pill(cx + COL_W - 14, by, kind)
-            s.append(pill)
-            by += 25
-        for line in col.plain:
-            s.append(_t(cx + 16, by, line, 13, MUTED))
-            by += 25
-        if col.export:
-            ey = y_backend + backend_card_h + 16
-            s.append(_rect(cx, ey, COL_W, export_h, CARD, CARD_LINE, r=10))
-            s.append(_t(cx + COL_W / 2, ey + 21, col.export[0], 13, INK, "700", "middle"))
-            s.append(_t(cx + COL_W / 2, ey + 38, col.export[1], 11, MUTED, anchor="middle"))
-    s.append(
-        _t(
-            x0 - 12,
-            y_backend + backend_band_h - 8,
-            "*  explicit opt-in; automatic selection never picks it",
-            11.5,
-            MUTED,
-        )
-    )
+        # Name the column, or the cards below read as anonymous CPU/GPU/NPU boxes.
+        if col.logo:
+            s.append(_logo(col.logo, cx + 2, y_backend - 2, 17))
+            s.append(_t(cx + 25, y_backend + 12, col.vendor, 15, col.tint, "800"))
+        else:
+            s.append(_t(cx + 2, y_backend + 12, col.vendor, 15, col.tint, "800"))
+        s.append(_rect(cx, y_backend + 20, COL_W, 2, col.tint, r=0))
+
+        y = y_backend + head_h
+        for si in col.silicon:
+            h = card_h(si)
+            s.append(_rect(cx, y, COL_W, h, CARD, CARD_LINE, r=12))
+            s.append(_t(cx + 14, y + 24, si.label, 15, INK, "800"))
+            s.append(_t(cx + 14, y + 40, si.detail, 11, MUTED))
+            s.append(_t(cx + 14, y + 58, f"target={si.target}", 11, col.tint, "700"))
+            by = y + 82
+            for name, kind in si.backends:
+                s.append(_t(cx + 14, by, name, 13, INK))
+                pill, _ = _pill(cx + COL_W - 14, by, kind)
+                s.append(pill)
+                by += 25
+            y += h + 12
 
     # 04 lowering and runtime
     rail(y_runtime - 12, "04", "LOWERING", "+ RUNTIME")
@@ -521,7 +601,8 @@ def render() -> str:
         _t(
             x0 + grid_w / 2,
             height - 20,
-            "J+A = compiles in-process and writes an artifact.  "
+            "J+A = compiles in-process and also writes an artifact.  "
+            "* = explicit opt-in, never chosen automatically.  "
             "Backend priority and artifact formats are in the table below.",
             13,
             MUTED,
