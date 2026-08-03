@@ -47,27 +47,59 @@ jobs:
           gcc --version | head -1 || true
           cc -march=native -Q --help=target 2>/dev/null | grep -m1 -- '-march=' || true
 
+      # `command -v` returns non-zero for every version that is absent, and the
+      # loop's last iteration decides the step's exit code -- which on the first
+      # run failed the step and skipped everything after it.
       - name: Report the Python that is present
         run: |
           echo "default: $(python3 --version)"
           for v in 3.10 3.11 3.12 3.13; do
-            command -v "python$v" >/dev/null && echo "found python$v: $(python$v --version)"
+            if command -v "python$v" >/dev/null 2>&1; then
+              echo "found python$v: $(python$v --version)"
+            else
+              echo "no python$v"
+            fi
           done
+          exit 0
 
-      # The only riscv64 PyTorch on PyPI is a third-party 2.3.0a1 build tagged
-      # cp311-none-any. The tag is wrong -- the wheel carries real riscv64
-      # binaries -- but it does mean CPython 3.11 specifically.
-      - name: Try to install a riscv64 PyTorch
+      # The runner ships CPython 3.12 only, and the one riscv64 wheel on PyPI is
+      # tagged cp311, so this tries the distro package first and falls back to
+      # fetching a 3.11 interpreter. Each strategy reports rather than aborting,
+      # because which one works is the thing being measured.
+      - name: Look for a usable riscv64 PyTorch
         id: torch
         continue-on-error: true
         run: |
-          set -x
-          PY=python3.11
-          command -v $PY >/dev/null || PY=python3
-          $PY -m venv /tmp/rv
-          /tmp/rv/bin/python -m pip install -q --upgrade pip
-          /tmp/rv/bin/python -m pip install "pytorch-riscv64==2.3.0a1"
-          /tmp/rv/bin/python -c "import torch, platform; print('torch', torch.__version__, 'on', platform.machine())"
+          set +e
+          echo "===== is torch packaged for riscv64? ====="
+          apt-cache policy python3-torch 2>&1 | head -5
+
+          echo "===== strategy 1: distro package ====="
+          sudo apt-get update -qq && sudo apt-get install -y python3-torch >/dev/null 2>&1
+          if python3 -c "import torch; print('torch', torch.__version__)" 2>/dev/null; then
+            echo "PYBIN=python3" >> "$GITHUB_ENV"
+            echo "strategy=distro" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "strategy 1 failed"
+
+          echo "===== strategy 2: CPython 3.11 via uv, then pytorch-riscv64 ====="
+          curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+          export PATH="$HOME/.local/bin:$PATH"
+          if uv python install 3.11 2>&1 | tail -2; then
+            uv venv --python 3.11 /tmp/rv 2>&1 | tail -2
+            /tmp/rv/bin/python -m pip install -q "pytorch-riscv64==2.3.0a1" 2>&1 | tail -3
+            if /tmp/rv/bin/python -c "import torch; print('torch', torch.__version__)" 2>/dev/null; then
+              echo "PYBIN=/tmp/rv/bin/python" >> "$GITHUB_ENV"
+              echo "strategy=uv-3.11" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "strategy 2 failed"
+
+          echo "no riscv64 PyTorch could be installed"
+          echo "strategy=none" >> "$GITHUB_OUTPUT"
+          exit 1
 
       # --no-deps matters: LM7 declares torch>=2.0, and letting pip resolve that
       # on riscv64 finds no wheel and starts a source build that will not finish.
@@ -75,16 +107,16 @@ jobs:
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          /tmp/rv/bin/python -m pip install -q --no-deps -e .
-          /tmp/rv/bin/python -m pip install -q pytest
-          /tmp/rv/bin/python -c "import lm7; print('lm7 imported')"
+          "$PYBIN" -m pip install --no-deps -e .
+          "$PYBIN" -m pip install -q pytest
+          "$PYBIN" -c "import lm7; print('lm7 imported')"
 
       # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
       - name: Does LM7 detect this machine
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          /tmp/rv/bin/python - <<'PY'
+          "$PYBIN" - <<'PY'
           import platform
           from lm7.targets import parse_target
           spec = parse_target("cpu:riscv64")
@@ -99,13 +131,13 @@ jobs:
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          /tmp/rv/bin/python -m pytest tests/test_targets.py tests/test_planner.py -q
+          "$PYBIN" -m pytest tests/test_targets.py tests/test_planner.py -q
 
       - name: Try compiling something
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          /tmp/rv/bin/python - <<'PY'
+          "$PYBIN" - <<'PY'
           import torch, lm7
           model = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)).eval()
           x = torch.randn(2, 8)
