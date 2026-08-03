@@ -110,10 +110,19 @@ Two constraints come with it, both from XLA rather than from LM7:
   that silence on: if a computation has already run, the option raises
   `CompilationError` instead of being quietly ignored.
 
-Cost, on this host, is compile time rather than steady-state latency. For the
-1024-4096-1024 MLP at batch 8, first call went 2.3 s -> 3.1 s -> 4.7 s across the
-three settings while median latency stayed within noise of 0.2 ms. Do not read
-that as "precision is free": see the caveat in the benchmark section.
+It costs both compile time and latency, and how much latency depends on whether
+the workload is large enough to be doing MXU work. The 1024-4096-1024 MLP in
+fp32:
+
+| Batch | `default` | `high` | `highest` | Compile, `default` -> `highest` |
+| --- | --- | --- | --- | --- |
+| 8 | 0.335 ms | 0.357 ms | 0.356 ms | 2.3 s -> 4.7 s |
+| 4096 | 2.360 ms | 2.557 ms | 2.713 ms | 3.4 s -> 15.2 s |
+
+At batch 8 it is roughly free, because the chip is waiting on memory rather than
+saturating the MXU, and extra passes cost nothing you were not already paying
+for. At batch 4096 `highest` is **15% slower**, which is the number to plan
+with. Compile time is the harsher end: 4.5x for `highest` at batch 4096.
 
 ## One process per chip
 
@@ -179,19 +188,40 @@ On the validated host, bf16, batch 8, this 1024-4096-1024 MLP:
 
 | Backend | First call | Median | p95 | Throughput |
 | --- | --- | --- | --- | --- |
-| `eager` | 9.25 ms | 0.153 ms | 0.191 ms | 52,180 samples/s |
-| `openxla` | 597.93 ms | 0.198 ms | 0.220 ms | 40,355 samples/s |
+| `eager` | 9.15 ms | 0.176 ms | 0.212 ms | 45,496 samples/s |
+| `openxla` | 606.47 ms | 0.347 ms | 0.388 ms | 23,075 samples/s |
 
-**Eager XLA wins, and `openxla` costs 598 ms of compile to lose.** That is the
-honest result on this workload rather than a defect: PyTorch/XLA's lazy-tensor
-eager path already traces and fuses the whole graph, so on a 3-layer MLP there
-is little for dynamo to add and its guards and graph breaks cost something. It
-says nothing about a real model, which this harness cannot yet build — see the
-`--model` work in the benchmark issue list.
+**Eager XLA wins, and `openxla` spends 606 ms of compile to lose by 2x.** That is
+the honest result on this workload rather than a defect: PyTorch/XLA's
+lazy-tensor eager path already traces and fuses the whole graph, so on a 3-layer
+MLP there is little for dynamo to add and its guards cost something. It says
+nothing about a real model — where the ranking inverts, see below.
 
-**A caveat on every latency number above.** At batch 4096 this MLP runs at
-roughly 43 TFLOP/s, far below what a v6e sustains, so the measurement is bound
-by dispatch and host-device transfer rather than by the MXU. That is why the
-matmul precision looks free at steady state. A compute-bound, device-resident
-workload would be needed before claiming what precision actually costs, and none
-of these numbers should be quoted as TPU throughput.
+### Timing an accelerator that answers early
+
+These numbers are the second set measured. The first were wrong, in a way worth
+recording because it is not specific to LM7.
+
+`torch_xla.sync(wait=True)` flushes the pending lazy graph and returns when the
+work has been *dispatched*. Its `wait` flag is about the lazy-tensor barrier, not
+about the chip finishing. Timing `(a @ w) @ w` with the result held live, so
+nothing is eliminated as dead code:
+
+| Batch | With `sync(wait=True)` only | Implied |
+| --- | --- | --- |
+| 512 | 0.098 ms | 352 TFLOP/s |
+| 4096 | 0.079 ms | 3,463 TFLOP/s |
+| 16384 | 0.076 ms | 14,538 TFLOP/s |
+
+Constant time for 32x the work, on a chip that peaks near 918 TFLOP/s bf16. The
+barrier that actually blocks is `torch_xla.core.xla_model.wait_device_ops()`:
+
+| Batch | With `wait_device_ops()` | Implied |
+| --- | --- | --- |
+| 512 | 0.269 ms | 128 TFLOP/s |
+| 4096 | 0.573 ms | 480 TFLOP/s |
+| 16384 | 1.723 ms | 638 TFLOP/s |
+
+638 TFLOP/s is about 69% of peak for a large matmul, which is a believable place
+to land. `lm7.benchmark` now issues both. If you time TPU work yourself, issue
+both — a benchmark loop that only calls `sync()` measures your host.
