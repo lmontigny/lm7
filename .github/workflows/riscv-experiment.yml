@@ -75,25 +75,22 @@ jobs:
           apt-cache policy python3-torch 2>&1 | head -5
 
           echo "===== strategy 1: distro package ====="
-          sudo apt-get update -qq && sudo apt-get install -y python3-torch >/dev/null 2>&1
-          if python3 -c "import torch; print('torch', torch.__version__)" 2>/dev/null; then
-            echo "PYBIN=python3" >> "$GITHUB_ENV"
-            echo "strategy=distro" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "strategy 1 failed"
+          echo "(empty output above means python3-torch is not packaged for riscv64)"
 
           echo "===== strategy 2: CPython 3.11 via uv, then pytorch-riscv64 ====="
           curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
           export PATH="$HOME/.local/bin:$PATH"
-          if uv python install 3.11 2>&1 | tail -2; then
-            uv venv --python 3.11 /tmp/rv 2>&1 | tail -2
-            /tmp/rv/bin/python -m pip install -q "pytorch-riscv64==2.3.0a1" 2>&1 | tail -3
-            if /tmp/rv/bin/python -c "import torch; print('torch', torch.__version__)" 2>/dev/null; then
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv python install 3.11 2>&1 | tail -2
+          uv venv --python 3.11 /tmp/rv 2>&1 | tail -1
+          # `uv venv` does not install pip, so reach for uv's own installer.
+          uv pip install --python /tmp/rv/bin/python "pytorch-riscv64==2.3.0a1" 2>&1 | tail -4
+          if /tmp/rv/bin/python -c "import torch; print('torch', torch.__version__)" 2>&1 | tail -3; then
+            /tmp/rv/bin/python -c "import torch" 2>/dev/null && {
               echo "PYBIN=/tmp/rv/bin/python" >> "$GITHUB_ENV"
               echo "strategy=uv-3.11" >> "$GITHUB_OUTPUT"
               exit 0
-            fi
+            }
           fi
           echo "strategy 2 failed"
 
@@ -107,8 +104,8 @@ jobs:
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          "$PYBIN" -m pip install --no-deps -e .
-          "$PYBIN" -m pip install -q pytest
+          uv pip install --python "$PYBIN" --no-deps -e .
+          uv pip install --python "$PYBIN" pytest
           "$PYBIN" -c "import lm7; print('lm7 imported')"
 
       # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
