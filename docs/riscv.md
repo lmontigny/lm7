@@ -1,11 +1,12 @@
 # RISC-V evaluation
 
 > [!NOTE]
-> **Verdict: nothing to build in LM7 yet, and the reason is upstream.**
-> `cpu:riscv64` already parses, round-trips, and would be detected on a RISC-V
-> host — LM7's target model is architecture-agnostic by construction. What does
-> not exist is a PyTorch that installs there. Until that lands, a RISC-V
-> "backend" or "target" in LM7 would be a string with nothing behind it.
+> **Measured: LM7 runs on RISC-V today, unchanged.** On a RISE RISC-V runner,
+> LM7 imports, detects the machine as `cpu:riscv64`, passes its target and
+> planner tests, and executes a model — falling back to eager when Inductor
+> cannot compile, with output identical to eager. What does *not* work is any
+> claim about speed: the only rentable silicon exposes no vector extension at
+> all. See [what actually happened](#measured-on-a-rise-risc-v-runner).
 
 ## Why this is not a new target
 
@@ -74,6 +75,67 @@ server-and-edge cores, and Andes reports RVV plus high-bandwidth vector memory
 taking DGEMM to 92.8% of theoretical peak. Boards are buyable, which is more than
 could be said for the [Hexagon plan](qualcomm-hexagon.md) when it was written.
 
+## Measured on a RISE RISC-V runner
+
+[RISE](https://riseproject.dev/) gives open source projects free native RISC-V
+GitHub Actions runners (`runs-on: ubuntu-24.04-riscv`), with no approval step.
+`.github/workflows/riscv-experiment.yml` is the job; it is non-blocking, because
+its purpose is to record what breaks rather than to gate pull requests.
+
+The machine, as it describes itself:
+
+```
+uname -m         riscv64
+isa              rv64imafdcsu
+cores / memory   4 / 15 GiB
+gcc              13.3.0
+python           3.12.3 only
+```
+
+**The ISA string carries no `v`.** This is stronger than "the wrong RVV
+version": the hardware advertises no vector extension to the kernel at all, and
+LM7's own detection agrees, reporting `isa_extensions: ()`. Whatever
+`XTHeadVector` the C910 implements is not reachable here, so this runner cannot
+produce a vector measurement even with T-Head's own toolchain.
+
+What LM7 did on it, with no changes to LM7:
+
+```
+parsed:            cpu:riscv64 | architecture: riscv64
+platform.machine() riscv64
+detected targets   DeviceInfo(target=cpu:riscv64, name='riscv64',
+                   total_memory_bytes=16486711296, logical_cores=4)
+tests              23 passed  (test_targets.py, test_planner.py)
+compile            Backend inductor compilation failed for cpu:riscv64;
+                   falling back to PyTorch eager
+                   max abs diff vs eager: 0.0
+```
+
+Three things follow. Detection works by construction, as argued above, and now
+by measurement. Inductor does not compile on this PyTorch — expected, since the
+only available build is 2.3.0a1 — and the **eager fallback caught it and
+returned a correct answer**, on an architecture nobody designed that fallback
+for. And the planner is architecture-agnostic in practice, not just on paper.
+
+### Getting a PyTorch onto it
+
+Neither obvious route worked, and both failures are worth recording:
+
+- `python3-torch` is **not packaged for riscv64** on Ubuntu 24.04; `apt-cache
+  policy` returns nothing.
+- The runner ships **CPython 3.12 only**, and the one riscv64 wheel on PyPI is
+  tagged `cp311`. `uv python install 3.11` fetches a riscv64 build in about nine
+  seconds, which solves it.
+- `uv venv` does not install `pip`, so the wheel has to go in with `uv pip`.
+- The wheel then imports only after `libopenblas0` and `libgomp1` are installed
+  from the distro. It was never `auditwheel`-repaired — the same reason it
+  carries a `none-any` tag on an archive full of riscv64 binaries — so its
+  shared libraries are not bundled.
+
+That last point sharpens the warning above. `pytorch-riscv64` is not merely old;
+it is an unrepaired build that raises `ImportError: libopenblas.so.0` on any
+machine without OpenBLAS already present.
+
 ## What LM7's backends would do on RISC-V
 
 Assuming a working PyTorch, in the order LM7 would try them:
@@ -121,12 +183,17 @@ In order, and none of it is LM7 work:
 
 ## Recommendation
 
-Do not add a target, a backend, or a preflight. `cpu:riscv64` already parses,
-and a preflight that refuses it would have to be removed again the moment
-PyTorch ships.
+Still add nothing. The measurement supports the original reasoning rather than
+overturning it: `cpu:riscv64` resolves, the planner plans, and the eager
+fallback covers the case where no backend can compile. A preflight refusing the
+architecture would now be refusing something demonstrably working.
+
+Keep the experimental job. It costs nothing, it is non-blocking, and it converts
+every future claim in this document into something checkable — the eager
+fallback result above is exactly the kind of thing that would otherwise be
+assumed.
 
 Revisit when [pytorch#171659](https://github.com/pytorch/pytorch/issues/171659)
-reaches its first phase. At that point the cheap first step is a QEMU
-user-mode run of the existing CPU tests, which measures whether LM7 needs any
-change at all — the honest expectation being that it does not, because Arm
-needed none.
+reaches its first phase. Two things would change the picture: a current PyTorch,
+which is what stands between this and a working `inductor`, and RVV 1.0 silicon
+to rent, which is what stands between this and any statement about speed.

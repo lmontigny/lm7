@@ -127,7 +127,7 @@ jobs:
           print("platform.machine():", platform.machine())
           import lm7
           print("detected targets:", [str(t) for t in lm7.detect_targets()])
-          print("backends:", [b.name for b in lm7.backends()])
+          print("backends:", sorted(b["name"] for b in lm7.backends()))
           PY
 
       - name: Run the target and planner tests
