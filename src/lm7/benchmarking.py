@@ -110,7 +110,15 @@ def _synchronize(target: TargetSpec | None) -> None:
         torch.mps.synchronize()
     elif target.vendor in {"tpu", "tenstorrent"}:
         torch_xla = importlib.import_module("torch_xla")
+        # sync() flushes the pending graph but returns once the work is
+        # *dispatched*, not once the device has run it -- despite wait=True,
+        # which is about the lazy-tensor barrier rather than the accelerator. On
+        # its own it reported a constant 0.08 ms for a matmul whose cost grows
+        # 32x across batch sizes, i.e. 14,538 TFLOP/s on a chip that peaks near
+        # 918. wait_device_ops() is the barrier that actually blocks.
         torch_xla.sync(wait=True)
+        xla_model = importlib.import_module("torch_xla.core.xla_model")
+        xla_model.wait_device_ops()
 
 
 def _peak_memory(target: TargetSpec) -> int | None:
