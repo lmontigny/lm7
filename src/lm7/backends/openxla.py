@@ -11,6 +11,41 @@ import torch
 from ..errors import CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
+# XLA lowers an fp32 matmul to bf16 passes on TPU unless told otherwise, so a
+# model that matches CPU eager to 1e-6 on every other target matches it to only
+# ~1e-3 here. The three settings are XLA's own; measured on a TPU v6e, a bare
+# matmul lands at 3.6e-02, 1.6e-04, and 1.9e-06 respectively. LM7 surfaces the
+# choice rather than picking for the caller -- see docs/google-tpu.md.
+MAT_MUL_PRECISIONS = ("default", "high", "highest")
+
+
+def _apply_mat_mul_precision(value: Any) -> str:
+    """Set XLA's fp32 matmul precision, refusing to do so once it is too late.
+
+    ``set_mat_mul_precision`` is process-global and XLA reads it while lowering
+    the first computation. Calling it afterwards still updates what
+    ``get_mat_mul_precision`` reports while the numerics stay on the old
+    setting, so the getter cannot be used to confirm the change took. A silent
+    no-op is the one outcome LM7 must not produce for an accuracy control, so
+    this checks whether anything has executed yet and says so instead.
+    """
+    if value not in MAT_MUL_PRECISIONS:
+        raise CompilationError(
+            f"Unsupported mat_mul_precision {value!r}; expected one of "
+            f"{', '.join(MAT_MUL_PRECISIONS)}."
+        )
+    metrics = importlib.import_module("torch_xla.debug.metrics")
+    if metrics.counter_value("ExecuteComputation") is not None:
+        raise CompilationError(
+            f"mat_mul_precision={value!r} cannot be applied: this process has already "
+            "run an XLA computation, and the setting is process-global and read once. "
+            "Set it before the first compile or execution in the process, for example "
+            "by making this the first lm7.compile call."
+        )
+    backends = importlib.import_module("torch_xla.backends")
+    backends.set_mat_mul_precision(value)
+    return str(value)
+
 
 class OpenXLABackend:
     """Optional Google TPU backend powered by PyTorch/XLA and OpenXLA."""
@@ -78,10 +113,16 @@ class OpenXLABackend:
     ) -> Artifact:
         try:
             torch_xla = importlib.import_module("torch_xla")
+            options = dict(request.options)
+            # Applied before anything touches the device, because the first XLA
+            # computation freezes it for the rest of the process.
+            precision = options.pop("mat_mul_precision", None)
+            applied_precision = (
+                _apply_mat_mul_precision(precision) if precision is not None else None
+            )
             device = torch_xla.device(request.target.ordinal)
             if request.transfers == "automatic":
                 request.model.to(device)
-            options = dict(request.options)
             dynamic = options.pop("dynamic", None)
             compile_kwargs: dict[str, Any] = {"backend": "openxla"}
             if dynamic is not None:
@@ -103,8 +144,12 @@ class OpenXLABackend:
                 metadata={
                     "compiled": True,
                     "torch_xla_version": getattr(torch_xla, "__version__", None),
+                    "mat_mul_precision": applied_precision,
                 },
             )
+        except CompilationError:
+            # Already a precise diagnosis; re-wrapping would bury it.
+            raise
         except Exception as exc:
             raise CompilationError(
                 f"Compilation stage failed for target {request.target} with backend openxla: "

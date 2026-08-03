@@ -116,6 +116,79 @@ def test_compile_uses_registered_openxla_backend(monkeypatch):
     assert artifact.metadata["torch_xla_version"] == "test-version"
 
 
+def _precision_fakes(monkeypatch, *, executed: int | None, calls: dict):
+    """Install name-aware torch_xla fakes covering the matmul-precision modules.
+
+    ``executed`` is what the ExecuteComputation counter reports: None before any
+    XLA computation has run, an int afterwards.
+    """
+    torch_xla = SimpleNamespace(
+        __version__="test-version",
+        device=lambda index: torch.device("cpu"),
+        sync=lambda **kwargs: calls.update(sync=kwargs),
+    )
+    modules = {
+        "torch_xla": torch_xla,
+        "torch_xla.debug.metrics": SimpleNamespace(counter_value=lambda name: executed),
+        "torch_xla.backends": SimpleNamespace(
+            set_mat_mul_precision=lambda value: calls.update(precision=value)
+        ),
+    }
+    monkeypatch.setattr(
+        openxla_backend_module.importlib,
+        "import_module",
+        lambda name: modules[name],
+    )
+    monkeypatch.setattr(torch, "compile", lambda model, **kwargs: model)
+    return calls
+
+
+def test_compile_applies_mat_mul_precision(monkeypatch):
+    calls: dict = {}
+    _precision_fakes(monkeypatch, executed=None, calls=calls)
+
+    artifact = OpenXLABackend().compile(
+        request(options={"mat_mul_precision": "highest"}), (torch.ones(2),), {}
+    )
+
+    assert calls["precision"] == "highest"
+    assert artifact.metadata["mat_mul_precision"] == "highest"
+
+
+def test_compile_does_not_forward_mat_mul_precision_to_torch_compile(monkeypatch):
+    calls: dict = {}
+    _precision_fakes(monkeypatch, executed=None, calls=calls)
+    monkeypatch.setattr(
+        torch, "compile", lambda model, **kwargs: calls.update(compile=kwargs) or model
+    )
+
+    OpenXLABackend().compile(request(options={"mat_mul_precision": "high"}), (torch.ones(2),), {})
+
+    # It is an LM7-level control, not something torch.compile understands.
+    assert calls["compile"] == {"backend": "openxla"}
+
+
+def test_compile_rejects_unknown_mat_mul_precision(monkeypatch):
+    _precision_fakes(monkeypatch, executed=None, calls={})
+
+    with pytest.raises(CompilationError, match="Unsupported mat_mul_precision"):
+        OpenXLABackend().compile(
+            request(options={"mat_mul_precision": "float32"}), (torch.ones(2),), {}
+        )
+
+
+def test_compile_refuses_mat_mul_precision_after_a_computation_ran(monkeypatch):
+    # The setter would silently do nothing here, so LM7 has to raise instead.
+    calls: dict = {}
+    _precision_fakes(monkeypatch, executed=1, calls=calls)
+
+    with pytest.raises(CompilationError, match="already"):
+        OpenXLABackend().compile(
+            request(options={"mat_mul_precision": "highest"}), (torch.ones(2),), {}
+        )
+    assert "precision" not in calls
+
+
 def test_compile_wraps_backend_failure(monkeypatch):
     backend = OpenXLABackend()
     torch_xla = SimpleNamespace(

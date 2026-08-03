@@ -217,6 +217,10 @@ TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is the
 only candidate. `eager` wins only when nothing else supports the target, or when
 a compile fails and `fallback="warn"` takes over.
 
+On TPU, `options={"mat_mul_precision": "highest"}` turns off XLA's default bf16
+matmul passes, worth about four orders of magnitude of fp32 accuracy — see
+[Google TPU](docs/google-tpu.md).
+
 Tune TorchInductor through `options={"compile_mode": "max-autotune"}`. The
 `max-autotune` preset enables CUDA Graphs on GPU; use
 `max-autotune-no-cudagraphs` when the workload is dynamic or stateful. See the
