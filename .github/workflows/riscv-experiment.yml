@@ -1,0 +1,117 @@
+# Does LM7 run on RISC-V? docs/riscv.md argues it should by construction --
+# `cpu:riscv64` already parses and detection reads platform.machine() -- but the
+# claim had never been executed on the architecture.
+#
+# RISE provides free native RISC-V GitHub Actions runners to open source
+# projects, so the claim is now testable. This job is deliberately staged and
+# non-blocking: each step reports what it found and the job never fails the
+# pull request, because the point is to learn what breaks, not to gate on it.
+#
+# What it cannot answer: performance. RISE runs on Scaleway EM-RV1, whose T-Head
+# C910 implements the draft RVV 0.7.1 rather than ratified RVV 1.0, so upstream
+# LLVM and GCC will not auto-vectorise there at all.
+name: RISC-V experiment
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/riscv-experiment.yml"
+      - "docs/riscv.md"
+
+permissions:
+  contents: read
+
+jobs:
+  riscv64:
+    name: RISC-V (experimental, non-blocking)
+    runs-on: ubuntu-24.04-riscv
+    continue-on-error: true
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Establishes the ground truth docs/riscv.md is written against: which
+      # extensions this silicon actually reports, and whether "v" appears at all.
+      - name: Describe the machine
+        run: |
+          echo "## machine"
+          uname -m -r
+          echo "## isa"
+          grep -m4 -E 'isa|uarch|mvendorid|marchid' /proc/cpuinfo || true
+          echo "## cores / memory"
+          nproc
+          free -h | head -2
+          echo "## toolchain"
+          gcc --version | head -1 || true
+          cc -march=native -Q --help=target 2>/dev/null | grep -m1 -- '-march=' || true
+
+      - name: Report the Python that is present
+        run: |
+          echo "default: $(python3 --version)"
+          for v in 3.10 3.11 3.12 3.13; do
+            command -v "python$v" >/dev/null && echo "found python$v: $(python$v --version)"
+          done
+
+      # The only riscv64 PyTorch on PyPI is a third-party 2.3.0a1 build tagged
+      # cp311-none-any. The tag is wrong -- the wheel carries real riscv64
+      # binaries -- but it does mean CPython 3.11 specifically.
+      - name: Try to install a riscv64 PyTorch
+        id: torch
+        continue-on-error: true
+        run: |
+          set -x
+          PY=python3.11
+          command -v $PY >/dev/null || PY=python3
+          $PY -m venv /tmp/rv
+          /tmp/rv/bin/python -m pip install -q --upgrade pip
+          /tmp/rv/bin/python -m pip install "pytorch-riscv64==2.3.0a1"
+          /tmp/rv/bin/python -c "import torch, platform; print('torch', torch.__version__, 'on', platform.machine())"
+
+      # --no-deps matters: LM7 declares torch>=2.0, and letting pip resolve that
+      # on riscv64 finds no wheel and starts a source build that will not finish.
+      - name: Install LM7 without letting pip resolve torch
+        if: steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          /tmp/rv/bin/python -m pip install -q --no-deps -e .
+          /tmp/rv/bin/python -m pip install -q pytest
+          /tmp/rv/bin/python -c "import lm7; print('lm7 imported')"
+
+      # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
+      - name: Does LM7 detect this machine
+        if: steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          /tmp/rv/bin/python - <<'PY'
+          import platform
+          from lm7.targets import parse_target
+          spec = parse_target("cpu:riscv64")
+          print("parsed:", spec, "| architecture:", spec.architecture)
+          print("platform.machine():", platform.machine())
+          import lm7
+          print("detected targets:", [str(t) for t in lm7.detect_targets()])
+          print("backends:", [b.name for b in lm7.backends()])
+          PY
+
+      - name: Run the target and planner tests
+        if: steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          /tmp/rv/bin/python -m pytest tests/test_targets.py tests/test_planner.py -q
+
+      - name: Try compiling something
+        if: steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          /tmp/rv/bin/python - <<'PY'
+          import torch, lm7
+          model = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)).eval()
+          x = torch.randn(2, 8)
+          with torch.no_grad():
+              expected = model(x)
+          compiled = lm7.compile(model, target="cpu")
+          got = compiled(x)
+          print("max abs diff vs eager:", float((got - expected).abs().max()))
+          PY
