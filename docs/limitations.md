@@ -93,7 +93,7 @@ coverage is CPU.
 | `litert` | Export-only, CPU/XNNPACK only. Static tensor-only inputs, returns CPU tensors. LiteRT Torch caps PyTorch below 2.13, so conversion belongs in a separate environment. Packages generic `.tflite` graphs, not LiteRT-LM conversations. See the [guide](litert.md). |
 | `executorch` | Export-only and XNNPACK-only, so the edge story is CPU. Phone NPUs (Core ML, Qualcomm QNN, MediaTek, Exynos) are not wired up; artifacts are static-shape; optional calibrated XNNPACK INT8 PTQ is available; validation is host x86-64, not a physical phone. LM7 writes the `.pte` — deploying it into an app is ExecuTorch's tooling. See the [guide](executorch.md). |
 | `stablehlo` | Export-only. Needs PyTorch/XLA to lower, which pins PyTorch to a matching pair. |
-| `openxla` | TPU only, single process. SPMD sharding, multi-host execution, and persistent XLA executables are not implemented. |
+| `openxla` | TPU only, single process. SPMD sharding, multi-host execution, and persistent XLA executables are not implemented, and the validated host has one chip, so the sharding paths are untested rather than merely absent. fp32 matmuls run at bf16 precision unless `options={"mat_mul_precision": ...}` says otherwise; on the one workload measured it was slower than eager XLA. See the [guide](google-tpu.md). |
 | `tenstorrent` | JIT-only and single-card: the compiled flatbuffer does not outlive the process, multi-card sharding is not exposed, and coverage is bounded by what tt-mlir lowers. See the [guide](tenstorrent.md). |
 | `tvm` | CPU-only, JIT-only, positional-inputs-only, and **far slower than Inductor** — registered for reachability, not speed. Autotuning, CUDA, and artifacts are not wired up. See the [guide](tvm.md). |
 | `zentorch` | AMD's ZenDNN extension: CPU-only, JIT-only, explicit-only, x86-64 Linux wheels only, and ABI-tied to a matching PyTorch. Measured on one Zen 3 EPYC at FP32 it beat Inductor on one workload, tied on another, and lost on a third; BF16, INT8, and newer EPYC generations are unmeasured. No quantization path and no artifact. See the [guide](zentorch.md). |
@@ -104,6 +104,10 @@ coverage is CPU.
   manually, or not at all.
 - AMD ROCm, Apple Silicon (MPS), Intel XPU, OpenXLA TPU, and Tenstorrent are
   initial single-process integrations **without physical-hardware CI**.
+- OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU
+  v6e — which the rest of that list has not. It still has no CI, and one chip
+  cannot say anything about multi-chip behaviour. See
+  [Google TPU](google-tpu.md).
 - NVIDIA Inductor, quantization, and TensorRT have been exercised on a local Ada
   (`sm89`) GPU only.
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
