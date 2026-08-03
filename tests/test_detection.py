@@ -74,6 +74,56 @@ def test_tpu_detection_uses_pjrt_runtime(monkeypatch):
     assert devices[0].capabilities["pjrt_device"] == "TPU"
 
 
+def test_tpu_detection_names_the_generation_when_attributes_do_not(monkeypatch):
+    """A real TPU VM reports no device_kind, so the generation comes from the env.
+
+    Measured on a v6e: global_runtime_device_attributes() returns coords,
+    core_on_chip, num_cores and a name, and nothing that identifies the silicon.
+    Without the fallback every TPU detects as an unqualified "Google TPU".
+    """
+    detection_module = importlib.import_module("lm7.detection")
+    torch_xla = SimpleNamespace(__version__="2.9-test")
+    runtime = SimpleNamespace(
+        device_type=lambda: "TPU",
+        addressable_device_count=lambda: 1,
+        global_runtime_device_attributes=lambda: [
+            {"coords": [0, 0, 0], "core_on_chip": 0, "num_cores": 1, "name": "TPU:0"}
+        ],
+    )
+    tpu_env = SimpleNamespace(
+        get_tpu_env=lambda: {"ACCELERATOR_TYPE": "v6e-1", "CONSUMER_PROJECT_ID": "secret"}
+    )
+    modules = {
+        "torch_xla": torch_xla,
+        "torch_xla.runtime": runtime,
+        "torch_xla._internal.tpu": tpu_env,
+    }
+    monkeypatch.setattr(
+        detection_module.importlib.util, "find_spec", lambda name: SimpleNamespace()
+    )
+    monkeypatch.setattr(detection_module.importlib, "import_module", lambda name: modules[name])
+
+    devices = _detect_tpu_targets()
+
+    assert devices[0].name == "Google TPU v6e-1"
+    assert devices[0].target.model == "v6e"
+    assert devices[0].capabilities["accelerator_type"] == "v6e-1"
+    # The same mapping carries project and node identifiers; only the one key
+    # is read, so none of the rest can leak into a device record.
+    assert "secret" not in repr(devices[0].capabilities)
+
+
+def test_tpu_accelerator_type_is_absent_without_the_private_module(monkeypatch):
+    detection_module = importlib.import_module("lm7.detection")
+    monkeypatch.setattr(
+        detection_module.importlib,
+        "import_module",
+        lambda name: (_ for _ in ()).throw(ImportError("no torch_xla")),
+    )
+
+    assert detection_module.tpu_accelerator_type() is None
+
+
 def test_tpu_detection_ignores_xla_cpu_runtime(monkeypatch):
     detection_module = importlib.import_module("lm7.detection")
     runtime = SimpleNamespace(device_type=lambda: "CPU")

@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import intel_npu_device_nodes
+from .detection import intel_npu_device_nodes, tpu_accelerator_type
 from .targets import TargetSpec
 
 
@@ -179,6 +179,16 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
             )
         except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as exc:
             value.update({"device_name": device_name, "pjrt_error": str(exc)})
+        if target.vendor == "tpu":
+            # Without this a committed report cannot say which TPU generation
+            # produced it, and the numbers do not transfer between them.
+            value.update(
+                {
+                    "accelerator_type": tpu_accelerator_type(),
+                    "torch_xla": _package_version("torch-xla"),
+                    "libtpu": _package_version("libtpu"),
+                }
+            )
         if target.vendor == "tenstorrent":
             value.update(
                 {

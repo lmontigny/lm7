@@ -172,30 +172,40 @@ backend with the local MLP benchmark:
 
 ```bash
 python benchmarks/tpu.py \
+  --model smollm2 \
   --backend eager openxla \
   --dtype bfloat16 \
-  --batch-size 8 \
+  --batch-size 1 \
   --warmup 5 \
   --repeats 30 \
-  --output artifacts/benchmarks/tpu-v6e-mlp-bf16-b8.json
+  --output artifacts/benchmarks/tpu-v6e-smollm2-bf16-b1.json
 ```
 
-The report includes first-call compile cost, median and p95 latency,
-throughput, PyTorch/XLA runtime metadata, and the number of addressable TPU
-devices visible to the process.
+`--model` takes `mlp` or a Hugging Face causal LM (`smollm2`, `llama32-1b`,
+`deepseek-coder-1.3b`). The report includes first-call compile cost, median and
+p95 latency, throughput, the TPU generation, PyTorch/XLA runtime metadata, and
+the number of addressable TPU devices visible to the process.
 
-On the validated host, bf16, batch 8, this 1024-4096-1024 MLP:
+On the validated host, bf16:
 
-| Backend | First call | Median | p95 | Throughput |
-| --- | --- | --- | --- | --- |
-| `eager` | 9.15 ms | 0.176 ms | 0.212 ms | 45,496 samples/s |
-| `openxla` | 606.47 ms | 0.347 ms | 0.388 ms | 23,075 samples/s |
+| Workload | Batch | `eager` median | `openxla` median | `openxla` compile | Winner |
+| --- | --- | --- | --- | --- | --- |
+| MLP 1024-4096-1024 | 8 | **0.152 ms** | 0.345 ms | 614 ms | eager, by 2.3x |
+| SmolLM2-135M | 1 | 32.312 ms | **1.213 ms** | 14.5 s | openxla, by **27x** |
+| Llama-3.2-1B | 1 | 17.644 ms | **2.557 ms** | 8.4 s | openxla, by 6.9x |
 
-**Eager XLA wins, and `openxla` spends 606 ms of compile to lose by 2x.** That is
-the honest result on this workload rather than a defect: PyTorch/XLA's
-lazy-tensor eager path already traces and fuses the whole graph, so on a 3-layer
-MLP there is little for dynamo to add and its guards cost something. It says
-nothing about a real model — where the ranking inverts, see below.
+**The MLP is the outlier, and it was the only workload this harness could build
+until now.** On three layers there is nothing for dynamo to add — PyTorch/XLA's
+lazy-tensor eager path already traces and fuses the whole graph, and the guards
+cost more than they save. On a real model the ranking inverts hard, because
+eager re-traces the graph on the host *every call* while `openxla` compiles once
+and dispatches a cached executable.
+
+That also explains the shape of the eager column: SmolLM2-135M is slower in
+eager than Llama-3.2-1B despite being 7x smaller, because eager's cost tracks op
+count rather than parameter count, and SmolLM2 has 30 layers to Llama's 16.
+Under `openxla`, where the tracing is amortised, the order is the one the
+parameter counts predict.
 
 ### Timing an accelerator that answers early
 
