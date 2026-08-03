@@ -150,3 +150,37 @@ jobs:
           got = compiled(x)
           print("max abs diff vs eager:", float((got - expected).abs().max()))
           PY
+
+      # The fallback above reports that Inductor failed but not why, and "the
+      # PyTorch is too old" was a guess. fallback="error" re-raises instead, so
+      # the actual reason gets recorded rather than assumed.
+      - name: Why does Inductor fail here
+        if: steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          "$PYBIN" - <<'PY'
+          import traceback
+          import torch, lm7
+
+          print("torch:", torch.__version__)
+          try:
+              import triton  # noqa: F401
+              print("triton: present")
+          except ImportError as exc:
+              print("triton: absent —", exc)
+
+          model = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU()).eval()
+          x = torch.randn(2, 8)
+          try:
+              lm7.compile(model, target="cpu", fallback="error")(x)
+              print("inductor compiled after all")
+          except Exception:
+              traceback.print_exc()
+
+          print("=== bare torch.compile, no LM7 in the way ===")
+          try:
+              torch.compile(model)(x)
+              print("torch.compile worked")
+          except Exception:
+              traceback.print_exc()
+          PY
