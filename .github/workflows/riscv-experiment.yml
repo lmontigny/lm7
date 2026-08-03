@@ -112,6 +112,14 @@ jobs:
         run: |
           uv pip install --python "$PYBIN" --no-deps -e .
           uv pip install --python "$PYBIN" pytest
+          # TorchInductor's C++ codegen builds the generated extension through
+          # setuptools, which a uv venv does not include. Without it Inductor
+          # fails with ModuleNotFoundError and LM7 falls back to eager, which
+          # reads like an architecture limitation and is not one.
+          uv pip install --python "$PYBIN" setuptools wheel
+          # numpy is optional for Inductor but torch warns without it; riscv64
+          # may have no wheel, so this must not fail the step.
+          uv pip install --python "$PYBIN" numpy || echo "no numpy for riscv64; continuing"
           "$PYBIN" -c "import lm7; print('lm7 imported')"
 
       # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
