@@ -4,14 +4,23 @@ LM7 has initial single-process inference support for Google Cloud TPU through
 [PyTorch/XLA](https://docs.pytorch.org/xla/master/), the PyTorch frontend for
 the OpenXLA compiler and PJRT runtime.
 
+Validated on a **TPU v6e (Trillium), one chip**, with torch 2.9.1+cpu,
+torch_xla 2.9.0 and libtpu 0.0.21. Everything below is measured on that host
+unless it says otherwise; numbers are descriptive for one TPU generation and are
+not portable CI thresholds.
+
 Use a TPU VM and a version-matched PyTorch/PyTorch-XLA environment. The current
 LM7 extra follows the latest stable PyTorch/XLA 2.9 pair:
 
 ```bash
 uv venv --python 3.12 .venv-tpu
+uv pip install --python .venv-tpu/bin/python "torch==2.9.*" --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv-tpu/bin/python -e ".[dev,openxla]"
-source .venv-tpu/bin/activate
 ```
+
+Take PyTorch from the CPU index first. A TPU VM has no GPU, but the default
+PyPI `torch` wheel is the CUDA build, so a plain resolve drags in the whole
+NVIDIA wheel set for nothing.
 
 PyTorch/XLA versions must match PyTorch. Follow the
 [official installation instructions](https://github.com/pytorch/xla#installation)
@@ -31,7 +40,13 @@ print("attributes:", xr.global_runtime_device_attributes())
 PY
 ```
 
-`PJRT device` must report `TPU`.
+`PJRT device` must report `TPU`. On the validated host this prints one
+addressable device and `{'coords': [0, 0, 0], 'core_on_chip': 0, 'num_cores': 1,
+'name': 'TPU:0'}`. `PJRT_DEVICE` does not need to be set: torch_xla finds
+`libtpu.so` and the device and sets it, logging that it has done so.
+
+`tpu-info`, installed with the `openxla` extra, reports the generation and
+per-chip HBM.
 
 ## Compile and test
 
@@ -60,11 +75,86 @@ compiler failures remain inside LM7's fallback boundary. OpenXLA execution uses
 `torch.no_grad()` because PyTorch/XLA tracing requires tensor version counters
 that `torch.inference_mode()` disables.
 
+## fp32 accuracy: matmul precision
+
+**This is the thing to know before trusting a TPU result.** XLA lowers an fp32
+matmul to bf16 passes on TPU unless told otherwise, so a model that agrees with
+CPU eager to 1e-6 on every other target agrees to about 1e-3 here. Measured
+against CPU eager, max absolute difference:
+
+| `mat_mul_precision` | bare 8x16 @ 16x32 | 3-layer MLP | what it does |
+| --- | --- | --- | --- |
+| `default` | 3.6e-02 | 1.7e-03 | one bf16 pass |
+| `high` | 1.6e-04 | 1.2e-05 | 3 passes |
+| `highest` | 1.9e-06 | 4.5e-08 | 6 passes, true fp32 |
+
+GELU is exact to 4.8e-07 under all three, so the divergence is entirely the
+matmul. LM7 exposes the choice rather than making it:
+
+```python
+compiled = lm7.compile(
+    model.eval(),
+    target="tpu",
+    backend="openxla",
+    options={"mat_mul_precision": "highest"},
+)
+```
+
+Two constraints come with it, both from XLA rather than from LM7:
+
+- **It is process-global and read once**, while XLA lowers the first
+  computation. Set it before anything else touches the TPU in that process.
+- **Setting it late is not an error in torch_xla.** `set_mat_mul_precision`
+  updates what `get_mat_mul_precision` reports while the numerics stay on the
+  old setting, so the getter cannot confirm its own effect. LM7 will not pass
+  that silence on: if a computation has already run, the option raises
+  `CompilationError` instead of being quietly ignored.
+
+Cost, on this host, is compile time rather than steady-state latency. For the
+1024-4096-1024 MLP at batch 8, first call went 2.3 s -> 3.1 s -> 4.7 s across the
+three settings while median latency stayed within noise of 0.2 ms. Do not read
+that as "precision is free": see the caveat in the benchmark section.
+
+## One process per chip
+
+A TPU chip is claimed by a single process, and *probing* the runtime claims it —
+`xr.device_type()` is enough. A second process then gets:
+
+```text
+RuntimeError: TPU initialization failed: open(/dev/vfio/0): Device or resource
+busy; Couldn't open iommu group /dev/vfio/0
+```
+
+Two consequences. Nothing else may be holding the TPU when you run LM7 — a
+stray notebook kernel is the usual culprit. And LM7's TPU tests cannot isolate
+cases in subprocesses the way the ExecuTorch and OpenVINO suites do, because the
+pytest process that can see the TPU is by construction one whose children
+cannot. The matmul-precision test therefore runs first in its module and skips
+in a full-suite run, where the StableHLO module has already executed on XLA:
+
+```bash
+python -m pytest tests/test_tpu_integration.py -q   # exercises the setting
+python -m pytest -q                                 # skips it, with the reason
+```
+
+## StableHLO artifacts execute here too
+
+`lm7.export(..., backend="stablehlo")` produces a target-independent payload,
+and loading it back into a torch callable goes through torch_xla — which on a
+TPU VM means the TPU, even for an artifact exported with `target="cpu"`. The
+execution device is a property of the host, not of the artifact. That is by
+design, but it means artifact numerics shift by the same amount as the table
+above, so `tests/test_stablehlo_integration.py` picks its tolerance from the
+device that will actually run it. See
+[StableHLO and PJRT](stablehlo-pjrt-evaluation.md).
+
 ## Scope
 
-This initial adapter covers one Python process and the TPU devices addressable
-to that process. SPMD sharding, multi-host execution, persistent XLA
-executables, and physical TPU CI are not implemented.
+This adapter covers one Python process and the TPU devices addressable to that
+process. SPMD sharding, multi-host execution, persistent XLA executables, and
+physical TPU CI are not implemented. The validated host has a **single**
+addressable chip, so the sharding and multi-host paths are not merely
+unimplemented but untested — nothing here says what happens on a v6e-8.
 
 ## Benchmark
 
@@ -78,10 +168,30 @@ python benchmarks/tpu.py \
   --batch-size 8 \
   --warmup 5 \
   --repeats 30 \
-  --output artifacts/benchmarks/tpu-mlp-bf16-b8.json
+  --output artifacts/benchmarks/tpu-v6e-mlp-bf16-b8.json
 ```
 
 The report includes first-call compile cost, median and p95 latency,
 throughput, PyTorch/XLA runtime metadata, and the number of addressable TPU
-devices visible to the process. Results are descriptive for the current TPU VM
-and are not portable CI thresholds.
+devices visible to the process.
+
+On the validated host, bf16, batch 8, this 1024-4096-1024 MLP:
+
+| Backend | First call | Median | p95 | Throughput |
+| --- | --- | --- | --- | --- |
+| `eager` | 9.25 ms | 0.153 ms | 0.191 ms | 52,180 samples/s |
+| `openxla` | 597.93 ms | 0.198 ms | 0.220 ms | 40,355 samples/s |
+
+**Eager XLA wins, and `openxla` costs 598 ms of compile to lose.** That is the
+honest result on this workload rather than a defect: PyTorch/XLA's lazy-tensor
+eager path already traces and fuses the whole graph, so on a 3-layer MLP there
+is little for dynamo to add and its guards and graph breaks cost something. It
+says nothing about a real model, which this harness cannot yet build — see the
+`--model` work in the benchmark issue list.
+
+**A caveat on every latency number above.** At batch 4096 this MLP runs at
+roughly 43 TFLOP/s, far below what a v6e sustains, so the measurement is bound
+by dispatch and host-device transfer rather than by the MXU. That is why the
+matmul precision looks free at steady state. A compute-bound, device-resident
+workload would be needed before claiming what precision actually costs, and none
+of these numbers should be quoted as TPU throughput.
