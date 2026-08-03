@@ -123,6 +123,34 @@ jobs:
           "$PYBIN" -c "import lm7; print('lm7 imported')"
 
       # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
+      # TorchInductor's CPU flags hardcode -march=native. GCC accepts that on
+      # x86 and Arm; on RISC-V it demands a real ISA string, so every compile
+      # dies with "ISA string must begin with rv32 or rv64". torch 2.3's
+      # codecache.py special-cases only ppc64le, so RISC-V takes the x86 path.
+      #
+      # That is a PyTorch bug rather than an LM7 one, and LM7 should not ship a
+      # compiler shim. This one exists so CI can answer the question underneath
+      # it: once the flag is valid, does LM7 actually compile on RISC-V?
+      - name: Work around Inductor's -march=native on RISC-V
+        if: steps.torch.outcome == 'success'
+        run: |
+          mkdir -p /tmp/shim
+          cat > /tmp/shim/g++ <<'SHIM'
+          #!/usr/bin/env bash
+          args=()
+          for a in "$@"; do
+            case "$a" in
+              -march=native) args+=("-march=rv64gc") ;;
+              *) args+=("$a") ;;
+            esac
+          done
+          exec /usr/bin/g++ "${args[@]}"
+          SHIM
+          chmod +x /tmp/shim/g++
+          echo "/tmp/shim" >> "$GITHUB_PATH"
+          echo "CXX=/tmp/shim/g++" >> "$GITHUB_ENV"
+          /tmp/shim/g++ --version | head -1
+
       - name: Does LM7 detect this machine
         if: steps.torch.outcome == 'success'
         continue-on-error: true
