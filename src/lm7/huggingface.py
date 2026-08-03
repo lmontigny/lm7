@@ -11,7 +11,7 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import resolve_target, torch_device
+from .detection import inference_context, resolve_target, synchronize, torch_device
 from .errors import UnsupportedModelError
 from .exporting import DynamicDimension, ShapeProfile
 from .targets import TargetSpec
@@ -274,26 +274,32 @@ def generate_hf_model(
         fullgraph=False,
         dynamic=None,
     )
-    generation_kwargs = {
+    generation_kwargs: dict[str, Any] = {
         **inputs,
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
         "cache_implementation": "static",
-        "compile_config": compile_config,
     }
+    if decode_is_compiled:
+        # Sending it anyway is not harmless: Transformers logs "You have set
+        # `compile_config`, but we are unable to meet the criteria for
+        # compilation. Compilation will be skipped." which reads like an LM7
+        # fault on every device it does not compile on -- xla included. LM7
+        # already knows the answer, so it asks only when the answer is yes.
+        generation_kwargs["compile_config"] = compile_config
 
     _reset_peak_memory(resolved_target)
     try:
-        with torch.inference_mode():
-            _synchronize(resolved_target)
+        with inference_context(resolved_target):
+            synchronize(resolved_target)
             started = time.perf_counter()
             generated = model.generate(**generation_kwargs)
-            _synchronize(resolved_target)
+            synchronize(resolved_target)
             first_call_ms = (time.perf_counter() - started) * 1000
 
             started = time.perf_counter()
             generated = model.generate(**generation_kwargs)
-            _synchronize(resolved_target)
+            synchronize(resolved_target)
             latency_ms = (time.perf_counter() - started) * 1000
     except Exception as exc:
         raise UnsupportedModelError(
@@ -390,14 +396,14 @@ def run_hf_model(
         cache=False,
         options={"quantization": quantization} if backend_quantizes else None,
     )
-    _synchronize(resolved_target)
+    synchronize(resolved_target)
     started = time.perf_counter()
     output = wrapped(*call_args, **call_kwargs)
-    _synchronize(wrapped.target)
+    synchronize(wrapped.target)
     first_call_ms = (time.perf_counter() - started) * 1000
     started = time.perf_counter()
     output = wrapped(*call_args, **call_kwargs)
-    _synchronize(wrapped.target)
+    synchronize(wrapped.target)
     latency_ms = (time.perf_counter() - started) * 1000
 
     # _LogitsOnly returns the tensor directly; a bare model returns a dataclass.
@@ -804,7 +810,7 @@ def _apply_quantization(
         filter_fn=filter_fn,
         device=torch_device(target),
     )
-    _synchronize(target)
+    synchronize(target)
     return (time.perf_counter() - started) * 1000, matched
 
 
@@ -960,12 +966,3 @@ def _peak_memory(target: TargetSpec) -> int | None:
     if target.vendor not in {"nvidia", "amd"}:
         return None
     return torch.cuda.max_memory_allocated(target.ordinal or 0)
-
-
-def _synchronize(target: TargetSpec | None) -> None:
-    if target is None:
-        return
-    if target.vendor in {"nvidia", "amd"}:
-        torch.cuda.synchronize(target.ordinal or 0)
-    elif target.vendor == "apple":
-        torch.mps.synchronize()

@@ -11,7 +11,7 @@ import torch
 from .backends import registry
 from .backends.base import Artifact, CompileRequest
 from .cache import input_signature, memory_cache
-from .detection import resolve_target, torch_device
+from .detection import inference_context, resolve_target, torch_device
 from .errors import CompilationError, InputDeviceError
 from .planner import Plan, plan
 from .targets import TargetSpec
@@ -145,12 +145,5 @@ class CompiledModule(torch.nn.Module):
                 if variant is None:
                     variant = self._compile_variant(signature, args, kwargs)
         prepared_args, prepared_kwargs = self._prepare_inputs(args, kwargs)
-        # PyTorch/XLA — the route to both TPU and Tenstorrent — needs the tensor
-        # version counters that torch.inference_mode() disables.
-        context = (
-            torch.no_grad()
-            if self.target is not None and self.target.vendor in {"tpu", "tenstorrent"}
-            else torch.inference_mode()
-        )
-        with context:
+        with inference_context(self.target):
             return variant(*prepared_args, **prepared_kwargs)

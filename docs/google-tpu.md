@@ -146,6 +146,41 @@ python -m pytest tests/test_tpu_integration.py -q   # exercises the setting
 python -m pytest -q                                 # skips it, with the reason
 ```
 
+## Generation works, and the first call is brutal
+
+`lm7 model generate --target tpu` runs. It used to fail outright with "Cannot
+set version_counter for inference tensor", because the generation path ran under
+`torch.inference_mode()`, which disables the tensor version counters PyTorch/XLA
+requires.
+
+SmolLM2-135M, bf16, 20 new tokens on the validated host:
+
+| | |
+| --- | --- |
+| First generation | **1,204,268 ms** (20 minutes) |
+| Steady generation | 2,480 ms (124 ms/token) |
+| Backend | `eager` |
+
+The second call is **485x faster than the first**. That gap is XLA compiling,
+and it compiles roughly once per decode step: the decode loop is eager here, so
+lazy-tensor traces each step, and each step's graph differs enough to miss the
+executable cache. Twenty steps, twenty compilations of a 30-layer model, about a
+minute each.
+
+Two consequences worth knowing before using this:
+
+- **A short generation is all compile.** The 20 minutes is not proportional to
+  the tokens produced; it is proportional to how many distinct decode graphs XLA
+  has to build. Generating more tokens in one process amortises it.
+- **The decode loop is not compiled, and that is upstream's choice.** `tpu`
+  appears in Transformers' `_valid_auto_compile_criteria`, but a Cloud TPU is
+  torch device type `xla`, which does not match. LM7 no longer sends a
+  `compile_config` it knows will be refused. See
+  [Hugging Face generation](huggingface-generation.md).
+
+Making this fast means keeping the decode graph stable across steps so XLA
+compiles once. That is not implemented.
+
 ## StableHLO artifacts execute here too
 
 `lm7.export(..., backend="stablehlo")` produces a target-independent payload,

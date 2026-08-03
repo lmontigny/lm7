@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import intel_npu_device_nodes, tpu_accelerator_type
+from .detection import intel_npu_device_nodes, synchronize, tpu_accelerator_type
 from .targets import TargetSpec
 
 
@@ -67,19 +67,19 @@ def benchmark(
         torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
     wrapped(*args, **kwargs)
-    _synchronize(wrapped.target)
+    synchronize(wrapped.target)
     first_call_ms = (time.perf_counter() - started) * 1000
 
     for _ in range(warmup):
         wrapped(*args, **kwargs)
-    _synchronize(wrapped.target)
+    synchronize(wrapped.target)
 
     latencies_ms = []
     for _ in range(repeats):
-        _synchronize(wrapped.target)
+        synchronize(wrapped.target)
         started = time.perf_counter()
         wrapped(*args, **kwargs)
-        _synchronize(wrapped.target)
+        synchronize(wrapped.target)
         latencies_ms.append((time.perf_counter() - started) * 1000)
 
     assert wrapped.target is not None
@@ -99,26 +99,6 @@ def benchmark(
         batch_size=batch_size,
         environment=_environment(wrapped.target, wrapped.selected_backend),
     )
-
-
-def _synchronize(target: TargetSpec | None) -> None:
-    if target is None:
-        return
-    if target.vendor in {"nvidia", "amd"}:
-        torch.cuda.synchronize(target.ordinal or 0)
-    elif target.vendor == "apple":
-        torch.mps.synchronize()
-    elif target.vendor in {"tpu", "tenstorrent"}:
-        torch_xla = importlib.import_module("torch_xla")
-        # sync() flushes the pending graph but returns once the work is
-        # *dispatched*, not once the device has run it -- despite wait=True,
-        # which is about the lazy-tensor barrier rather than the accelerator. On
-        # its own it reported a constant 0.08 ms for a matmul whose cost grows
-        # 32x across batch sizes, i.e. 14,538 TFLOP/s on a chip that peaks near
-        # 918. wait_device_ops() is the barrier that actually blocks.
-        torch_xla.sync(wait=True)
-        xla_model = importlib.import_module("torch_xla.core.xla_model")
-        xla_model.wait_device_ops()
 
 
 def _peak_memory(target: TargetSpec) -> int | None:

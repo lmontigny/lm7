@@ -5,6 +5,7 @@ import importlib.util
 import os
 import platform
 import re
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,45 @@ def torch_device(target: TargetSpec) -> torch.device:
     if target.vendor in {"tpu", "tenstorrent"}:
         return torch.device("xla", ordinal)
     return torch.device("cpu")
+
+
+def synchronize(target: TargetSpec | None) -> None:
+    """Block until the target's accelerator has finished the work queued on it.
+
+    Every timing LM7 reports depends on this being a real barrier.
+
+    The XLA branch needs both calls. ``torch_xla.sync(wait=True)`` flushes the
+    pending lazy graph and returns once the work is *dispatched* -- its ``wait``
+    is the lazy-tensor barrier, not the accelerator -- so on its own it reported
+    a constant 0.08 ms for a matmul whose cost grows 32x across batch sizes,
+    i.e. 14,538 TFLOP/s on a chip that peaks near 918.
+    ``wait_device_ops()`` is the one that blocks.
+    """
+    if target is None:
+        return
+    if target.vendor in {"nvidia", "amd"}:
+        torch.cuda.synchronize(target.ordinal or 0)
+    elif target.vendor == "apple":
+        torch.mps.synchronize()
+    elif target.vendor in {"tpu", "tenstorrent"}:
+        torch_xla = importlib.import_module("torch_xla")
+        torch_xla.sync(wait=True)
+        xla_model = importlib.import_module("torch_xla.core.xla_model")
+        xla_model.wait_device_ops()
+
+
+def inference_context(target: TargetSpec | None) -> AbstractContextManager[None]:
+    """Return the strongest no-grad context the target's runtime tolerates.
+
+    ``torch.inference_mode()`` is the faster choice and the default. PyTorch/XLA
+    -- the route to both TPU and Tenstorrent -- cannot use it: it needs the
+    tensor version counters inference mode disables, and fails with "Cannot set
+    version_counter for inference tensor" partway through a call that has
+    already done real work. ``no_grad()`` is inference-safe, so those two get it.
+    """
+    if target is not None and target.vendor in {"tpu", "tenstorrent"}:
+        return torch.no_grad()
+    return torch.inference_mode()
 
 
 def tpu_accelerator_type() -> str | None:
