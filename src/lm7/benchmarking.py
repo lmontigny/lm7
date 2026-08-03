@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import intel_npu_device_nodes
+from .detection import intel_npu_device_nodes, tpu_accelerator_type
 from .targets import TargetSpec
 
 
@@ -110,7 +110,15 @@ def _synchronize(target: TargetSpec | None) -> None:
         torch.mps.synchronize()
     elif target.vendor in {"tpu", "tenstorrent"}:
         torch_xla = importlib.import_module("torch_xla")
+        # sync() flushes the pending graph but returns once the work is
+        # *dispatched*, not once the device has run it -- despite wait=True,
+        # which is about the lazy-tensor barrier rather than the accelerator. On
+        # its own it reported a constant 0.08 ms for a matmul whose cost grows
+        # 32x across batch sizes, i.e. 14,538 TFLOP/s on a chip that peaks near
+        # 918. wait_device_ops() is the barrier that actually blocks.
         torch_xla.sync(wait=True)
+        xla_model = importlib.import_module("torch_xla.core.xla_model")
+        xla_model.wait_device_ops()
 
 
 def _peak_memory(target: TargetSpec) -> int | None:
@@ -171,6 +179,16 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
             )
         except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as exc:
             value.update({"device_name": device_name, "pjrt_error": str(exc)})
+        if target.vendor == "tpu":
+            # Without this a committed report cannot say which TPU generation
+            # produced it, and the numbers do not transfer between them.
+            value.update(
+                {
+                    "accelerator_type": tpu_accelerator_type(),
+                    "torch_xla": _package_version("torch-xla"),
+                    "libtpu": _package_version("libtpu"),
+                }
+            )
         if target.vendor == "tenstorrent":
             value.update(
                 {

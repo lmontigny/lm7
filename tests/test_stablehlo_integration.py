@@ -127,6 +127,16 @@ def test_payload_runs_without_pytorch(tmp_path):
     interpreter = os.environ.get("LM7_PJRT_PYTHON")
     if not interpreter:
         pytest.skip("set LM7_PJRT_PYTHON to a torch-free interpreter with a PJRT client")
+    if _executing_device_type() == "TPU":
+        # A TPU chip is held by one process, and this one already claimed it by
+        # probing. The child would get "open(/dev/vfio/0): Device or resource
+        # busy" no matter what its plugin is. The same round trip is measured
+        # out-of-band by benchmarks/stablehlo_pjrt.py, whose export and execute
+        # stages are separate processes; see docs/stablehlo-pjrt-evaluation.md.
+        pytest.skip(
+            "this process holds the TPU, so a PJRT child cannot open it; run "
+            "benchmarks/stablehlo_pjrt.py export/execute instead"
+        )
 
     source = model()
     example = torch.randn(8, 16)

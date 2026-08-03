@@ -89,14 +89,22 @@ def test_tpu_synchronize_uses_torch_xla(monkeypatch):
         def sync(*, wait):
             calls["wait"] = wait
 
+    class FakeXlaModel:
+        @staticmethod
+        def wait_device_ops():
+            calls["waited_for_device"] = True
+
+    modules = {"torch_xla": FakeTorchXla, "torch_xla.core.xla_model": FakeXlaModel}
     monkeypatch.setattr(
         "lm7.benchmarking.importlib.import_module",
-        lambda name: FakeTorchXla if name == "torch_xla" else None,
+        lambda name: modules[name],
     )
 
     _synchronize(TargetSpec("tpu", "accelerator"))
 
-    assert calls == {"wait": True}
+    # sync() alone returns once the work is dispatched, so timing anything with
+    # it measures the host. The device barrier is the load-bearing half.
+    assert calls == {"wait": True, "waited_for_device": True}
 
 
 def test_tpu_environment_reports_pjrt_metadata(monkeypatch):
