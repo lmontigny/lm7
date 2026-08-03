@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-from ..errors import CompilationError
+from ..errors import CompilationError, ConfigurationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
 # XLA lowers an fp32 matmul to bf16 passes on TPU unless told otherwise, so a
@@ -29,11 +29,6 @@ def _apply_mat_mul_precision(value: Any) -> str:
     no-op is the one outcome LM7 must not produce for an accuracy control, so
     this checks whether anything has executed yet and says so instead.
     """
-    if value not in MAT_MUL_PRECISIONS:
-        raise CompilationError(
-            f"Unsupported mat_mul_precision {value!r}; expected one of "
-            f"{', '.join(MAT_MUL_PRECISIONS)}."
-        )
     metrics = importlib.import_module("torch_xla.debug.metrics")
     if metrics.counter_value("ExecuteComputation") is not None:
         raise CompilationError(
@@ -111,12 +106,21 @@ class OpenXLABackend:
         example_args: tuple[Any, ...],
         example_kwargs: Mapping[str, Any],
     ) -> Artifact:
+        options = dict(request.options)
+        precision = options.pop("mat_mul_precision", None)
+        # Checked outside the try, and therefore outside the fallback boundary.
+        # A misspelled precision is a mistake in the caller's code, and eager
+        # cannot fix it -- falling back would answer "highst" by silently
+        # dropping the compiler and every guarantee the option was asking for.
+        if precision is not None and precision not in MAT_MUL_PRECISIONS:
+            raise ConfigurationError(
+                f"Unsupported mat_mul_precision {precision!r}; expected one of "
+                f"{', '.join(MAT_MUL_PRECISIONS)}."
+            )
         try:
             torch_xla = importlib.import_module("torch_xla")
-            options = dict(request.options)
             # Applied before anything touches the device, because the first XLA
             # computation freezes it for the rest of the process.
-            precision = options.pop("mat_mul_precision", None)
             applied_precision = (
                 _apply_mat_mul_precision(precision) if precision is not None else None
             )
