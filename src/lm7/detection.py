@@ -153,6 +153,27 @@ def torch_device(target: TargetSpec) -> torch.device:
     return torch.device("cpu")
 
 
+def tpu_accelerator_type() -> str | None:
+    """Report the TPU generation and slice, for example ``v6e-1``.
+
+    ``global_runtime_device_attributes()`` carries no ``device_kind`` on a TPU
+    VM -- it reports coords, ``core_on_chip``, ``num_cores`` and a name -- so
+    every TPU otherwise detects as an unqualified "Google TPU" and a benchmark
+    report cannot say which generation produced it. The generation lives in the
+    runtime environment torch_xla reads at startup, behind a private module,
+    hence the defensive import: losing it costs the label, not the detection.
+
+    Only this one key is read. The same mapping also carries the project, node
+    and zone the VM belongs to, which has no business in an LM7 device record.
+    """
+    try:
+        tpu = importlib.import_module("torch_xla._internal.tpu")
+        value = tpu.get_tpu_env().get("ACCELERATOR_TYPE")
+    except (ImportError, AttributeError, KeyError, RuntimeError, OSError, ValueError):
+        return None
+    return str(value) if value else None
+
+
 def _detect_tpu_targets() -> list[DeviceInfo]:
     try:
         if importlib.util.find_spec("torch_xla") is None:
@@ -169,12 +190,17 @@ def _detect_tpu_targets() -> list[DeviceInfo]:
         return []
 
     first_attributes = dict(attributes[0]) if attributes else {}
-    device_kind = str(first_attributes.get("device_kind", "Google TPU"))
+    accelerator_type = tpu_accelerator_type()
+    device_kind = str(
+        first_attributes.get("device_kind")
+        or (f"Google TPU {accelerator_type}" if accelerator_type else "Google TPU")
+    )
     model_match = re.search(r"\bv\d+[a-z]?\b", device_kind.lower())
     model = model_match.group(0) if model_match else None
     capabilities = {
         "openxla": getattr(torch_xla, "__version__", None),
         "pjrt_device": "TPU",
+        "accelerator_type": accelerator_type,
         "addressable_device_count": count,
         "runtime_attributes": first_attributes,
     }
