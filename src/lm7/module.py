@@ -90,6 +90,14 @@ class CompiledModule(torch.nn.Module):
         self, signature: tuple[Any, ...], args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
         self.target = resolve_target(self.requested_target)
+        if self.transfers == "explicit":
+            # Check placement before the backend does, purely for the message.
+            # A backend warms up during compile, so a misplaced input surfaces
+            # as whatever its tracer says -- on TPU that is dynamo's "Unhandled
+            # FakeTensor Device Propagation for aten.mm.default", which names
+            # neither the input nor the fix. This raises InputDeviceError, which
+            # does both. It only validates; the transfer still happens below.
+            self._prepare_inputs(args, kwargs)
         request = CompileRequest(
             self.model,
             self.target,

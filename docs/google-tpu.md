@@ -146,7 +146,75 @@ python -m pytest tests/test_tpu_integration.py -q   # exercises the setting
 python -m pytest -q                                 # skips it, with the reason
 ```
 
-## Generation works, and the first call is brutal
+## Model coverage
+
+Every architecture below compiled through `openxla` and matched CPU eager on the
+first attempt. Nothing was skipped, worked around, or excluded, and no operator
+was rejected.
+
+Run at `mat_mul_precision="highest"` on purpose: at the TPU default these
+comparisons would sit near 1e-3 and say nothing about whether the lowering was
+correct. At `highest` a difference is a lowering bug, so these numbers are the
+evidence rather than the tolerance.
+
+| Workload | Compile + first call | Max abs diff vs CPU eager |
+| --- | --- | --- |
+| Conv2d + BatchNorm + MaxPool | 3.5 s | 3.0e-08 |
+| Sparse MoE, softmax-weighted 4 experts | 0.2 s | 3.6e-07 |
+| LSTM, 2 layers | 0.1 s | 3.0e-08 |
+| BERT base | 7.8 s | 1.4e-05 |
+| ViT base patch16 | 12.6 s | 4.8e-06 |
+| SmolLM2-135M | 15.3 s | 4.8e-05 |
+| Llama-3.2-1B | 13.1 s | 1.4e-05 |
+| Qwen3.5-0.8B | **194.2 s** | 1.7e-05 |
+| LFM2.5-230M | 8.9 s | 2.5e-05 |
+| DeepSeek-Coder-1.3B | 16.7 s | 4.6e-05 |
+
+Convolutions, recurrence, attention, and data-dependent expert weighting all
+lower cleanly. **Qwen3.5-0.8B is the one outlier**: 194 s to compile against
+13-17 s for models of comparable size. Unexplained, and worth knowing before
+assuming compile time tracks parameter count.
+
+Compile cost is expected here and is
+[documented by Google](https://docs.cloud.google.com/tpu/docs/troubleshooting/troubleshoot-pytorch#recompilation_of_the_graph):
+XLA compiles per shape, so the first call pays and later calls with the same
+shape do not.
+
+## Recompilation across input shapes
+
+A new input shape compiles a new executable and a repeated shape does not. On
+the 16-32-4 MLP:
+
+| Call | Batch | Time |
+| --- | --- | --- |
+| 1st | 8 | 2.185 s |
+| 2nd | 32 | 0.106 s |
+| 3rd | 8 again | **0.001 s** |
+| 4th | 128 | 0.106 s |
+
+All four stayed within 1.4e-07 of CPU eager. Shape variety costs compilations,
+not correctness.
+
+Note that `transfers="automatic"` moves the module you passed to the XLA device
+**in place**, so the original reference stops accepting CPU tensors. Keep a
+`copy.deepcopy` if you need a CPU baseline afterwards.
+
+## What LM7 refuses, and how clearly
+
+| Request | Result |
+| --- | --- |
+| `lm7.export(target="tpu", backend="stablehlo")` | accepted — the payload is target-independent |
+| `backend="aot_inductor"` | refused: validated for CPU, Apple, NVIDIA only |
+| `backend="executorch"` | refused: XNNPACK is a CPU target |
+| `backend="openvino"` | refused: Intel CPU and NPU only |
+| `backend="onnxruntime"` | refused: CPU and NVIDIA only |
+| `quantization="int8"` | refused: NVIDIA GPUs and CPU targets only |
+
+All six messages name the supported targets, so none of them needs a TPU to
+interpret. `stablehlo` is the only export path off this device — see
+[StableHLO and PJRT](stablehlo-pjrt-evaluation.md).
+
+## Generation: expect a long first call
 
 `lm7 model generate --target tpu` runs. It used to fail outright with "Cannot
 set version_counter for inference tensor", because the generation path ran under
@@ -161,25 +229,31 @@ SmolLM2-135M, bf16, 20 new tokens on the validated host:
 | Steady generation | 2,480 ms (124 ms/token) |
 | Backend | `eager` |
 
-The second call is **485x faster than the first**. That gap is XLA compiling,
-and it compiles roughly once per decode step: the decode loop is eager here, so
-lazy-tensor traces each step, and each step's graph differs enough to miss the
-executable cache. Twenty steps, twenty compilations of a 30-layer model, about a
-minute each.
+The second call is **485x faster than the first**, and that gap is compilation,
+which is the documented cost of this device rather than a defect. Google's
+PyTorch/XLA troubleshooting guide describes exactly this: XLA compiles per graph
+shape, and a decode loop whose graph changes each step
+[recompiles each step](https://docs.cloud.google.com/tpu/docs/troubleshooting/troubleshoot-pytorch#recompilation_of_the_graph).
+Twenty steps, twenty compilations of a 30-layer model.
 
-Two consequences worth knowing before using this:
+What follows from it:
 
-- **A short generation is all compile.** The 20 minutes is not proportional to
-  the tokens produced; it is proportional to how many distinct decode graphs XLA
-  has to build. Generating more tokens in one process amortises it.
+- **Warm up, then measure.** The 20 minutes is proportional to how many distinct
+  decode graphs XLA has to build, not to the tokens produced. Once built they
+  are cached for the process, which is why the second call is 2.5 s. Treat the
+  first generation as a build step.
+- **A short one-shot run is nearly all compile**, so `lm7 model generate` is a
+  poor way to sample a TPU. A long-lived process amortises it; a fresh process
+  per prompt pays it every time.
 - **The decode loop is not compiled, and that is upstream's choice.** `tpu`
   appears in Transformers' `_valid_auto_compile_criteria`, but a Cloud TPU is
   torch device type `xla`, which does not match. LM7 no longer sends a
   `compile_config` it knows will be refused. See
   [Hugging Face generation](huggingface-generation.md).
 
-Making this fast means keeping the decode graph stable across steps so XLA
-compiles once. That is not implemented.
+Cutting the first call means holding the decode graph stable across steps so XLA
+compiles once. That is the standard remedy Google describes, and LM7 does not do
+it yet.
 
 ## StableHLO artifacts execute here too
 

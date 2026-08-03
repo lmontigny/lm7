@@ -8,7 +8,7 @@ import torch
 
 from lm7.backends.base import CompileRequest
 from lm7.backends.openxla import OpenXLABackend
-from lm7.errors import CompilationError
+from lm7.errors import CompilationError, ConfigurationError
 from lm7.targets import TargetSpec
 
 openxla_backend_module = importlib.import_module("lm7.backends.openxla")
@@ -169,9 +169,11 @@ def test_compile_does_not_forward_mat_mul_precision_to_torch_compile(monkeypatch
 
 
 def test_compile_rejects_unknown_mat_mul_precision(monkeypatch):
+    # ConfigurationError, not CompilationError: fallback="warn" must not answer
+    # a typo by silently dropping the compiler.
     _precision_fakes(monkeypatch, executed=None, calls={})
 
-    with pytest.raises(CompilationError, match="Unsupported mat_mul_precision"):
+    with pytest.raises(ConfigurationError, match="Unsupported mat_mul_precision"):
         OpenXLABackend().compile(
             request(options={"mat_mul_precision": "float32"}), (torch.ones(2),), {}
         )

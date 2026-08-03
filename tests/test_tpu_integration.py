@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import lm7
-from lm7.errors import CompilationError
+from lm7.errors import CompilationError, ConfigurationError, InputDeviceError
 from lm7.huggingface import generate_hf_model
 
 
@@ -150,3 +150,39 @@ def test_mat_mul_precision_is_refused_once_a_computation_has_run():
     # raises. Compilation is lazy, so the refusal surfaces on the first call.
     with pytest.raises(CompilationError, match="already run an XLA computation"):
         compiled(torch.randn(2, 4))
+
+
+def test_invalid_option_is_not_swallowed_by_the_fallback():
+    """fallback="warn" must not answer a typo by silently dropping the compiler.
+
+    Measured before the fix: options={"mat_mul_precision": "bogus"} compiled to
+    eager and warned "Backend openxla compilation failed", naming neither the
+    option nor the typo. The caller asked for an accuracy guarantee, got eager,
+    and was told the backend had failed.
+    """
+    compiled = lm7.compile(
+        _mlp()[0],
+        target="tpu",
+        backend="openxla",
+        transfers="automatic",
+        fallback="warn",
+        options={"mat_mul_precision": "bogus"},
+    )
+
+    with pytest.raises(ConfigurationError, match="Unsupported mat_mul_precision"):
+        compiled(torch.randn(8, 16))
+
+
+def test_explicit_transfers_names_the_misplaced_input():
+    """The backend warms up during compile, so LM7 has to check placement first.
+
+    Otherwise this surfaces as dynamo's "Unhandled FakeTensor Device
+    Propagation for aten.mm.default", which names neither the input nor the fix.
+    """
+    model, example_input = _mlp()
+    compiled = lm7.compile(
+        model, target="tpu", backend="openxla", transfers="explicit", fallback="error"
+    )
+
+    with pytest.raises(InputDeviceError, match="transfers='automatic'"):
+        compiled(example_input)

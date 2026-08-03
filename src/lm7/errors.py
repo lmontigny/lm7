@@ -18,6 +18,16 @@ class CompilationError(LM7Error):
     pass
 
 
+class ConfigurationError(LM7Error):
+    """An option LM7 was asked for is not one LM7 offers.
+
+    Deliberately not a CompilationError: `fallback="warn"` exists to survive a
+    backend that cannot compile a model, not to paper over a typo in the call
+    site. Falling back would answer a misspelled option by silently dropping the
+    compiler, so this escapes the fallback boundary and reaches the caller.
+    """
+
+
 class ArtifactLoadError(LM7Error):
     pass
 
