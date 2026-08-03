@@ -119,6 +119,15 @@ and Intel GPU targets.** Everywhere else the command still works and still
 produces correct tokens; it just runs eager, and now reports `backend: eager`
 rather than claiming a compiler that never ran.
 
+Note the trap in that list: `tpu` appears in Transformers' criteria, but the
+torch device type for a TPU under PyTorch/XLA is `xla`, not `tpu`. The entry is
+for the older `torch_xla` TPU device naming, and a Cloud TPU reached the way LM7
+reaches it does not match it. TPU decode runs eager.
+
+LM7 no longer sends a `compile_config` it knows will be refused. Passing one
+anyway is not free: it produces that warning on every non-compiling target,
+which reads like an LM7 fault rather than an upstream gate.
+
 Forcing the issue is not worth it. With Transformers' private
 `_compile_all_devices` flag set, CPU decode for DeepSeek-Coder-1.3B compiled in
 42.8 s and then ran 1.06x faster than eager — a rounding error for a 43-second

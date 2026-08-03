@@ -240,7 +240,7 @@ class FakeGeneratingCausalLM(torch.nn.Module):
                 "max_new_tokens": kwargs["max_new_tokens"],
                 "do_sample": kwargs["do_sample"],
                 "cache_implementation": kwargs["cache_implementation"],
-                "compile_config": kwargs["compile_config"],
+                "compile_config": kwargs.get("compile_config"),
             }
         )
         suffix = torch.tensor([[4, 5, 6, 7]], device=kwargs["input_ids"].device)
@@ -272,6 +272,25 @@ def _fake_generation_transformers(calls):
     )
 
 
+def test_generate_hf_model_sends_compile_config_where_decode_compiles(monkeypatch):
+    """The other half: where Transformers will compile, LM7 must still ask."""
+    calls = {}
+    monkeypatch.setattr(
+        huggingface, "_load_transformers", lambda: _fake_generation_transformers(calls)
+    )
+    monkeypatch.setattr(huggingface, "compiles_decode", lambda device: True)
+
+    result = huggingface.generate_hf_model(
+        "hf://example/tiny-model",
+        prompt="Hello",
+        max_new_tokens=4,
+        target="cpu",
+    )
+
+    assert all(call["compile_config"] is not None for call in calls["generate"])
+    assert result.backend == "inductor"
+
+
 def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     calls = {}
     monkeypatch.setattr(
@@ -296,8 +315,11 @@ def test_generate_hf_model_uses_static_cache_and_compiled_decode(monkeypatch):
     assert len(calls["generate"]) == 2
     assert all(call["cache_implementation"] == "static" for call in calls["generate"])
     assert all(call["do_sample"] is False for call in calls["generate"])
-    # A CPU target does not meet Transformers' compilation criteria, so the decode
-    # loop runs eagerly however the compile_config is spelled.
+    # A CPU target does not meet Transformers' compilation criteria, so the
+    # decode loop runs eagerly however the compile_config is spelled -- and
+    # sending one anyway only produces a "Compilation will be skipped" warning
+    # that reads like an LM7 fault. LM7 asks only when the answer is yes.
+    assert all(call["compile_config"] is None for call in calls["generate"])
     assert result.backend == "eager"
     assert result.cache_implementation == "static"
     assert result.input_tokens == 3
@@ -479,7 +501,7 @@ def test_fp8_weight_only_uses_torchao_version_two(monkeypatch):
         quantize_=quantize,
     )
     monkeypatch.setattr(huggingface, "_load_torchao_quantization", lambda: fake_torchao)
-    monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
+    monkeypatch.setattr(huggingface, "synchronize", lambda _target: None)
 
     model = FakeQuantizableLM()
     elapsed, converted = huggingface._apply_quantization(
@@ -519,7 +541,7 @@ def test_nvfp4_uses_the_prototype_mx_formats_config(monkeypatch):
         "_load_torchao_nvfp4",
         lambda: SimpleNamespace(NVFP4WeightOnlyConfig=Config),
     )
-    monkeypatch.setattr(huggingface, "_synchronize", lambda _target: None)
+    monkeypatch.setattr(huggingface, "synchronize", lambda _target: None)
 
     model = FakeQuantizableLM()
     elapsed, converted = huggingface._apply_quantization(

@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import lm7
-from lm7.benchmarking import _environment, _package_version, _percentile, _synchronize
+from lm7.benchmarking import _environment, _package_version, _percentile
 from lm7.targets import TargetSpec
 
 
@@ -79,32 +79,6 @@ def test_batch_size_is_detected_in_keyword_inputs():
     )
 
     assert result.batch_size == 3
-
-
-def test_tpu_synchronize_uses_torch_xla(monkeypatch):
-    calls = {}
-
-    class FakeTorchXla:
-        @staticmethod
-        def sync(*, wait):
-            calls["wait"] = wait
-
-    class FakeXlaModel:
-        @staticmethod
-        def wait_device_ops():
-            calls["waited_for_device"] = True
-
-    modules = {"torch_xla": FakeTorchXla, "torch_xla.core.xla_model": FakeXlaModel}
-    monkeypatch.setattr(
-        "lm7.benchmarking.importlib.import_module",
-        lambda name: modules[name],
-    )
-
-    _synchronize(TargetSpec("tpu", "accelerator"))
-
-    # sync() alone returns once the work is dispatched, so timing anything with
-    # it measures the host. The device barrier is the load-bearing half.
-    assert calls == {"wait": True, "waited_for_device": True}
 
 
 def test_tpu_environment_reports_pjrt_metadata(monkeypatch):

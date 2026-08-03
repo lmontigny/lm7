@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 
 import pytest
 import torch
 
 import lm7
 from lm7.errors import CompilationError
+from lm7.huggingface import generate_hf_model
 
 
 def _tpu_available() -> bool:
@@ -102,6 +104,29 @@ def test_openxla_tpu_matches_cpu_eager():
     # bound was a near miss that would have flaked on another seed. See
     # docs/google-tpu.md for the measured error at each setting.
     torch.testing.assert_close(actual.cpu(), expected, rtol=0.2, atol=5e-3)
+
+
+@pytest.mark.hf
+@pytest.mark.skipif(os.environ.get("LM7_RUN_HF_TESTS") != "1", reason="set LM7_RUN_HF_TESTS=1")
+def test_generation_runs_on_tpu():
+    """Multi-token decode, which inference_mode() used to make impossible here.
+
+    Generation ran under torch.inference_mode() and died partway through with
+    "Cannot set version_counter for inference tensor" -- PyTorch/XLA needs the
+    version counters inference mode disables.
+    """
+    result = generate_hf_model(
+        "hf://HuggingFaceTB/SmolLM2-135M-Instruct",
+        prompt="The capital of France is",
+        max_new_tokens=8,
+        target="tpu",
+    )
+
+    assert result.generated_tokens == 8
+    assert result.generated_text.strip()
+    # Transformers' compile criteria list "tpu", but a Cloud TPU is torch device
+    # type "xla" and does not match, so the decode loop is eager here.
+    assert result.backend == "eager"
 
 
 def test_mat_mul_precision_is_refused_once_a_computation_has_run():

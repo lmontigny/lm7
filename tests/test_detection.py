@@ -154,6 +154,53 @@ def test_auto_prefers_detected_tpu_over_cpu(monkeypatch):
     assert torch_device(TargetSpec("tpu", "accelerator", ordinal=1)) == torch.device("xla:1")
 
 
+@pytest.mark.parametrize(
+    ("target", "expects_inference_mode"),
+    [
+        (TargetSpec("cpu", "cpu"), True),
+        (TargetSpec("nvidia", "gpu"), True),
+        (TargetSpec("apple", "gpu", architecture="metal"), True),
+        (None, True),
+        # Both PyTorch/XLA devices need the version counters inference mode
+        # disables, or a call fails with "Cannot set version_counter for
+        # inference tensor" partway through.
+        (TargetSpec("tpu", "accelerator"), False),
+        (TargetSpec("tenstorrent", "accelerator"), False),
+    ],
+)
+def test_inference_context_avoids_inference_mode_on_xla(target, expects_inference_mode):
+    with detection.inference_context(target):
+        assert torch.is_inference_mode_enabled() is expects_inference_mode
+        # Whichever context is chosen, gradients stay off.
+        assert torch.is_grad_enabled() is False
+
+
+def test_tpu_synchronize_waits_for_the_device_not_just_the_dispatch(monkeypatch):
+    calls = {}
+
+    class FakeTorchXla:
+        @staticmethod
+        def sync(*, wait):
+            calls["wait"] = wait
+
+    class FakeXlaModel:
+        @staticmethod
+        def wait_device_ops():
+            calls["waited_for_device"] = True
+
+    modules = {"torch_xla": FakeTorchXla, "torch_xla.core.xla_model": FakeXlaModel}
+    monkeypatch.setattr(
+        "lm7.detection.importlib.import_module",
+        lambda name: modules[name],
+    )
+
+    detection.synchronize(TargetSpec("tpu", "accelerator"))
+
+    # sync() alone returns once the work is dispatched, so timing anything with
+    # it measures the host. The device barrier is the load-bearing half.
+    assert calls == {"wait": True, "waited_for_device": True}
+
+
 def _patch_tenstorrent_runtime(monkeypatch, runtime, *, torch_xla=None) -> None:
     detection_module = importlib.import_module("lm7.detection")
     monkeypatch.delenv("PJRT_DEVICE", raising=False)
