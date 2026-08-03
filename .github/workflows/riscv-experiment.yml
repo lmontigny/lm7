@@ -77,6 +77,12 @@ jobs:
           echo "===== strategy 1: distro package ====="
           echo "(empty output above means python3-torch is not packaged for riscv64)"
 
+          # The wheel is not auditwheel-repaired -- which is also why it carries
+          # the wrong none-any tag -- so its shared libraries are not bundled.
+          echo "===== system libraries the wheel expects ====="
+          sudo apt-get update -qq
+          sudo apt-get install -y libopenblas0 libgomp1 2>&1 | tail -2
+
           echo "===== strategy 2: CPython 3.11 via uv, then pytorch-riscv64 ====="
           curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
           export PATH="$HOME/.local/bin:$PATH"
