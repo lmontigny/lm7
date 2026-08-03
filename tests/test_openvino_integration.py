@@ -12,7 +12,7 @@ import torch
 
 import lm7
 from lm7.backends.base import CompileRequest
-from lm7.backends.openvino import OpenVINOBackend
+from lm7.backends.openvino import _DEFAULT_INFERENCE_PRECISION, OpenVINOBackend
 from lm7.errors import ArtifactLoadError, BackendUnavailableError, CompilationError
 from lm7.targets import parse_target
 
@@ -238,9 +238,17 @@ def test_openvino_ir_artifact_loads_without_torch():
     artifact_path = compiled.artifact.path
     assert artifact_path is not None and artifact_path.exists()
 
+    # The IR carries no inference precision: it is a load-time choice, and the
+    # CPU plugin defaults to BF16 on an x86 host with AMX and FP16 on ARM. LM7
+    # pins FP32 when it compiles, so a consumer comparing against LM7's own
+    # output has to pin it too, or the comparison measures the host's default
+    # precision rather than the artifact. Left unpinned this passed on most
+    # GitHub runners and failed by 2.5e-3 on the AMX-capable ones -- which is
+    # bf16 rounding of this model, to the digit.
     script = (
         "import sys, numpy, openvino\n"
-        "model = openvino.Core().compile_model(sys.argv[1], 'CPU')\n"
+        "config = {'INFERENCE_PRECISION_HINT': sys.argv[4]}\n"
+        "model = openvino.Core().compile_model(sys.argv[1], 'CPU', config)\n"
         "result = model([numpy.load(sys.argv[2])])[model.outputs[0]]\n"
         "numpy.save(sys.argv[3], result)\n"
         "assert 'torch' not in sys.modules, 'torch was imported'\n"
@@ -250,7 +258,15 @@ def test_openvino_ir_artifact_loads_without_torch():
         output_path = Path(tmp) / "output.npy"
         numpy.save(input_path, example_input.numpy())
         subprocess.run(
-            [sys.executable, "-c", script, str(artifact_path), str(input_path), str(output_path)],
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(artifact_path),
+                str(input_path),
+                str(output_path),
+                _DEFAULT_INFERENCE_PRECISION,
+            ],
             check=True,
         )
         actual = torch.from_numpy(numpy.load(output_path))
