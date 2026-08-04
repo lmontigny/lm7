@@ -135,37 +135,80 @@ first-call and steady-state latency, and peak GPU memory, so the
 footprint-versus-latency trade is measured rather than assumed. Add `--json` for
 structured output.
 
-## NVFP4 on hardware without FP4 tensor cores
+## NVFP4 across two GPU generations
 
 NVFP4 is NVIDIA's 4-bit block-scaled float format. Hardware FP4 matmul exists
-only on Blackwell (`sm100`, `sm120`). **LM7's measurements were taken on Ada
-(`sm89`), which has no FP4 arithmetic at all.**
+only on Blackwell (`sm100`, `sm120`), so the question that matters is whether
+that hardware changes the trade. It has now been measured on both sides:
 
-That is not a blocker, because weight-only quantization never asks the hardware
-to multiply in FP4 — the weight is unpacked to BF16 inside the matmul. So on
-`sm89` the mode runs correctly and buys footprint and bandwidth, and **cannot**
-buy arithmetic throughput. Whether Blackwell's FP4 tensor cores change the
-latency picture is unmeasured; LM7 has no such GPU.
+| mode | Ada `sm89` eager | Ada `sm89` compiled | Blackwell `sm120` compiled |
+| --- | --- | --- | --- |
+| `bf16` baseline | 27.66 ms | **8.92 ms** | **3.11 ms** |
+| `int8` | 40.62 ms | 65.13 ms (7.30x) | 18.77 ms (6.04x) |
+| `fp8` | 47.21 ms | 14.61 ms (1.64x) | 3.64 ms (1.17x) |
+| `nvfp4` | 260.98 ms | **22.27 ms** (2.50x) | **3.84 ms** (1.24x) |
 
-One consequence is that eager execution is pathological. The unpack is not
-fused, so every matmul pays it in full:
+Llama-3.2-1B, single prompt, BF16, `inductor`. Ada is an RTX 4070 SUPER, median
+of 10 after warmup. Blackwell is an RTX PRO 6000 Blackwell Server Edition,
+median of 30 after 5 warmup calls, through
+[`benchmarks/quantization.py`](../benchmarks/quantization.py). Parenthesised
+ratios are against each machine's own BF16 baseline.
 
-| mode | eager prefill | compiled prefill |
-| --- | --- | --- |
-| `bf16` baseline | 27.66 ms | **8.92 ms** |
-| `int8` | 40.62 ms | 65.13 ms |
-| `fp8` | 47.21 ms | 14.61 ms |
-| `nvfp4` | 260.98 ms | **22.27 ms** |
+The Blackwell column reproduces with:
 
-Llama-3.2-1B, single prompt, RTX 4070 SUPER (Ada, `sm89`), median of 10 after
-warmup. Inductor fuses the unpack into the matmul, which makes NVFP4 11.7x
-faster than its own eager path: from 9.4x slower than eager BF16 down to 2.5x
-slower than compiled BF16, and 2.9x faster than compiled INT8. This is why
-`--backend` is restricted to `inductor` — NVFP4 without it is unusable.
+```bash
+python benchmarks/quantization.py --model llama32-1b --dtype bfloat16 \
+  --output artifacts/quantization.json
+```
 
-Compilation is not free either. On that machine the first call for
-`nvfp4` took **72 seconds** against a 20 ms steady-state call, so the mode only
-makes sense where the process is long-lived or the artifact is reused.
+That harness sweeps every mode against one baseline in a single process and
+reports footprint, accuracy, and latency together. It measures accuracy eagerly
+and latency compiled, on the reasoning that weight-only error belongs to the
+weights while the latency anyone cares about belongs to the compiled path.
+Before it existed these numbers were collected one `lm7 model run` at a time,
+which is why the Ada column cannot be reproduced prompt-for-prompt.
+
+The Blackwell stack was `torch 2.13.0+cu130`, `torchao 0.17.0+cu130`,
+`transformers 5.14.1`, driver 580.126.20. PyTorch ships `sm_120` kernels, so no
+source build was needed; LM7 resolved `nvidia:sm120` and selected `inductor`
+without any change to the capability handling in `src/lm7/huggingface.py`, which
+compares `smXX` numerically and so already ordered Blackwell above Ada. The
+transformers version differs from whatever the Ada run used, which is one more
+reason to treat cross-column comparisons as indicative rather than controlled.
+
+**FP4 tensor cores do not rescue weight-only NVFP4, and cannot.** Weight-only
+quantization never issues an FP4 matmul — the weight is unpacked to BF16 inside
+the kernel, so the FP4 units are never asked to multiply anything. The
+measurement agrees with the mechanism: were they engaged, `nvfp4` would beat the
+BF16 baseline instead of trailing it by 1.24x. Reaching those units requires FP4
+*activations* as well, which is activation quantization and is not implemented
+here. This was reasoned from the config semantics and the timings, not confirmed
+by inspecting the emitted kernels.
+
+**What Blackwell changes is how much the mode costs.** NVFP4 went from 2.50x
+slower than its own BF16 baseline to 1.24x, and gained 5.79x in absolute terms
+where the baseline itself gained only 2.87x — the largest generational
+improvement of any mode measured. The plausible cause is memory bandwidth and
+better fused-unpack codegen rather than arithmetic, since the unpack is the part
+of the kernel that 4-bit storage actually touches. That attribution is a
+hypothesis, not a measurement.
+
+The practical consequence is that the same footprint saving costs far less. On
+Ada, 2.30x smaller cost 150% more latency. On Blackwell, 2.30x smaller costs
+24%. Blackwell is the first configuration where weight-only NVFP4 is a
+reasonable default rather than a footprint-only last resort — accuracy
+permitting, which is a separate question answered below.
+
+Two things did not improve. Eager execution stays pathological, because the
+unpack is not fused and every matmul pays it in full, which is why `--backend`
+is restricted to `inductor` — NVFP4 without it is unusable. And INT8 remains the
+worst latency of any mode on both generations by a wide margin.
+
+Compilation is not free either. On Ada the first `nvfp4` call took **72 seconds**
+against a 20 ms steady-state call. On Blackwell it ranged from **31 to 60
+seconds** across runs against a 3.8 ms steady-state call, so the ratio got worse
+even as both numbers improved. The mode still only makes sense where the process
+is long-lived or the artifact is reused.
 
 ## INT8 on CPU
 
@@ -477,6 +520,30 @@ the argmax; admitting it on 4/4 alone would be reading more into the signal than
 it carries. Reopening this needs a stronger accuracy check than next-token
 agreement, not another prompt.
 
+### The four prompts were never recorded, and they matter
+
+Re-measuring accuracy on Blackwell surfaced a weakness in the bar itself. The
+`sm120` sweep reproduced the 8-bit results closely — Llama-3.2-1B kept 4/4 for
+both `int8` (max logit difference 0.65 against Ada's 0.56) and `fp8` (0.89
+against 0.72), confirming that weight-only accuracy is a property of the weights
+and not of the GPU.
+
+`nvfp4` on the same model scored **3/4, with a logit difference of 4.62** against
+Ada's 4/4 and 4.34. The logit difference agrees to within 7%, so this is almost
+certainly not a hardware difference: the sm89 run's four prompts were never
+written down, and the four in `benchmarks/quantization.py` are a stated set
+rather than a reconstruction of them. Changing the prompts moved the pair across
+the 4/4 line.
+
+That is worth stating plainly, because Llama-3.2-1B is the *only* model admitted
+to the NVFP4 gate, and it was admitted on a 4/4 result that a different four
+prompts do not reproduce. It reinforces the conclusion of the section above:
+four greedy prompts are a coarse instrument. **The gate is left unchanged here**
+— narrowing it on a prompt set the original was not measured against would be
+trading one arbitrary bar for another — but it should be read as resting on
+weaker evidence than a 4/4 suggests. `benchmarks/quantization.py` now records
+its prompts in the JSON report so the next comparison is prompt-for-prompt.
+
 This is not an artifact of which layers are selected. Narrowing the filter
 recovers a little accuracy and gives back most of the footprint:
 
@@ -500,12 +567,14 @@ unmeasured here.
   bandwidth. At small batch sizes, where a decode step is already
   memory-bound per token but the dequantization overhead is paid on every
   matmul, the net can go the wrong way. This is why it is opt-in rather than a
-  default, and why the run reports latency alongside footprint. Measured on
-  sm89 and compiled, **every mode was slower than the BF16 baseline** —
-  `fp8` by 1.6x, `nvfp4` by 2.5x, `int8` by 7.3x. CPU is the one place where a
-  mode came out even: INT8 is at parity for SmolLM2-135M and 2.6x slower for
-  Llama-3.2-1B. Treat the footprint saving as the reliable benefit and latency
-  as something to measure per model *and* per target.
+  default, and why the run reports latency alongside footprint. Compiled,
+  **every mode was slower than the BF16 baseline on both GPUs measured** — by
+  1.6x (`fp8`), 2.5x (`nvfp4`) and 7.3x (`int8`) on sm89, and by 1.17x, 1.24x
+  and 6.0x on sm120. Newer silicon shrinks the penalty substantially without
+  removing it. CPU is the one place where a mode came out even: INT8 is at
+  parity for SmolLM2-135M and 2.6x slower for Llama-3.2-1B. Treat the footprint
+  saving as the reliable benefit and latency as something to measure per model
+  *and* per target.
 - **A validated pair is not a general guarantee.** It means those prompts
   agreed on that GPU or CPU. It does not establish behaviour across long
   contexts, batch sizes, or downstream task accuracy, none of which are
