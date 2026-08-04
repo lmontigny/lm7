@@ -138,6 +138,7 @@ for details.
 | [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
 | [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization, CPU and Blackwell GPU — FP8/NVFP4 measured and rejected, see [quantization](docs/quantization.md) |
 | [OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct) | Sparse MoE at 6.9B — `eager`, `inductor`, `zentorch` on AMD CPU |
+| [Mixtral-8x7B-Instruct-v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1) | Sparse MoE at 46.7B — `eager` and `inductor` on a 96 GB Blackwell, 93.4 GB resident |
 | BERT, ViT, LSTM, Conv+BatchNorm, sparse MoE, and five causal LMs | `openxla` parity on a Google TPU v6e — see [coverage](docs/google-tpu.md#model-coverage) |
 
 ## 1. Install
