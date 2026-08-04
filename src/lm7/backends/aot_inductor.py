@@ -160,6 +160,64 @@ def _cuda_build_environment(target: TargetSpec) -> Iterator[None]:
             cpp_extension.CUDA_HOME = previous_module_home
 
 
+def _current_compute_capability() -> str | None:
+    try:
+        major, minor = torch.cuda.get_device_capability()
+    except (AssertionError, RuntimeError):
+        return None
+    return f"sm{major}{minor}"
+
+
+# Manifest keys that describe what a package was built against, and the words to
+# use for them when a load fails.
+_ENVIRONMENT_LABELS = {
+    "torch": "PyTorch",
+    "cuda": "CUDA runtime",
+    "compute_capability": "GPU architecture",
+}
+
+
+def _environment_mismatch_hint(built_with: Mapping[str, Any] | None) -> str:
+    """Explain a failed load by comparing the build environment to this one.
+
+    A package that will not load is usually a package built somewhere else, and
+    the manifest already knows where. Naming the field that moved turns an
+    `undefined symbol` or `no kernel image is available` into an instruction.
+    Saying "re-export" when nothing differs would send the reader to the wrong
+    place, so a matching environment is reported as such instead.
+    """
+    if not built_with:
+        return " Use a compatible PyTorch runtime and target architecture."
+    current: Mapping[str, str | None] = {
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "compute_capability": _current_compute_capability(),
+    }
+    built = ", ".join(
+        f"{label} {built_with[key]}"
+        for key, label in _ENVIRONMENT_LABELS.items()
+        if built_with.get(key)
+    )
+    if not built:
+        return " Use a compatible PyTorch runtime and target architecture."
+    differences = [
+        f"{label} {built_with[key]} -> {current[key] or 'absent'}"
+        for key, label in _ENVIRONMENT_LABELS.items()
+        if built_with.get(key) and built_with[key] != current[key]
+    ]
+    if not differences:
+        return (
+            f" The artifact was built with {built}, which is what this process has, so the "
+            "package or its dependencies are at fault rather than the environment."
+        )
+    return (
+        f" The artifact was built with {built}, and this process differs: "
+        f"{'; '.join(differences)}. An AOTInductor package holds kernels compiled for one "
+        "architecture and a wrapper linked against one CUDA runtime, so re-export the model "
+        "on this machine."
+    )
+
+
 class AOTInductorBackend:
     name = "aot_inductor"
 
@@ -279,7 +337,12 @@ class AOTInductorBackend:
             ) from exc
         return Path(result)
 
-    def load_package(self, package_path: Path) -> Callable[..., Any]:
+    def load_package(
+        self,
+        package_path: Path,
+        *,
+        built_with: Mapping[str, Any] | None = None,
+    ) -> Callable[..., Any]:
         probe = self.probe()
         if not probe.available:
             raise ArtifactLoadError(probe.reason)
@@ -287,6 +350,6 @@ class AOTInductorBackend:
             return torch._inductor.aoti_load_package(str(package_path))
         except Exception as exc:
             raise ArtifactLoadError(
-                f"AOTInductor package load failed for {package_path}: {exc}. "
-                "Use a compatible PyTorch runtime and target architecture."
+                f"AOTInductor package load failed for {package_path}: {exc}."
+                f"{_environment_mismatch_hint(built_with)}"
             ) from exc

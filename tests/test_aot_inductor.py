@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import lm7
+from lm7 import exporting
 from lm7.backends import aot_inductor, registry
 from lm7.backends.aot_inductor import AOTInductorBackend
 from lm7.backends.base import CompileRequest
@@ -163,6 +164,129 @@ def test_compiled_checksum_is_validated(tmp_path, monkeypatch):
 
     with pytest.raises(ArtifactLoadError, match="compiled package checksum"):
         lm7.load_artifact(artifact.path)
+
+
+def build_environment(monkeypatch, *, torch_version, cuda, architecture):
+    """Pin what this process looks like, so the hint is the same everywhere.
+
+    Without this the assertions would depend on the test machine's PyTorch and
+    GPU, and the CPU-only CI runner and a developer's card would disagree.
+    """
+    monkeypatch.setattr(torch, "__version__", torch_version)
+    monkeypatch.setattr(torch.version, "cuda", cuda)
+    monkeypatch.setattr(aot_inductor, "_current_compute_capability", lambda: architecture)
+
+
+def test_nvidia_artifacts_record_what_they_were_built_against(monkeypatch):
+    monkeypatch.setattr(
+        exporting,
+        "_cuda_device_requirements",
+        lambda: {
+            "cuda": "13.0",
+            "compute_capability": "sm120",
+            "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+        },
+    )
+
+    # A CPU or Apple package is bound to its host too, but LM7 has not measured
+    # how, so it claims nothing rather than guessing.
+    assert exporting._aot_inductor_requirements(parse_target("cpu")) == {}
+
+    requirements = exporting._aot_inductor_requirements(parse_target("nvidia:sm120"))
+    assert requirements["device_bound"] is True
+    assert requirements["cuda"] == "13.0"
+    assert requirements["compute_capability"] == "sm120"
+    assert "Blackwell" in requirements["device_name"]
+
+
+def test_load_failure_names_the_field_that_moved(monkeypatch, tmp_path):
+    build_environment(monkeypatch, torch_version="2.13.0+cu130", cuda="13.0", architecture="sm89")
+
+    def refuse(path):
+        raise RuntimeError("no kernel image is available for execution on the device")
+
+    monkeypatch.setattr(torch._inductor, "aoti_load_package", refuse)
+
+    with pytest.raises(ArtifactLoadError) as failure:
+        AOTInductorBackend().load_package(
+            tmp_path / "compiled_model.pt2",
+            built_with={
+                "torch": "2.13.0+cu130",
+                "cuda": "13.0",
+                "compute_capability": "sm120",
+            },
+        )
+
+    message = str(failure.value)
+    assert "no kernel image is available" in message
+    assert "GPU architecture sm120 -> sm89" in message
+    assert "re-export the model" in message
+    # PyTorch and CUDA match here, so neither belongs in the list of differences.
+    assert "PyTorch 2.13.0+cu130 ->" not in message
+
+
+def test_load_failure_does_not_blame_a_matching_environment(monkeypatch, tmp_path):
+    build_environment(monkeypatch, torch_version="2.13.0+cu130", cuda="13.0", architecture="sm120")
+
+    def refuse(path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(torch._inductor, "aoti_load_package", refuse)
+
+    with pytest.raises(ArtifactLoadError) as failure:
+        AOTInductorBackend().load_package(
+            tmp_path / "compiled_model.pt2",
+            built_with={
+                "torch": "2.13.0+cu130",
+                "cuda": "13.0",
+                "compute_capability": "sm120",
+            },
+        )
+
+    message = str(failure.value)
+    assert "which is what this process has" in message
+    assert "re-export" not in message
+
+
+def test_load_failure_without_recorded_metadata_keeps_the_general_hint(monkeypatch, tmp_path):
+    # Artifacts written before the manifest recorded a build environment still
+    # have to fail readably.
+    def refuse(path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(torch._inductor, "aoti_load_package", refuse)
+
+    with pytest.raises(ArtifactLoadError, match="compatible PyTorch runtime"):
+        AOTInductorBackend().load_package(tmp_path / "compiled_model.pt2")
+
+
+def test_load_artifact_reports_the_manifest_build_environment(tmp_path, monkeypatch):
+    """The manifest's record has to reach the error, not just the file."""
+    source = model()
+
+    def fake_compile(exported_program, *, package_path, inductor_configs):
+        Path(package_path).write_bytes(b"package")
+        return str(package_path)
+
+    monkeypatch.setattr(torch._inductor, "aoti_compile_and_package", fake_compile)
+    monkeypatch.setattr(torch._inductor, "aoti_load_package", lambda path: source)
+    artifact = lm7.export(
+        source,
+        args=(torch.randn(2, 4),),
+        target="cpu",
+        backend="aot_inductor",
+        output=tmp_path / "model.lm7",
+    )
+    recorded = artifact.manifest.runtime_requirements["torch"]
+
+    def refuse(path):
+        raise RuntimeError("undefined symbol")
+
+    monkeypatch.setattr(torch._inductor, "aoti_load_package", refuse)
+    with pytest.raises(ArtifactLoadError) as failure:
+        lm7.load_artifact(artifact.path)
+
+    assert f"PyTorch {recorded}" in str(failure.value)
 
 
 def test_aot_export_rejects_unvalidated_target(tmp_path):

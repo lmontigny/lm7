@@ -574,6 +574,14 @@ def export(
                 "torch": torch.__version__,
                 "device": resolved_target.vendor,
                 "api_status": "stable" if backend == "export" else "beta",
+                # An AOTInductor package for a GPU is as architecture-bound as a
+                # TensorRT engine, and until this it recorded neither the CUDA it
+                # linked against nor the card it was built on -- so a load that
+                # failed on another machine had nothing in the artifact to
+                # explain itself with.
+                **(
+                    _aot_inductor_requirements(resolved_target) if backend == "aot_inductor" else {}
+                ),
                 # The IR payload executes on the OpenVINO runtime alone; torch is
                 # only needed to read the exported_program.pt2 alongside it. The
                 # IR itself is device-neutral, but which plugin compiles it is
@@ -865,7 +873,9 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
         backend = registry.get("aot_inductor")
         if not isinstance(backend, AOTInductorBackend):
             raise ArtifactLoadError("The registered aot_inductor backend is invalid.")
-        compiled_callable = backend.load_package(compiled_path)
+        compiled_callable = backend.load_package(
+            compiled_path, built_with=manifest.runtime_requirements
+        )
     elif manifest.backend == "openvino":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
@@ -1089,6 +1099,25 @@ def _tensorrt_runtime_version() -> str | None:
         except importlib.metadata.PackageNotFoundError:
             pass
     return None
+
+
+def _aot_inductor_requirements(target: TargetSpec) -> dict[str, Any]:
+    """What an AOTInductor payload was built against, for a CUDA target.
+
+    The package holds kernels compiled for one compute capability and a wrapper
+    linked against one CUDA runtime, which is why `_validate_target_architecture`
+    refuses to load it on a different GPU. Recording the pair is what makes both
+    outcomes diagnosable from the artifact alone: a refusal can name what the
+    artifact wanted, and a failure that gets past the guard can be told apart
+    from a merely broken package.
+
+    CPU and Apple targets record nothing here. Their payload is bound to a host
+    toolchain too, but LM7 has not characterized how, and a guess in a manifest
+    is worse than a gap.
+    """
+    if target.vendor != "nvidia":
+        return {}
+    return {"device_bound": True, **_cuda_device_requirements()}
 
 
 def _cuda_device_requirements() -> dict[str, Any]:
