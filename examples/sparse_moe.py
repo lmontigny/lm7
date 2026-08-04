@@ -3,10 +3,16 @@
 Two architectures, because they do not behave the same. Mixtral's pre-5.x
 transformers implementation routes tokens with a data-dependent Python loop
 (``for expert_idx in expert_hit: ...``) whose iteration count is only known at
-runtime. torch.compile tolerates that -- Dynamo graph-breaks around the loop and
-runs it eagerly -- but torch.export must capture one static graph and fails,
-which takes every export-based backend down with it. OLMoE's routing never used
-that loop, and transformers 5.x removed it from Mixtral as well.
+runtime. torch.compile tolerates that; torch.export must capture one static graph
+and fails, which takes every export-based backend down with it. OLMoE's routing
+never used that loop, and transformers 5.x removed it from Mixtral as well.
+
+That loop is an *export* problem only. What breaks Dynamo on the pinned
+transformers is a different thing -- ``aten.nonzero`` in the router, whose output
+shape depends on tensor data -- and it affects both architectures equally, eight
+or nine breaks each. On transformers 5.x neither breaks at all. See
+``benchmarks/moe.py``, which measures this rather than inferring it, and
+docs/limitations.md.
 
 So JIT works everywhere here, and exportability depends on the pair:
 
