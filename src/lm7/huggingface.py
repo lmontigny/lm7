@@ -11,7 +11,13 @@ from typing import Any
 import torch
 
 from .api import compile
-from .detection import inference_context, resolve_target, synchronize, torch_device
+from .detection import (
+    compute_capability,
+    inference_context,
+    resolve_target,
+    synchronize,
+    torch_device,
+)
 from .errors import UnsupportedModelError
 from .exporting import DynamicDimension, ShapeProfile
 from .targets import TargetSpec
@@ -861,17 +867,10 @@ _QUANTIZATION_SELECTS = {
 def _compute_capability(target: TargetSpec) -> int | None:
     """The ``smXX`` number for a CUDA target, or None when it is not stated.
 
-    None means "do not gate on architecture". An unqualified ``nvidia`` target has
-    no architecture until it is resolved against real hardware, so refusing on a
-    missing value would reject the common case.
+    Kept as an alias so the quantization gates and `lm7 targets` cannot drift
+    apart on what `sm120` means. See `detection.compute_capability`.
     """
-    architecture = target.architecture
-    if not architecture or not architecture.startswith("sm"):
-        return None
-    try:
-        return int(architecture.removeprefix("sm"))
-    except ValueError:
-        return None
+    return compute_capability(target)
 
 
 def _supports_fp8(target: TargetSpec) -> bool:

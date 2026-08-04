@@ -165,9 +165,9 @@ with `uv run`. Without `uv`:
 `python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e .`.
 
 Per-hardware setup: [CPU](docs/cpu.md) · [AMD CPU](docs/amd-cpu.md) ·
-[NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
-[Apple Silicon](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md) ·
-[Tenstorrent](docs/tenstorrent.md).
+[NVIDIA](docs/development.md#nvidia-cuda) · [NVIDIA Blackwell](docs/nvidia-blackwell.md) ·
+[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
+[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
 
 ## 2. Inspect the machine
 

@@ -4,7 +4,7 @@ import argparse
 import json
 import platform
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
@@ -135,10 +135,35 @@ def _format_memory(total_bytes: int | None) -> str:
     return f", {gibibytes:.1f} GiB"
 
 
+def _format_precision(capabilities: Mapping[str, Any]) -> str:
+    """One line naming the formats the silicon computes, and the ones it fakes.
+
+    Emulated formats are the reason this is printed at all: a target that runs
+    BF16 by emulation looks identical to one that does not until something is
+    inexplicably slow.
+    """
+    precision = capabilities.get("precision")
+    if not isinstance(precision, Mapping) or not precision:
+        return ""
+    native = [name for name, support in precision.items() if support == "native"]
+    emulated = [name for name, support in precision.items() if support == "emulated"]
+    parts = [f"native {', '.join(native)}"] if native else []
+    if emulated:
+        parts.append(f"emulated {', '.join(emulated)}")
+    return "; ".join(parts)
+
+
 def _print_targets(devices: Sequence[DeviceInfo]) -> None:
     print(f"Detected targets ({len(devices)}):")
     for device in devices:
-        print(f"  {device.target}: {device.name}{_format_memory(device.total_memory_bytes)}")
+        generation = device.capabilities.get("generation")
+        suffix = f" ({generation})" if generation else ""
+        print(
+            f"  {device.target}: {device.name}{suffix}{_format_memory(device.total_memory_bytes)}"
+        )
+        precision = _format_precision(device.capabilities)
+        if precision:
+            print(f"    precision: {precision}")
 
 
 def _print_backends(backends: Sequence[dict[str, Any]]) -> None:
