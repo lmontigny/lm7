@@ -7,13 +7,19 @@ import torch
 
 from lm7.errors import UnsupportedModelError
 from lm7.huggingface import (
+    DYNAMIC_ACTIVATION_QUANTIZATIONS,
     FP8,
+    FP8_DYNAMIC,
     INT8,
     NVFP4,
+    NVFP4_DYNAMIC,
+    VALIDATED_ACTIVATION,
     VALIDATED_WEIGHT_ONLY,
+    WEIGHT_ONLY_QUANTIZATIONS,
     _apply_quantization,
     _validate_quantization,
     normalize_quantization,
+    nvfp4_dynamic_kernel,
 )
 from lm7.targets import parse_target
 
@@ -80,7 +86,10 @@ def test_long_form_names_normalize_to_short_names():
 
 
 def test_unknown_quantization_lists_the_short_names():
-    with pytest.raises(UnsupportedModelError, match="none, fp8, int8, nvfp4"):
+    """The list names both families, so a reader sees that activation modes exist."""
+    with pytest.raises(
+        UnsupportedModelError, match="none, fp8, fp8-dynamic, int8, nvfp4, nvfp4-dynamic"
+    ):
         validate("HuggingFaceTB/SmolLM2-135M-Instruct", "int4")
 
 
@@ -137,3 +146,87 @@ def test_nvfp4_is_validated_far_more_narrowly_than_int8():
 
     with pytest.raises(UnsupportedModelError, match="not validated"):
         validate("HuggingFaceTB/SmolLM2-135M-Instruct", NVFP4)
+
+
+def test_dynamic_modes_are_separate_from_weight_only_ones():
+    """`nvfp4` did not silently change meaning when `nvfp4-dynamic` was added.
+
+    Adding activation quantization under the existing name would have changed what
+    an existing command does, so the short names keep their weight-only meaning and
+    the explicit long form resolves to the same thing.
+    """
+    assert normalize_quantization("nvfp4-weight-only") == NVFP4
+    assert NVFP4 in WEIGHT_ONLY_QUANTIZATIONS
+    assert NVFP4 not in DYNAMIC_ACTIVATION_QUANTIZATIONS
+    assert DYNAMIC_ACTIVATION_QUANTIZATIONS == frozenset({FP8_DYNAMIC, NVFP4_DYNAMIC})
+
+
+def test_nvfp4_dynamic_needs_blackwell_but_weight_only_does_not():
+    """The two NVFP4 modes have different hardware floors, for a real reason.
+
+    Weight-only NVFP4 unpacks to BF16 inside the kernel and never issues an FP4
+    matmul, so it runs on anything Ampere or newer. The dynamic mode asks the
+    tensor cores to multiply in FP4, which exists only on Blackwell.
+    """
+    ada = parse_target("nvidia:sm89")
+    blackwell = parse_target("nvidia:sm120")
+
+    _validate_quantization(NVFP4, ada, "inductor", "bfloat16", None)
+    with pytest.raises(UnsupportedModelError, match="Blackwell"):
+        _validate_quantization(NVFP4_DYNAMIC, ada, "inductor", "bfloat16", None)
+    _validate_quantization(NVFP4_DYNAMIC, blackwell, "inductor", "bfloat16", None)
+
+
+def test_fp8_dynamic_shares_the_ada_floor_with_fp8():
+    with pytest.raises(UnsupportedModelError, match="Ada"):
+        _validate_quantization(FP8_DYNAMIC, parse_target("nvidia:sm80"), "inductor", "auto", None)
+    _validate_quantization(FP8_DYNAMIC, parse_target("nvidia:sm89"), "inductor", "auto", None)
+
+
+def test_dynamic_modes_use_their_own_validated_table():
+    """A model validated for weight-only FP8 is not thereby validated for FP8
+    dynamic: the second changes what the matmul executes in, not just what is
+    stored, so it has to earn its own entry."""
+    model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    assert FP8 in VALIDATED_WEIGHT_ONLY[model_id]
+
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        _validate_quantization(
+            FP8_DYNAMIC, parse_target("nvidia:sm120"), "inductor", "auto", model_id
+        )
+
+
+def test_dynamic_modes_convert_the_same_layers_as_their_weight_only_pair():
+    """Otherwise the pair would not be comparable, and comparing them is the point."""
+    from lm7.huggingface import _QUANTIZATION_FILTERS
+
+    assert _QUANTIZATION_FILTERS[FP8_DYNAMIC] is _QUANTIZATION_FILTERS[FP8]
+    assert _QUANTIZATION_FILTERS[NVFP4_DYNAMIC] is _QUANTIZATION_FILTERS[NVFP4]
+
+
+def test_nvfp4_kernel_is_reported_not_assumed():
+    """ "NVFP4 dynamic ran" and "the fused Triton kernel ran" are different claims."""
+    assert nvfp4_dynamic_kernel() in {"triton-mslk", "torch-fallback"}
+
+
+def test_fp8_dynamic_is_admitted_for_llama_1b_and_nvfp4_dynamic_is_not():
+    """Measured on a Blackwell sm120 against a BF16 baseline, Llama-3.2-1B.
+
+    fp8-dynamic kept 4/4 top-1 at a maximum logit difference of 1.59 and came out
+    at 0.97x baseline latency -- the first mode in this repo to be faster than not
+    quantizing. nvfp4-dynamic scored 3/4 at 5.03 and ran 1.48x slower, so 4-bit
+    activations on top of 4-bit weights is where this model stops holding its
+    token. See docs/quantization.md.
+    """
+    admitted = VALIDATED_ACTIVATION["unsloth/Llama-3.2-1B-Instruct"]
+    assert admitted == frozenset({FP8_DYNAMIC})
+    assert NVFP4_DYNAMIC not in admitted
+
+    blackwell = parse_target("nvidia:sm120")
+    _validate_quantization(
+        FP8_DYNAMIC, blackwell, "inductor", "auto", "unsloth/Llama-3.2-1B-Instruct"
+    )
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        _validate_quantization(
+            NVFP4_DYNAMIC, blackwell, "inductor", "auto", "unsloth/Llama-3.2-1B-Instruct"
+        )

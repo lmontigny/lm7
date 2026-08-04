@@ -35,7 +35,9 @@ import torch
 import lm7
 from lm7.detection import resolve_target, synchronize
 from lm7.huggingface import (
+    FP8_DYNAMIC,
     NO_QUANTIZATION,
+    NVFP4_DYNAMIC,
     _apply_quantization,
     _model_storage_bytes,
     _peak_memory,
@@ -63,7 +65,10 @@ PROMPTS = (
     "In 1969, humans first landed on",
 )
 
-MODES = ("none", "int8", "fp8", "nvfp4")
+# The dynamic modes quantize activations too, so the matmul runs in the narrow
+# format instead of dequantizing to BF16 first -- the only family here that can
+# cut arithmetic rather than only bytes moved.
+MODES = ("none", "int8", "fp8", "nvfp4", FP8_DYNAMIC, NVFP4_DYNAMIC)
 
 
 def _dtype(name: str) -> torch.dtype:
