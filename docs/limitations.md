@@ -147,7 +147,9 @@ weight-only quantization unpacks to BF16 inside the kernel and never issues an
 FP4 matmul. On CPU, INT8 was at parity for SmolLM2-135M and 2.6x slower for
 Llama-3.2-1B, on an AVX2-only part with no VNNI — so the latency result does not
 generalize to server CPUs or ARM. `nvfp4` gives the smallest footprint and the
-largest accuracy loss, clearing the validation bar for one model out of four
+largest accuracy loss, clearing the validation bar for one model out of five
 tried — and on a second, equally arbitrary set of four prompts that one model
-scores 3/4 rather than 4/4. See [quantization](quantization.md) for which layers
-each mode converts and the measurements behind it.
+scores 3/4 rather than 4/4. The one model large enough to matter,
+Llama-3.1-8B, is measured on CPU and Blackwell GPU for INT8 and rejects both
+narrower modes. See [quantization](quantization.md) for which layers each mode
+converts and the measurements behind it.

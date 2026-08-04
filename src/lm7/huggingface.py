@@ -85,11 +85,15 @@ _BF16_MINIMUM_CAPABILITY = 80
 # docs/quantization.md.
 #
 # Every INT8 entry below 8B was measured on NVIDIA sm89 *and* on x86-64 CPU.
-# Llama-3.1-8B is the exception and is CPU-only: its FP32 baseline needs 30 GiB
-# of weights, which no GPU here can hold, so the NVIDIA half of that pair is
-# unmeasured rather than passing. INT8 stays permitted on NVIDIA for it because
-# _QUANTIZATION_VENDORS is keyed on the mode and not the model -- treat an 8B
-# INT8 run on a GPU as unvalidated.
+# Llama-3.1-8B was the exception, admitted on CPU evidence alone because no GPU
+# here could hold it. That has now been measured on a Blackwell sm120 (96 GB),
+# where the BF16 GPU baseline is 16.1 GB rather than the 30 GiB the CPU FP32 path
+# needs: INT8 keeps 4/4 top-1 with a maximum logit difference of 0.39, so the
+# NVIDIA half of that pair passes rather than being unmeasured.
+#
+# The same run measured FP8 and NVFP4 against it for the first time, and both are
+# rejected -- FP8 at 3/4 and NVFP4 at 2/4. So this entry's value is unchanged and
+# its evidence is not. See docs/quantization.md.
 VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
     "HuggingFaceTB/SmolLM2-135M-Instruct": frozenset({INT8, FP8}),
     "unsloth/Llama-3.2-1B-Instruct": frozenset({INT8, FP8, NVFP4}),

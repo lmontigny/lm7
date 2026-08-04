@@ -467,11 +467,11 @@ That combination has not been measured: no NPU was available. See
 > `unsloth/Llama-3.1-8B-Instruct` (`int8`). Every `int8` entry below 8B was
 > measured on NVIDIA sm89 *and* on x86-64 CPU.
 >
-> **Llama-3.1-8B is CPU-only.** Its FP32 baseline is 30 GiB of weights, which no
-> GPU on hand can hold, so the NVIDIA half of that pair is unmeasured rather than
-> passing. The gate is keyed on the mode and not the model, so INT8 on an 8B
-> model will still be *permitted* on an NVIDIA target — treat that combination as
-> unvalidated.
+> **Llama-3.1-8B is now measured on both targets.** It used to be CPU-only,
+> because its 30 GiB FP32 baseline fit on no GPU here. A Blackwell `sm120` with
+> 96 GB holds it — at BF16 the GPU baseline is 16.1 GB, not 30 GiB — and INT8
+> passes there at 4/4. FP8 and NVFP4 were run against it for the first time in
+> the same sweep and **both fail**, so the entry stays `int8`-only.
 
 ### What "validated" means here
 
@@ -543,6 +543,50 @@ four greedy prompts are a coarse instrument. **The gate is left unchanged here**
 trading one arbitrary bar for another — but it should be read as resting on
 weaker evidence than a 4/4 suggests. `benchmarks/quantization.py` now records
 its prompts in the JSON report so the next comparison is prompt-for-prompt.
+
+### Llama-3.1-8B, finally on a GPU
+
+The 8B pair was admitted on CPU evidence alone because the model fit on no GPU
+here. On a 96 GB Blackwell it does — and at BF16 the GPU baseline is 16.1 GB, so
+the 30 GiB figure that blocked it was always the CPU FP32 path rather than the
+one a GPU would take. All four modes, `sm120`, BF16, `inductor`:
+
+| mode | median | vs baseline | storage | top-1 | max logit diff |
+| --- | --- | --- | --- | --- | --- |
+| `bf16` baseline | 12.47 ms | — | 16.06 GB | — | — |
+| `int8` | 88.91 ms | 7.13x | 9.09 GB (1.77x) | **4/4** | 0.39 |
+| `fp8` | 19.25 ms | 1.54x | 10.43 GB (1.54x) | 3/4 | 0.58 |
+| `nvfp4` | 18.47 ms | 1.48x | 6.03 GB (**2.66x**) | 2/4 | 2.78 |
+
+**INT8 passes, so the entry that was assumed is now measured.** FP8 and NVFP4
+had never been run against this model at all; both fail, so the gate keeps the
+same value it had for a completely different reason.
+
+Three things do not carry over from the 1B results:
+
+- **The latency penalty grows with model size.** On the same GPU, `int8` went
+  from 6.04x to 7.13x, `fp8` from 1.17x to 1.54x, and `nvfp4` from 1.24x to
+  1.48x. The comparatively cheap NVFP4 of the section above is a 1B result and
+  does not extrapolate.
+- **The footprint saving grows too**, for the opposite reason: embeddings and
+  norms are a smaller fraction of a larger model, so more of it is convertible.
+  `nvfp4` reaches 2.66x here against 2.30x at 1B.
+- **NVFP4 beats FP8 on both axes at 8B** — faster *and* 1.7x smaller — and is
+  still the mode to avoid, because it is the one that loses half its top-1
+  tokens.
+
+The FP8 result is worth reading carefully rather than as a simple failure. Its
+maximum logit difference is 0.58, smaller than several modes that scored 4/4
+elsewhere, and the single prompt it flipped went from the baseline's `" a"` to
+`" Paris"` on `"The capital of France is"`. A 0.58 logit movement flipped a
+near-tie between two plausible continuations, and it flipped it toward the
+answer a reader would call correct.
+
+That is a limit of the bar, not a defence of FP8: **top-1 agreement measures
+fidelity to the unquantized baseline, not quality.** A quantized model that
+disagrees may be better or worse, and next-token agreement cannot tell which.
+Combined with the prompt-set sensitivity above, it is the second concrete reason
+in this document to replace the four-prompt check with a real accuracy metric.
 
 This is not an artifact of which layers are selected. Narrowing the filter
 recovers a little accuracy and gives back most of the footprint:
