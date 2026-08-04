@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -29,16 +30,34 @@ INT8 = "int8"
 FP8 = "fp8"
 NVFP4 = "nvfp4"
 WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8, FP8, NVFP4})
+
+# Dynamic activation quantization: the activations are quantized at runtime as
+# well as the weights, so the matmul itself executes in the narrow format rather
+# than dequantizing to BF16 first. This is the only family here that can cut
+# arithmetic work instead of only bytes moved, and therefore the only one that
+# has ever come out faster than its BF16 baseline -- see docs/quantization.md.
+FP8_DYNAMIC = "fp8-dynamic"
+NVFP4_DYNAMIC = "nvfp4-dynamic"
+DYNAMIC_ACTIVATION_QUANTIZATIONS = frozenset({FP8_DYNAMIC, NVFP4_DYNAMIC})
 NO_QUANTIZATION = "none"
 
-# The pre-0.2 spellings. `--quantize` advertises the short names; these keep
-# existing scripts and `--quantization` working.
+# The pre-0.2 spellings, plus explicit long forms for the weight-only modes. The
+# short names keep their existing weight-only meaning: `nvfp4` did not silently
+# become an activation mode when `nvfp4-dynamic` was added, because that would
+# change what an existing command does.
 QUANTIZATION_ALIASES: dict[str, str] = {
     "int8-weight-only": INT8,
     "fp8-weight-only": FP8,
+    "nvfp4-weight-only": NVFP4,
 }
 
-_QUANTIZATION_LABELS = {INT8: "INT8", FP8: "FP8", NVFP4: "NVFP4"}
+_QUANTIZATION_LABELS = {
+    INT8: "INT8",
+    FP8: "FP8",
+    NVFP4: "NVFP4",
+    FP8_DYNAMIC: "FP8 dynamic activation + FP8 weight",
+    NVFP4_DYNAMIC: "NVFP4 dynamic activation + NVFP4 weight",
+}
 
 # Which targets each mode is allowed on. INT8 is the only mode measured off
 # NVIDIA: FP8 needs Ada-class tensor cores, and NVFP4 on CPU kept only 2 of 4
@@ -47,12 +66,16 @@ _QUANTIZATION_VENDORS = {
     INT8: frozenset({"nvidia", "cpu"}),
     FP8: frozenset({"nvidia"}),
     NVFP4: frozenset({"nvidia"}),
+    FP8_DYNAMIC: frozenset({"nvidia"}),
+    NVFP4_DYNAMIC: frozenset({"nvidia"}),
 }
 
 _QUANTIZATION_VENDOR_TEXT = {
     INT8: "detected NVIDIA GPUs and CPU targets",
     FP8: "detected NVIDIA GPUs",
     NVFP4: "detected NVIDIA GPUs",
+    FP8_DYNAMIC: "detected NVIDIA GPUs",
+    NVFP4_DYNAMIC: "detected NVIDIA GPUs",
 }
 
 # Quantization pins compute dtype so the (model, mode) measurements stay
@@ -82,6 +105,26 @@ _FP8_MINIMUM_CAPABILITY = 89
 # best case is a regression. See docs/quantization.md.
 _BF16_MINIMUM_CAPABILITY = 80
 
+# FP4 arithmetic exists only on Blackwell.
+_NVFP4_DYNAMIC_MINIMUM_CAPABILITY = 100
+
+# The capability floor per mode, above the BF16 floor every mode shares. Note
+# what is *not* here: weight-only NVFP4 never issues an FP4 matmul -- it unpacks
+# to BF16 inside the kernel -- so it runs on anything Ampere or newer. The
+# dynamic mode asks the tensor cores to multiply in FP4 and genuinely needs the
+# silicon, which is why the two NVFP4 modes have different floors.
+_MODE_MINIMUM_CAPABILITY = {
+    FP8: _FP8_MINIMUM_CAPABILITY,
+    FP8_DYNAMIC: _FP8_MINIMUM_CAPABILITY,
+    NVFP4_DYNAMIC: _NVFP4_DYNAMIC_MINIMUM_CAPABILITY,
+}
+
+_MODE_CAPABILITY_TEXT = {
+    FP8: "NVIDIA Ada (sm89), Hopper (sm90), or newer",
+    FP8_DYNAMIC: "NVIDIA Ada (sm89), Hopper (sm90), or newer",
+    NVFP4_DYNAMIC: "NVIDIA Blackwell (sm100, sm120) or newer, where FP4 arithmetic exists",
+}
+
 # Validated per model *and* per mode, because the two are not interchangeable:
 # LFM2.5-230M keeps its top-1 token under FP8 but diverges completely under INT8
 # (0/4 prompts agreed with BF16, max logit difference 22.4 on NVIDIA sm89). A
@@ -107,6 +150,24 @@ VALIDATED_WEIGHT_ONLY: dict[str, frozenset[str]] = {
     "unsloth/Llama-3.1-8B-Instruct": frozenset({INT8}),
 }
 WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
+
+# The same per-(model, mode) gate for the activation modes, kept separate because
+# the two families fail differently: a weight-only mode changes stored weights and
+# a dynamic mode also changes what the matmul executes in, so a model can pass one
+# and fail the other. Populated only from measurements on real hardware.
+#
+# Measured on a Blackwell sm120 against a BF16 baseline, Llama-3.2-1B:
+#
+#   fp8-dynamic     4/4 top-1, max logit difference 1.59, 0.97x baseline latency
+#   nvfp4-dynamic   3/4 top-1, max logit difference 5.03, 1.48x baseline latency
+#
+# So FP8 dynamic is admitted and NVFP4 dynamic is not. NVFP4's 3/4 is the same bar
+# its weight-only counterpart fails on a second prompt set, and 4 bits of
+# activation on top of 4 bits of weight is where this model stops holding its
+# token. See docs/quantization.md.
+VALIDATED_ACTIVATION: dict[str, frozenset[str]] = {
+    "unsloth/Llama-3.2-1B-Instruct": frozenset({FP8_DYNAMIC}),
+}
 
 # Export backends that accept `quantization`. The two are unrelated mechanisms:
 # ExecuTorch runs calibrated XNNPACK PTQ over the lowered graph, while OpenVINO
@@ -729,8 +790,13 @@ def _validate_quantization(
 ) -> None:
     if quantization == NO_QUANTIZATION:
         return
-    if quantization not in WEIGHT_ONLY_QUANTIZATIONS:
-        choices = ", ".join([NO_QUANTIZATION, *sorted(WEIGHT_ONLY_QUANTIZATIONS)])
+    if quantization not in WEIGHT_ONLY_QUANTIZATIONS | DYNAMIC_ACTIVATION_QUANTIZATIONS:
+        choices = ", ".join(
+            [
+                NO_QUANTIZATION,
+                *sorted(WEIGHT_ONLY_QUANTIZATIONS | DYNAMIC_ACTIVATION_QUANTIZATIONS),
+            ]
+        )
         raise UnsupportedModelError(
             f"Unsupported quantization {quantization!r}; expected one of: {choices}."
         )
@@ -745,18 +811,19 @@ def _validate_quantization(
         _validate_openvino_quantization(quantization, model_id)
         return
     label = _QUANTIZATION_LABELS[quantization]
+    family = "activation" if quantization in DYNAMIC_ACTIVATION_QUANTIZATIONS else "weight-only"
     if target.vendor not in _QUANTIZATION_VENDORS[quantization]:
         raise UnsupportedModelError(
-            f"{label} weight-only quantization is supported only on "
+            f"{label} {family} quantization is supported only on "
             f"{_QUANTIZATION_VENDOR_TEXT[quantization]}."
         )
     if backend not in {"auto", "inductor"}:
         raise UnsupportedModelError(
-            f"{label} weight-only quantization requires backend='auto' or backend='inductor'."
+            f"{label} {family} quantization requires backend='auto' or backend='inductor'."
         )
     if not supports_native_bf16(target):
         raise UnsupportedModelError(
-            f"{label} weight-only quantization requires NVIDIA Ampere (sm80) or newer; "
+            f"{label} {family} quantization requires NVIDIA Ampere (sm80) or newer; "
             f"{target.architecture} emulates bfloat16. Measured on a Tesla T4 (sm75), "
             "INT8 ran 3.3x slower than unquantized float16 and lost a top-1 token, and "
             "float16 compute produces NaN logits. Use quantization='none' on this GPU."
@@ -764,24 +831,29 @@ def _validate_quantization(
     expected_dtype = _QUANTIZED_COMPUTE_DTYPE[target.vendor]
     if dtype not in {"auto", expected_dtype}:
         raise UnsupportedModelError(
-            f"{label} weight-only quantization on {target.vendor} requires dtype='auto' "
+            f"{label} {family} quantization on {target.vendor} requires dtype='auto' "
             f"or dtype='{expected_dtype}'."
         )
-    if quantization == FP8 and not _supports_fp8(target):
+    minimum = _MODE_MINIMUM_CAPABILITY.get(quantization)
+    capability = _compute_capability(target)
+    if minimum is not None and capability is not None and capability < minimum:
         raise UnsupportedModelError(
-            "FP8 weight-only quantization requires NVIDIA Ada (sm89), Hopper (sm90), "
-            "or newer hardware."
+            f"{label} {family} quantization requires {_MODE_CAPABILITY_TEXT[quantization]}; "
+            f"{target.architecture} is below that."
         )
-    if model_id is not None and quantization not in VALIDATED_WEIGHT_ONLY.get(
-        model_id, frozenset()
-    ):
-        validated = ", ".join(
-            f"{name} ({', '.join(sorted(modes))})"
-            for name, modes in sorted(VALIDATED_WEIGHT_ONLY.items())
+    validated = (
+        VALIDATED_ACTIVATION
+        if quantization in DYNAMIC_ACTIVATION_QUANTIZATIONS
+        else VALIDATED_WEIGHT_ONLY
+    )
+    if model_id is not None and quantization not in validated.get(model_id, frozenset()):
+        listed = ", ".join(
+            f"{name} ({', '.join(sorted(modes))})" for name, modes in sorted(validated.items())
         )
         raise UnsupportedModelError(
-            f"{label} weight-only quantization is not validated for {model_id!r}. "
-            f"Currently validated: {validated}. Use quantization='none' for this model."
+            f"{label} {family} quantization is not validated for {model_id!r}. "
+            f"Currently validated: {listed or 'nothing'}. "
+            "Use quantization='none' for this model."
         )
 
 
@@ -829,7 +901,36 @@ def _quantization_config(torchao_quantization: ModuleType, quantization: str) ->
         return torchao_quantization.Float8WeightOnlyConfig(version=2)
     if quantization == NVFP4:
         return _load_torchao_nvfp4().NVFP4WeightOnlyConfig()
+    if quantization == FP8_DYNAMIC:
+        return torchao_quantization.Float8DynamicActivationFloat8WeightConfig()
+    if quantization == NVFP4_DYNAMIC:
+        # use_triton_kernel=False deliberately. The fused Triton activation-scaling
+        # path needs MSLK (github.com/pytorch/MSLK), which is not on PyPI -- the
+        # name there resolves to an empty 0.0.0 placeholder that installs nothing
+        # importable. Requesting the Triton kernel without it raises
+        # "mslk is required for NVFP4 triton quantization" at the first call, so
+        # LM7 asks for the path that actually runs and reports which one it got.
+        # See nvfp4_dynamic_kernel().
+        return _load_torchao_nvfp4().NVFP4DynamicActivationNVFP4WeightConfig(
+            use_triton_kernel=_mslk_available(),
+            use_dynamic_per_tensor_scale=True,
+        )
     return torchao_quantization.Int8WeightOnlyConfig(version=2)
+
+
+def _mslk_available() -> bool:
+    """Whether TorchAO's fused Triton NVFP4 activation kernel can be used."""
+    return importlib.util.find_spec("mslk") is not None
+
+
+def nvfp4_dynamic_kernel() -> str:
+    """Which NVFP4 activation-scaling implementation this environment will use.
+
+    Reported rather than assumed, because "NVFP4 dynamic ran" and "the fused
+    Triton kernel ran" are different claims and only one of them is checkable
+    from Python.
+    """
+    return "triton-mslk" if _mslk_available() else "torch-fallback"
 
 
 def _is_lm_head(fqn: str) -> bool:
@@ -855,16 +956,24 @@ def _is_nvfp4_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
     return out_features % 16 == 0 and in_features % 16 == 0
 
 
+# A dynamic mode converts exactly the layers its weight-only counterpart does, so
+# the only difference between `fp8` and `fp8-dynamic` is whether activations are
+# quantized. Giving the new modes a different layer selection would have made the
+# pair incomparable, and the comparison is the point.
 _QUANTIZATION_FILTERS = {
     INT8: _is_quantizable_linear,
     FP8: _is_fp8_quantizable_linear,
     NVFP4: _is_nvfp4_quantizable_linear,
+    FP8_DYNAMIC: _is_fp8_quantizable_linear,
+    NVFP4_DYNAMIC: _is_nvfp4_quantizable_linear,
 }
 
 _QUANTIZATION_SELECTS = {
     INT8: "every linear except lm_head",
     FP8: "linears whose module path contains '.mlp.'",
     NVFP4: "every linear except lm_head whose last two dimensions are multiples of 16",
+    FP8_DYNAMIC: "linears whose module path contains '.mlp.'",
+    NVFP4_DYNAMIC: "every linear except lm_head whose last two dimensions are multiples of 16",
 }
 
 
@@ -879,7 +988,7 @@ def _compute_capability(target: TargetSpec) -> int | None:
 
 def _supports_fp8(target: TargetSpec) -> bool:
     capability = _compute_capability(target)
-    return capability is None or capability >= _FP8_MINIMUM_CAPABILITY
+    return capability is None or capability >= _MODE_MINIMUM_CAPABILITY[FP8]
 
 
 def supports_native_bf16(target: TargetSpec) -> bool:

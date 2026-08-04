@@ -194,15 +194,23 @@ These have measurement harnesses or written plans, and no registered backend:
 
 ## Quantization
 
-The `lm7 model run` path is weight-only and validated per (model, mode) pair. It
-reaches NVIDIA GPUs and CPU; `int8` is the only mode measured off NVIDIA, and
-AMD, Apple, Intel XPU, and TPU have no path at all. Activation quantization is
-not implemented here. Two export backends quantize the artifact through their
-own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and OpenVINO's
-NNCF weight compression, the latter validated for two models out of three tried.
+The `lm7 model run` path is validated per (model, mode) pair. It reaches NVIDIA
+GPUs and CPU; `int8` is the only mode measured off NVIDIA, and AMD, Apple, Intel
+XPU, and TPU have no path at all. Two export backends quantize the artifact
+through their own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and
+OpenVINO's NNCF weight compression, the latter validated for two models out of
+three tried.
 
-Footprint is the reliable benefit, not speed. On both GPUs measured — Ada
-(`sm89`) and Blackwell (`sm120`) — every mode came out *slower* than the BF16
+**Activation quantization exists but is narrow.** `fp8-dynamic` (`sm89`+) and
+`nvfp4-dynamic` (`sm100`+) quantize activations at runtime so the matmul executes
+in the narrow format, confirmed by the emitted kernels rather than inferred.
+Scaling is dynamic only — no static calibration path — and exactly one pair is
+admitted: `Llama-3.2-1B` with `fp8-dynamic`. TorchAO's fused Triton scaling
+kernel for NVFP4 needs MSLK, which is not installable from PyPI, so LM7 runs the
+torch fallback and reports which one it used.
+
+Footprint is the reliable benefit for the weight-only modes, not speed. On both
+GPUs measured — Ada (`sm89`) and Blackwell (`sm120`) — every weight-only mode came out *slower* than the BF16
 baseline once compiled. Blackwell shrinks the penalty a long way without
 removing it: `nvfp4` costs 1.24x there against 2.50x on Ada, for the same 2.30x
 footprint saving. Its FP4 tensor cores are not what does that, and cannot be —

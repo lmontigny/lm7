@@ -1,7 +1,8 @@
 # Quantization
 
 Quantization stores or computes a tensor in fewer bits than the model was trained
-in. There are two halves to it, and **LM7 currently implements only the first**.
+in. There are two halves to it, and **LM7 implements both** — the second only
+recently, and only on NVIDIA.
 
 ## Weight versus activation quantization
 
@@ -14,21 +15,40 @@ known statically.
 **Activation quantization** also narrows the tensors flowing between layers, so
 the matmul itself executes in low precision. That is where the larger speedups
 come from, because it cuts arithmetic work rather than just bytes moved. The cost
-is that activation ranges depend on the input, so you need calibration data or a
-quantization-aware recipe to choose per-tensor scales, and accuracy degrades more
-readily. **LM7 does not do this today.**
+is that activation ranges depend on the input, so the scales have to be chosen at
+runtime or from calibration data, and accuracy degrades more readily.
 
-Everything below is therefore *weight-only*: activations, and the accumulation
-inside each matmul, stay in BF16.
+The distinction is not cosmetic, and it is the reason every weight-only mode in
+this document is *slower* than its BF16 baseline while the activation modes are
+the only ones that have ever been faster. A weight-only kernel still issues a
+BF16 matmul; it just reads narrower bytes on the way in. Only an activation mode
+asks the tensor cores to multiply in the narrow format. This was
+[verified at kernel level](#verifying-that-the-narrow-kernel-actually-ran) rather
+than assumed.
 
 ## Supported data types
 
-| `--quantize` | Weight storage | Targets | Compute dtype |
-| --- | --- | --- | --- |
-| `none` (default) | as loaded | all | FP32 / FP16 / BF16 |
-| `int8` | INT8 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
-| `fp8` | FP8 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
-| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | NVIDIA Ampere (`sm80`) or newer | BF16 |
+Bare names are weight-only. The `-dynamic` names quantize activations too.
+
+| `--quantize` | Weight storage | Activations | Targets | Compute dtype |
+| --- | --- | --- | --- | --- |
+| `none` (default) | as loaded | — | all | FP32 / FP16 / BF16 |
+| `int8` | INT8 | BF16 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
+| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
+| `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | BF16 | NVIDIA Ampere (`sm80`) or newer | BF16 |
+| `fp8-dynamic` | FP8 | **FP8, quantized per call** | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
+| `nvfp4-dynamic` | NVFP4 | **NVFP4, quantized per call** | NVIDIA **Blackwell** (`sm100`, `sm120`) | BF16 accumulate |
+
+The two NVFP4 rows have different hardware floors, which looks inconsistent and
+is not. Weight-only NVFP4 never issues an FP4 matmul, so it runs anywhere BF16 is
+native; `nvfp4-dynamic` asks the tensor cores to multiply in FP4, which exists
+only on Blackwell.
+
+> [!NOTE]
+> `nvfp4` was **not** redefined to mean the activation mode. An existing
+> `--quantize nvfp4` command does exactly what it did before. `nvfp4-weight-only`
+> is accepted as the explicit spelling, matching `int8-weight-only` and
+> `fp8-weight-only`.
 
 Quantization pins the compute dtype so measurements stay comparable, and the
 dtype is target-specific: BF16 on NVIDIA, FP32 on CPU. `--dtype` must be `auto`
@@ -181,9 +201,13 @@ quantization never issues an FP4 matmul — the weight is unpacked to BF16 insid
 the kernel, so the FP4 units are never asked to multiply anything. The
 measurement agrees with the mechanism: were they engaged, `nvfp4` would beat the
 BF16 baseline instead of trailing it by 1.24x. Reaching those units requires FP4
-*activations* as well, which is activation quantization and is not implemented
-here. This was reasoned from the config semantics and the timings, not confirmed
-by inspecting the emitted kernels.
+*activations* as well.
+
+That is now implemented, as `nvfp4-dynamic`, and inspecting the emitted kernels
+confirms both halves of this paragraph: weight-only NVFP4 emits a BF16
+`extern_kernels.mm` with dequantization around it, and the dynamic mode emits
+`_scaled_mm` with `e2m1` operands and no plain `mm` at all. See
+[activation quantization](#activation-quantization).
 
 **What Blackwell changes is how much the mode costs.** NVFP4 went from 2.50x
 slower than its own BF16 baseline to 1.24x, and gained 5.79x in absolute terms
@@ -209,6 +233,108 @@ against a 20 ms steady-state call. On Blackwell it ranged from **31 to 60
 seconds** across runs against a 3.8 ms steady-state call, so the ratio got worse
 even as both numbers improved. The mode still only makes sense where the process
 is long-lived or the artifact is reused.
+
+## Activation quantization
+
+The dynamic modes quantize activations at runtime alongside the weights, so the
+matmul executes in the narrow format. They need `sm89` (FP8) or `sm100` (NVFP4),
+and they are the only modes here that have ever beaten their BF16 baseline.
+
+```bash
+lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
+  --target nvidia --backend inductor --dtype bfloat16 \
+  --quantize fp8-dynamic
+```
+
+### On plain linears, where the shape is visible
+
+One `nn.Linear` reached through a transformer-shaped module path, BF16 in and
+out, `torch.compile(fullgraph=True)`, median of 30 after 5 warmup calls on an
+RTX PRO 6000 Blackwell (`sm120`), through
+[`benchmarks/activation_quant.py`](../benchmarks/activation_quant.py). Every cell
+is a ratio against that shape's BF16 baseline:
+
+| M × K × N | `int8` | `fp8` | `nvfp4` | `fp8-dynamic` | `nvfp4-dynamic` |
+| --- | --- | --- | --- | --- | --- |
+| 128 × 4096 × 4096 | 53.3x | 1.18x | 1.37x | 1.72x | 2.55x |
+| 256 × 4096 × 4096 | 81.3x | 1.20x | 1.33x | 1.03x | 1.50x |
+| 1024 × 4096 × 4096 | 159.2x | 1.10x | 1.16x | **0.83x** | **0.85x** |
+| 128 × 8192 × 8192 | 109.3x | 2.24x | 2.08x | **0.86x** | 1.08x |
+
+Relative error against the BF16 output: `int8` 0.5–0.7%, `fp8` 2.4–2.9%,
+`fp8-dynamic` 3.4–4.0%, `nvfp4` 9.7–10.3%, `nvfp4-dynamic` 12.4–14.8%.
+
+**Every sub-1.00x cell in that table is an activation mode.** No weight-only mode
+beats the baseline at any shape measured, which is what the mechanism predicts:
+dequantizing narrow weights into a BF16 matmul cannot reduce arithmetic, only
+bytes moved.
+
+**The win is shape-dependent and arrives late.** Both dynamic modes lose at
+M=128 and only cross over around M=1024. Below that there is not enough
+arithmetic to pay for quantizing the activations on every call.
+
+**INT8 weight-only is pathological here** — 53x to 159x slower than BF16, far
+worse than the 6.2x the same mode costs on a whole model. Something about the
+Blackwell INT8 dequantization path is badly served at these shapes. Recorded
+rather than explained; it has not been investigated.
+
+### On a real model, where the shape is small
+
+Llama-3.2-1B, BF16, single 5-token prompt, `sm120`:
+
+| mode | steady | vs baseline | storage | top-1 | max logit diff |
+| --- | --- | --- | --- | --- | --- |
+| `none` | 3.068 ms | — | 2.472 GB | — | — |
+| `int8` | 18.964 ms | 6.18x | 1.65x smaller | 4/4 | 0.65 |
+| `fp8` | 3.568 ms | 1.16x | 1.48x smaller | 4/4 | 0.89 |
+| `nvfp4` | 3.885 ms | 1.27x | 2.30x smaller | 3/4 | 4.62 |
+| **`fp8-dynamic`** | **2.978 ms** | **0.97x** | 1.48x smaller | **4/4** | 1.59 |
+| `nvfp4-dynamic` | 4.528 ms | 1.48x | 2.30x smaller | 3/4 | 5.03 |
+
+`fp8-dynamic` is the first mode in this document to come out faster than its BF16
+baseline on a real model, and it keeps its top-1 token on all four prompts. It is
+admitted to the gate for this model.
+
+`nvfp4-dynamic` is *slower* here than weight-only NVFP4, and the linear table
+above says why: a 5-token prompt at batch 1 is M=5, an order of magnitude below
+where the FP4 path starts winning. It also drops a top-1 token, so it is **not**
+admitted for this model. Both facts are about this shape and this model, not
+about the mode.
+
+### Verifying that the narrow kernel actually ran
+
+A plausible output does not prove the tensor cores multiplied in FP8 or FP4.
+Inspecting the code Inductor emits for one 1024 × 4096 × 4096 linear:
+
+| mode | weight type | packed dtype | emitted |
+| --- | --- | --- | --- |
+| `none` | `Parameter` | bfloat16 | `extern_kernels.mm` |
+| `fp8` | `Float8Tensor` | `float8_e4m3fn` | `extern_kernels.mm` + dequant |
+| `nvfp4` | `NVFP4Tensor` | `uint8`, 4096 × 2048 | `extern_kernels.mm` + dequant |
+| **`fp8-dynamic`** | `Float8Tensor` | `float8_e4m3fn` | **`_scaled_mm`, no `mm`** |
+| **`nvfp4-dynamic`** | `NVFP4Tensor` | `uint8`, 4096 × 2048 | **`_scaled_mm` + `e2m1`, no `mm`** |
+
+The weight-only rows keep a BF16 `extern_kernels.mm` and add dequantization
+around it. The dynamic rows emit `_scaled_mm` — the scaled narrow-format GEMM —
+and no plain `mm` at all, with `e2m1` (the FP4 element format) appearing in the
+NVFP4 case. That is the difference between reading narrow bytes and computing in
+narrow arithmetic, and it is visible in generated code rather than inferred from
+a timing.
+
+Both NVFP4 rows show the weight packed as `uint8` at half the column count, which
+is the two-values-per-byte packing.
+
+> [!NOTE]
+> **The fused Triton activation-scaling kernel is not available here.** TorchAO's
+> `use_triton_kernel=True` requires MSLK, and `pip install mslk` resolves to an
+> empty 0.0.0 placeholder on PyPI that installs nothing importable — the real
+> project is a source build from github.com/pytorch/MSLK. Asking for the Triton
+> kernel without it raises `mslk is required for NVFP4 triton quantization` on
+> the first call, so LM7 checks and requests the path that runs.
+> `lm7.huggingface.nvfp4_dynamic_kernel()` reports `triton-mslk` or
+> `torch-fallback`. Every measurement above is `torch-fallback`, and as the kernel
+> table shows, that fallback still issues a native FP4 GEMM — what is missing is
+> the *fused* activation scaling, not FP4 arithmetic.
 
 ## INT8 on CPU
 
@@ -628,8 +754,13 @@ unmeasured here.
   embeddings, norms, `lm_head`, and (for FP8) attention all stay in BF16. A
   single NVFP4 linear is 3.56x smaller than its BF16 original, but Llama-3.2-1B
   as a whole is only 2.30x smaller.
-- **No activation quantization, no INT4 or lower, no quantization-aware
-  training.** Those are unexplored rather than rejected.
+- **Activation quantization is NVIDIA-only, dynamic-only, and validated for one
+  pair.** `fp8-dynamic` and `nvfp4-dynamic` quantize activations at runtime;
+  static calibrated scaling, INT8 dynamic activations, and mixed pairings such as
+  FP8 activations with INT4 weights are not wired up. Only
+  `unsloth/Llama-3.2-1B-Instruct` with `fp8-dynamic` is admitted so far.
+- **No INT4 or lower, and no quantization-aware training.** Those are unexplored
+  rather than rejected.
 
 ## Related
 
