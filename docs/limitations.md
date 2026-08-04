@@ -108,8 +108,10 @@ coverage is CPU.
   v6e — which the rest of that list has not. It still has no CI, and one chip
   cannot say anything about multi-chip behaviour. See
   [Google TPU](google-tpu.md).
-- NVIDIA Inductor, quantization, and TensorRT have been exercised on a local Ada
-  (`sm89`) GPU only.
+- NVIDIA Inductor and quantization have been exercised on two GPU generations:
+  a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000. Detection,
+  backend selection, and every weight-only mode worked on Blackwell with no code
+  changes. TensorRT remains `sm89`-only. None of it has CI.
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
   **no Intel NPU has ever executed it**. Its integration tests skip unless
   OpenVINO reports an NPU; everything else about it is unit-tested against a
@@ -136,11 +138,16 @@ not implemented here. Two export backends quantize the artifact through their
 own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and OpenVINO's
 NNCF weight compression, the latter validated for two models out of three tried.
 
-Footprint is the reliable benefit, not speed. On sm89 every mode measured
-*slower* than the BF16 baseline once compiled. On CPU, INT8 was at parity for
-SmolLM2-135M and 2.6x slower for Llama-3.2-1B, on an AVX2-only part with no
-VNNI — so the latency result does not generalize to server CPUs or ARM.
-`nvfp4` gives the smallest footprint and the largest accuracy loss, clearing the
-validation bar for one model out of four tried. See
-[quantization](quantization.md) for which layers each mode converts and the
-measurements behind it.
+Footprint is the reliable benefit, not speed. On both GPUs measured — Ada
+(`sm89`) and Blackwell (`sm120`) — every mode came out *slower* than the BF16
+baseline once compiled. Blackwell shrinks the penalty a long way without
+removing it: `nvfp4` costs 1.24x there against 2.50x on Ada, for the same 2.30x
+footprint saving. Its FP4 tensor cores are not what does that, and cannot be —
+weight-only quantization unpacks to BF16 inside the kernel and never issues an
+FP4 matmul. On CPU, INT8 was at parity for SmolLM2-135M and 2.6x slower for
+Llama-3.2-1B, on an AVX2-only part with no VNNI — so the latency result does not
+generalize to server CPUs or ARM. `nvfp4` gives the smallest footprint and the
+largest accuracy loss, clearing the validation bar for one model out of four
+tried — and on a second, equally arbitrary set of four prompts that one model
+scores 3/4 rather than 4/4. See [quantization](quantization.md) for which layers
+each mode converts and the measurements behind it.
