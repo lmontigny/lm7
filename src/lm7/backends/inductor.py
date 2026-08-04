@@ -10,6 +10,44 @@ from ..errors import CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
 
+def cudagraphs_requested(compile_mode: str | None, options: Mapping[str, Any]) -> bool:
+    """Whether this Inductor configuration asks TorchInductor for CUDA Graphs.
+
+    The preset decides it and the name does not say so: `reduce-overhead` and
+    `max-autotune` both set `triton.cudagraphs`, while `default` and
+    `max-autotune-no-cudagraphs` leave it alone. Only one of those four names
+    mentions CUDA Graphs at all, which is why this is worth reporting rather than
+    leaving a reader to infer it.
+
+    An explicit `triton.cudagraphs` in `options` wins, because that is what
+    torch.compile does with it.
+    """
+    if "triton.cudagraphs" in options:
+        return bool(options["triton.cudagraphs"])
+    try:
+        from torch._inductor import list_mode_options
+
+        return bool(list_mode_options(compile_mode).get("triton.cudagraphs", False))
+    except Exception:  # noqa: BLE001 - a private API that moved costs the label only
+        return False
+
+
+def cudagraph_skips() -> int:
+    """How many times Inductor has declined to capture a CUDA Graph, process-wide.
+
+    Requesting CUDA Graphs and getting them are different things: Inductor skips
+    capture for mutated inputs, dynamic shapes, CPU scalars and several other
+    reasons, bumping this counter and logging why. Comparing it either side of a
+    compile is what turns "asked for" into "got".
+    """
+    try:
+        from torch._dynamo.utils import counters
+
+        return int(counters["inductor"]["cudagraph_skips"])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class InductorBackend:
     name = "inductor"
 
@@ -73,9 +111,28 @@ class InductorBackend:
             # remain inside this error boundary so configured fallback can work.
             warmup_args = _map_tensors(example_args, lambda tensor: tensor.to(device))
             warmup_kwargs = _map_tensors(example_kwargs, lambda tensor: tensor.to(device))
+            requested = cudagraphs_requested(compile_mode, options)
+            skips_before = cudagraph_skips()
             with torch.inference_mode():
                 compiled(*warmup_args, **warmup_kwargs)
-            return Artifact(self.name, request.target, compiled, metadata={"compiled": True})
+            skipped = cudagraph_skips() - skips_before
+            return Artifact(
+                self.name,
+                request.target,
+                compiled,
+                metadata={
+                    "compiled": True,
+                    "compile_mode": compile_mode,
+                    # Two separate facts, because a preset can ask for CUDA Graphs
+                    # and Inductor can still decline: `cudagraphs` is what the
+                    # configuration requested, `cudagraph_skips` is how many times
+                    # capture was refused during this compile. Both zero means the
+                    # preset never asked.
+                    "cudagraphs": requested,
+                    "cudagraph_skips": skipped,
+                    "cudagraphs_active": requested and skipped == 0,
+                },
+            )
         except Exception as exc:
             raise CompilationError(
                 f"Compilation stage failed for target {request.target} with backend inductor: {exc}. "

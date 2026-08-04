@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from lm7.backends.base import CompileRequest
-from lm7.backends.inductor import InductorBackend
+from lm7.backends.inductor import InductorBackend, cudagraph_skips, cudagraphs_requested
 from lm7.errors import CompilationError
 from lm7.targets import TargetSpec
 
@@ -87,3 +87,27 @@ def test_compile_mode_rejects_backend_options(monkeypatch):
         )
 
     assert calls == {}
+
+
+def test_cudagraph_request_is_read_from_the_preset_not_the_name():
+    """Two of the four preset names say nothing about CUDA Graphs, and one of
+    those two enables them. `reduce-overhead` and `max-autotune` set
+    triton.cudagraphs; `default` and `max-autotune-no-cudagraphs` do not."""
+    assert cudagraphs_requested("reduce-overhead", {}) is True
+    assert cudagraphs_requested("max-autotune", {}) is True
+    assert cudagraphs_requested("default", {}) is False
+    assert cudagraphs_requested("max-autotune-no-cudagraphs", {}) is False
+    assert cudagraphs_requested(None, {}) is False
+
+
+def test_explicit_option_overrides_the_preset():
+    """torch.compile lets an explicit option win, so the report has to agree."""
+    assert cudagraphs_requested("max-autotune-no-cudagraphs", {"triton.cudagraphs": True}) is True
+    assert cudagraphs_requested("reduce-overhead", {"triton.cudagraphs": False}) is False
+
+
+def test_cudagraph_skip_counter_is_readable():
+    """Requesting CUDA Graphs and getting them are different things; this is the
+    counter that separates them. It must never raise, only report."""
+    assert isinstance(cudagraph_skips(), int)
+    assert cudagraph_skips() >= 0
