@@ -59,6 +59,90 @@ options = {"compile_mode": "max-autotune-no-cudagraphs"}
 
 `TORCH_LOGS=perf_hints` explains why CUDA Graph capture was skipped.
 
+### What LM7 reports
+
+Two of the four preset names say nothing about CUDA Graphs and one of those two
+enables them, so LM7 records the answer on the compiled artifact rather than
+leaving it to be inferred:
+
+```python
+compiled = lm7.compile(
+    model, target="nvidia", backend="inductor", options={"compile_mode": "reduce-overhead"}
+)
+compiled(example)  # compilation is lazy
+compiled.artifact.metadata
+# {'compiled': True, 'compile_mode': 'reduce-overhead',
+#  'cudagraphs': True, 'cudagraph_skips': 0, 'cudagraphs_active': True}
+```
+
+`cudagraphs` is what the configuration asked for; `cudagraph_skips` is how many
+times Inductor declined during that compile; `cudagraphs_active` is the
+conjunction, which is the field to read. Both zero means the preset never asked.
+`lm7.backends.inductor.cudagraphs_requested(mode, options)` answers the first
+question without compiling anything.
+
+### Measured behaviour
+
+A two-layer BF16 MLP (width 2048), batch 64, on an RTX PRO 6000 Blackwell
+(`sm120`), through [`benchmarks/cudagraphs.py`](../benchmarks/cudagraphs.py):
+
+| preset | requests | captured | reuses graph | steady latency | steady peak memory |
+| --- | --- | --- | --- | --- | --- |
+| `default` | no | — | yes | 0.0694 ms | 68.2 MB |
+| `reduce-overhead` | **yes** | **yes** | yes | 0.0843 ms | **33.8 MB** |
+| `max-autotune` | **yes** | **yes** | yes | 0.0827 ms | **33.8 MB** |
+| `max-autotune-no-cudagraphs` | no | — | yes | 0.0602 ms | 68.2 MB |
+
+**CUDA Graphs halved steady-state memory** — 33.8 MB against 68.2 MB — because
+replay reuses one pool of buffers instead of reallocating intermediates per
+call. That is the clearest benefit in this measurement, and the opposite of the
+"needs the extra cached workspace memory" caution above, which describes capture
+rather than replay.
+
+**CUDA Graphs were slower here**, by 21% against `default` and 37% against
+`max-autotune-no-cudagraphs`, reproducibly across runs. Read that with its
+caveat: the timing loop synchronizes after every call, which is precisely the
+pattern that denies CUDA Graphs their advantage. What they remove is CPU launch
+overhead, and a loop that blocks on the GPU after each iteration never lets that
+overhead overlap with anything. A generation loop that queues many steps before
+synchronizing is the shape where they pay; this benchmark is not that shape.
+
+**A changed input shape recompiles once, not once per shape.** Feeding batch 16,
+then 32, then 128 to a graph compiled at 64 produced exactly one new Dynamo
+frame — on the first change — and none afterwards. PyTorch marks the dimension
+dynamic after the first mismatch and serves every later size from that one
+graph. Identical across all four presets, with no CUDA Graph skips on the
+dynamic graph.
+
+**Repeated calls do not grow memory.** Peak device memory is identical across
+two consecutive post-compilation rounds for every preset.
+
+> [!NOTE]
+> Measuring that last point needs two rounds that are *both* past compilation. An
+> earlier revision of the benchmark compared the first round against the second
+> and reported stability, but the first round includes the compile workspace, so
+> it passed for a reason unrelated to whether replay leaks.
+
+### Stateful models break the cache, not the capture
+
+The expectation is that a KV-cache-style loop prevents CUDA Graph capture. On a
+module that writes into a persistent buffer and advances a Python counter each
+call, that is not what happens:
+
+| preset | CUDA Graph skips | Dynamo frames for 20 calls |
+| --- | --- | --- |
+| all four | **0** | **9** |
+
+Capture is never refused. What breaks is graph reuse: `self.position += 1` is
+Python state that Dynamo guards on, so a new value means a new graph, and 20
+calls cost 9 compilations before the recompile limit stops it. The cost is real
+and it is mode-independent — turning CUDA Graphs off does not help, because they
+were never the problem.
+
+The practical rule: keep step counters in tensors or pass them as arguments, and
+check `cudagraph_skips` and the frame count separately. A model can be capturing
+CUDA Graphs perfectly while recompiling on every call.
+
 ## Individual Inductor options
 
 Instead of a preset, pass individual backend options. LM7 removes its own
