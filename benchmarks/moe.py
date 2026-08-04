@@ -35,7 +35,15 @@ import torch._dynamo
 import lm7
 from lm7.detection import resolve_target, synchronize, torch_device
 
-HF_MODELS = {"olmoe-1b-7b": "allenai/OLMoE-1B-7B-0924-Instruct"}
+HF_MODELS = {
+    "olmoe-1b-7b": "allenai/OLMoE-1B-7B-0924-Instruct",
+    # 30.5B total / 3.3B active, ~61 GB at bf16.
+    "qwen3-30b-a3b": "Qwen/Qwen3-30B-A3B",
+    # 46.7B total / 12.9B active, ~93 GB at bf16 -- which is most of a 96 GB card,
+    # and the reason this entry exists. Every Mixtral claim in this repo until now
+    # came from a hand-built 2-layer config; this is the real one.
+    "mixtral-8x7b": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+}
 
 # Mirrors examples/sparse_moe.py: 2 layers and a handful of experts, sized so a
 # CPU runner compiles it quickly. Dimensions are multiples of 16 because the
@@ -107,6 +115,8 @@ def _time(
     repeats: int,
 ) -> dict[str, Any]:
     torch._dynamo.reset()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     compiled = lm7.compile(
         model, target=target, backend=backend, transfers="automatic", fallback="error", cache=False
     )
@@ -133,6 +143,13 @@ def _time(
         samples.append((time.perf_counter() - started) * 1000.0)
     return {
         "backend": backend,
+        # Peak device memory matters for a model sized against the card rather than
+        # against a workload: a 46.7B MoE at bf16 is ~93 GB of weights on a 95 GiB
+        # card, so how much headroom is left decides whether compiling is possible
+        # at all, not merely whether it is fast.
+        "peak_memory_bytes": int(torch.cuda.max_memory_allocated())
+        if torch.cuda.is_available()
+        else None,
         "first_call_ms": first_call_ms,
         "latency_median_ms": statistics.median(samples),
         "next_token_id": next_token_id,
@@ -222,6 +239,11 @@ def main() -> None:
                 f"  {timing['backend']}={timing['latency_median_ms']:8.3f} ms" for timing in timings
             )
             + (f"  speedup={speedup:.2f}x" if speedup is not None else "")
+            + "".join(
+                f"  vram[{timing['backend']}]={timing['peak_memory_bytes'] / 1e9:.1f}GB"
+                for timing in timings
+                if timing.get("peak_memory_bytes")
+            )
             + f"  agree={agree}"
         )
         for reason in capture["break_reasons"]:

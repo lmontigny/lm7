@@ -101,6 +101,7 @@ point:
 | OLMoE, tiny | 5.14.1 | nvidia `sm120` | **1** | **0** | 2.03 ms | 0.71 ms | **2.85x** |
 | OLMoE-1B-7B (6.92B) | 5.14.1 | nvidia `sm120` | **1** | **0** | 17.88 ms | 11.20 ms | **1.60x** |
 | OLMoE-1B-7B (6.92B) | 5.14.1 | cpu | **1** | **0** | 345.0 ms | 335.0 ms | 1.03x |
+| Mixtral-8x7B (46.7B) | 5.14.1 | nvidia `sm120` | **1** | **0** | 60.43 ms | 55.62 ms | 1.09x |
 
 Four corrections come out of that.
 
@@ -131,6 +132,45 @@ model gets 1.03x on CPU and 1.60x on an `sm120` GPU. The 1.03x reproduces the
 did not generalize was reading a CPU result as a property of sparse MoE.
 
 Every row agrees with `eager` on the greedy next token.
+
+### The real Mixtral, and what compiling is worth at 46.7B
+
+Every Mixtral claim above and below came from a hand-built two-layer config with
+four experts. `mistralai/Mixtral-8x7B-Instruct-v0.1` — 46.7B total, 8 experts,
+12.9B active per token — is the real one, and it fits on a 96 GB card at BF16
+with room to compile:
+
+| | eager | inductor |
+| --- | --- | --- |
+| latency | 60.43 ms | 55.62 ms |
+| peak VRAM | **93.4 GB** | **93.8 GB** |
+| graphs / breaks | 1 / 0 | 1 / 0 |
+
+**Zero graph breaks holds at scale.** The tiny-config result was not an artifact
+of the toy: 32 layers and 8 experts capture as one graph on transformers 5.14.1,
+1919 ops, same as the 2-layer version.
+
+**Compiling a model that fills the card costs 0.4 GB.** Peak device memory goes
+from 93.4 GB eager to 93.8 GB compiled, against 95.0 GiB available — so Inductor
+needed under half a gigabyte of headroom on a model occupying 92% of the GPU.
+That is worth knowing before assuming a near-full card rules compilation out.
+
+**The speedup shrinks as the model grows**, monotonically across everything
+measured on `sm120`:
+
+| model | parameters | inductor speedup |
+| --- | --- | --- |
+| Mixtral, tiny | ~2M | 3.12x |
+| OLMoE-1B-7B | 6.92B | 1.60x |
+| Mixtral-8x7B | 46.7B | 1.09x |
+
+Which makes sense, and sharpens the original claim rather than reversing it
+again. What Inductor removes is mostly Python and kernel-launch overhead; a
+bigger model spends proportionally more of its time inside large GEMMs that cuBLAS
+already handles well, so there is less left to remove. "Compiling buys almost
+nothing on an MoE" was wrong about the mechanism and wrong to key on MoE, but at
+46.7B the *number* it predicted is close to right — 1.09x — for a reason nobody
+had stated.
 
 > [!NOTE]
 > Measuring this needs care. Dynamo traces whatever it is handed, so a model left
