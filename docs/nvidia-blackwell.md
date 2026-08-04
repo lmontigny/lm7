@@ -125,9 +125,96 @@ The small-MLP result also reproduces — `tensorrt` at 0.114 ms against `eager` 
 small to amortize anything, which is why it stays opt-in and lower priority than
 `inductor`. See the [evaluation](nvidia-tensorrt-evaluation.md).
 
+## The backend compatibility matrix
+
+Every NVIDIA path LM7 implements, run against one model on `sm120`.
+Llama-3.2-1B-Instruct, FP16, batch 1, a 5-token prompt, median of 20 after 5
+warmup calls, through
+[`benchmarks/nvidia_matrix.py`](../benchmarks/nvidia_matrix.py).
+
+| path | works | steady | build | peak VRAM | max abs diff | argmax | reload |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `eager` | ✅ | 4.626 ms | — | 2.51 GB | reference | — | — |
+| `inductor` | ✅ | 2.868 ms | 7.6 s | 3.17 GB | 2.44e-2 | ✅ | — |
+| `inductor` + max-autotune | ✅ | 2.645 ms | 25.5 s | 3.20 GB | **2.02e-2** | ✅ | — |
+| `inductor` + CUDA Graphs | ✅ | 2.572 ms | 7.7 s | 3.17 GB | 2.44e-2 | ✅ | — |
+| `aot_inductor` export/reload | ✅ | 2.704 ms | 26.9 s | 4.98 GB | 2.44e-2 | ✅ | ✅ |
+| Torch-TensorRT compile | ✅ | 3.389 ms | 15.5 s | 2.51 GB | **1.26e-1** | ✅ | — |
+| TensorRT export/reload | ✅ | **2.286 ms** | 78.4 s | 4.98 GB | 8.59e-2 | ✅ | ✅ |
+| ONNX Runtime CUDA | ❌ | — | — | — | — | — | — |
+
+`build` is the first-call compile for JIT paths and the export call for the two
+artifact paths. Every working path agrees with eager on the greedy next token.
+
+**Seven of eight work, and the failure is not about Blackwell.** ONNX Runtime
+raises `CompilationError: Failed to serialize proto ... Models larger than 2 GiB
+are outside the initial embedded-weight scope` — the 2 GiB protobuf ceiling that
+[limitations](limitations.md) already records as future work. Llama-3.2-1B is
+~2.5 GB at FP16, so this fails identically on Ada. It is a model-size limit
+wearing a backend's name.
+
+### Four things the matrix says that a single number would not
+
+**TensorRT's own artifact is 1.48x faster than TensorRT JIT.** 2.286 ms reloaded
+against 3.389 ms compiled in-process — the same engine reached two ways. The JIT
+path carries per-call framework overhead that the serialized artifact does not,
+which makes `lm7.export(backend="tensorrt")` the interesting one and
+`lm7.compile(backend="tensorrt")` mostly a way to find out whether the model
+converts at all.
+
+**CUDA Graphs is the best value on this model.** 2.572 ms for a 7.7 s build:
+within 13% of the fastest path overall, at the cheapest build of anything
+compiled. It is the default worth reaching for.
+
+**max-autotune is not worth it here.** 25.5 s of build — 3.3x plain Inductor —
+to land at 2.645 ms, which is *slower* than CUDA Graphs at 7.7 s. It does buy
+the tightest numerics of any path (2.02e-2), so it earns its place when accuracy
+matters more than either latency or compile time, but not as a speed setting.
+
+**Numerical looseness varies 6x across backends that all agree on the token.**
+From 2.02e-2 (max-autotune) to 1.26e-1 (TensorRT JIT). TensorRT rewrites FP16
+arithmetic far more aggressively than Inductor, and the argmax check does not see
+it. A model whose top-2 logits are close would be at materially more risk under
+TensorRT than under Inductor, and no amount of next-token agreement would reveal
+that — the same limit of greedy checking that
+[quantization](quantization.md#the-four-prompts-were-never-recorded-and-they-matter)
+runs into.
+
+### Reading these numbers
+
+- **Three environments.** `tensorrt` pins PyTorch 2.12.1; everything else ran on
+  2.13.0. Both ship `sm_120` kernels. Rows are directly comparable for
+  works/fails and only roughly for latency.
+- **Peak VRAM is torch's allocator only.** TensorRT and ONNX Runtime allocate
+  outside it, so their figures understate real device usage. The two export paths
+  peak at 4.98 GB because the artifact holds the source program alongside the
+  compiled payload.
+- **Build times are cold.** Inductor's on-disk FX cache survives between
+  processes and `cache=False` does not clear it — that argument controls LM7's
+  artifact cache. Warm, the same Inductor compile is 2.3 s rather than 7.6 s, and
+  peak VRAM drops to 2.51 GB because the compile workspace is never allocated.
+  The table clears `/tmp/torchinductor_*` before each Inductor row.
+- **One model, one shape, one dtype.** A 5-token prefill at batch 1 is close to
+  the most launch-overhead-dominated point on the curve, which flatters CUDA
+  Graphs and penalizes engine builders. Larger batches or sequences would
+  reorder these rows.
+
+> [!NOTE]
+> The CUDA Graphs row failed on the first attempt with `accessing tensor output
+> of CUDAGraphs that has been overwritten by a subsequent run`, and the backend
+> was fine. CUDA Graphs replay into one output buffer, so a harness that keeps
+> the first call's tensor and reads it after the timing loop reads whatever the
+> last call wrote. `benchmarks/nvidia_matrix.py` now copies off-device
+> immediately. Worth knowing before recording `reduce-overhead` as broken.
+
 ## Scope
 
 None of this is covered by CI, which remains CPU-only, and it is one card. A
 single GPU says nothing about multi-GPU behaviour, and `sm100` (datacenter
 Blackwell) is reported by the same code path but has never been executed — it
 shares `sm120`'s precision row by capability number, not by measurement.
+
+The matrix is one model. `benchmarks/nvidia_matrix.py` also builds `mlp`,
+`resnet18`, `bert`, `smollm2` and `llama31-8b`, and running the same eight paths
+across them is the obvious extension — nothing about the harness is specific to
+the row above.
