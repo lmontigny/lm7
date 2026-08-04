@@ -1,108 +1,130 @@
 # AOTInductor artifacts across a process boundary
 
-What an `lm7.export(backend="aot_inductor")` artifact costs to reload, what it
-refuses to load on, and what it turns out not to care about. Measured on an RTX
-PRO 6000 Blackwell Server Edition (`sm120`, driver 580.126.20) and an RTX 4070
-SUPER (`sm89`), both `torch 2.13.0+cu130`.
+What an `lm7.export(backend="aot_inductor")` artifact costs to reload in a
+process that never compiled it, what it refuses to load on, and what it turns
+out not to care about.
 
-Everything here comes from
-[`benchmarks/aot_artifact_lifecycle.py`](../benchmarks/aot_artifact_lifecycle.py),
-which runs each stage as its own interpreter.
+Measured on an RTX PRO 6000 Blackwell Server Edition (`sm120`, driver
+580.126.20) and an RTX 4070 SUPER (`sm89`), both `torch 2.13.0+cu130` / CUDA
+13.0, through
+[`benchmarks/aot_artifact_lifecycle.py`](../benchmarks/aot_artifact_lifecycle.py).
 
 ## Why a separate process
 
 The [backend matrix](nvidia-blackwell.md#the-backend-compatibility-matrix)
 already has an `aot_inductor` export/reload row, and it exports and reloads
-inside one process. That is a weaker claim than it looks: the compiling process
-still holds Inductor's caches, the model's source library is still imported, the
-CUDA context is already warm, and nothing has been asked to interpret the
+inside one interpreter. That is a weaker claim than it reads as: the compiling
+process still holds Inductor's caches, the model's source library is still
+imported, the CUDA context is warm, and nothing has had to interpret the
 manifest as a stranger would.
 
-So the stages here do not share an interpreter:
+So the stages here do not share an interpreter. `export` writes the artifact and
+exits; `load` starts a fresh interpreter, optionally drops the artifact's pages
+from the page cache, reloads it, and checks the result against a reference the
+export process saved; `mismatch` breaks exactly one thing and records how the
+failure reads.
 
 ```console
 $ python benchmarks/aot_artifact_lifecycle.py run --model smollm2 \
-    --results-dir artifacts/aoti --other-python /path/to/other/venv/bin/python
+    --results-dir artifacts/aoti --other-python /path/to/torch-2.12/bin/python
 ```
 
-`export` writes the artifact and exits. `load` starts a fresh interpreter,
-optionally drops the artifact's pages from the page cache first, reloads it,
-and checks the answer against a reference saved by the export process.
-`mismatch` breaks exactly one thing and records how the failure reads.
+## The reload cost nobody was paying attention to
+
+SmolLM2-135M, FP16, `sm89`, 546 MB artifact. The two rows load the same payload
+and produce the same logits; they differ only in which API asked.
+
+| API | reload | to first inference | second load, same process |
+| --- | --- | --- | --- |
+| `lm7.load_artifact` | 12.11 s | 15.67 s | 6.97 s |
+| `torch._inductor.aoti_load_package` | 2.58 s | 4.91 s | 0.36 s |
+
+**LM7's own API is 4.7x slower to reload the same artifact**, and the gap is not
+validation overhead in any meaningful sense:
+
+| component of `load_artifact` | seconds |
+| --- | --- |
+| SHA-256 over both payloads (546 MB) | 1.85 |
+| `torch.export.load` of `exported_program.pt2` | 7.50 |
+| `aoti_load_package` of `compiled_model.pt2` | 6.88 |
+
+`load_artifact` eagerly loads the `ExportedProgram` **that an AOTInductor
+consumer never executes**. It is carried for inspection, rebuilds, and non-AOTI
+fallback, and it costs about as much to load as the compiled payload itself —
+because it is about the same size (273.4 MB of program next to 272.6 MB of
+kernels). Half the artifact, and half the reload, is for a path this caller did
+not take.
+
+That suggests a lazy `exported_program` on `ExportArtifact` — it is a public
+dataclass field today, so it is a deliberate API change rather than something to
+slip in, and it is not made here. On the 35 MB MLP below the same overhead is
+3–8%, which is why one model would have hidden this entirely.
 
 ## Reload on `sm120`
 
-The 4 M-parameter MLP (`8x1024 -> 4096 -> 1024`, FP16), median of 20 after 5
-warmup calls. One model — see [scope](#scope).
+The 8.4 M-parameter MLP (`8x1024 -> 4096 -> 1024`, FP16), median of 20 after 5
+warmup calls. One model — the Blackwell studio is interruptible-priced and was
+preempted before the larger models ran, and is off at the time of writing.
 
 | stage | wall | reload | to first inference | steady |
 | --- | --- | --- | --- | --- |
 | export (process A) | 16.33 s | — | — | — |
-| `lm7.load_artifact`, cold | 3.63 s | 1.779 s | 2.90 s | 0.037 ms |
-| `lm7.load_artifact`, warm | 3.58 s | 1.746 s | 2.80 s | 0.037 ms |
-| `aoti_load_package`, cold | 3.33 s | 1.720 s | 2.75 s | 0.036 ms |
-| `aoti_load_package`, warm | 3.14 s | 1.612 s | 2.57 s | 0.036 ms |
-| `inductor` JIT, cold cache | 5.80 s | — | 3.43 s | 0.071 ms |
-| `inductor` JIT, warm cache | 5.34 s | — | 2.72 s | 0.068 ms |
+| `lm7.load_artifact`, cold | 3.63 s | 1.779 s | 2.90 s | 0.0367 ms |
+| `lm7.load_artifact`, warm | 3.58 s | 1.746 s | 2.80 s | 0.0367 ms |
+| `aoti_load_package`, cold | 3.33 s | 1.720 s | 2.75 s | 0.0358 ms |
+| `aoti_load_package`, warm | 3.14 s | 1.612 s | 2.57 s | 0.0357 ms |
+| `inductor` JIT, cold cache | 5.80 s | — | 3.43 s | 0.0711 ms |
+| `inductor` JIT, warm cache | 5.34 s | — | 2.72 s | 0.0677 ms |
 
-Build was 13.13 s, of which `torch.export` capture was 0.83 s and Inductor 12.29
-s. The artifact is 35.2 MB. Every reload agreed with eager exactly
-(`max_abs_diff` 0.0), and none of them imported `transformers` or `torchvision`.
+Build was 13.13 s — 0.83 s of `torch.export` capture, 12.29 s of Inductor. The
+artifact is 35.2 MB. Every reload matched eager exactly (`max_abs_diff` 0.0), and
+none imported `transformers` or `torchvision`.
 
-**The reloaded artifact is 1.9x faster per call than the JIT it came from** —
-0.037 ms against 0.068 ms — on a model far too small to hide framework overhead.
-This is the same effect the matrix records for TensorRT, where the serialized
-engine beat the in-process compile by 1.48x. Whatever `torch.compile` keeps
+**The reloaded artifact is 1.84x faster per call than the JIT it came from** —
+0.0367 ms against 0.0677 ms — on a model far too small to hide framework
+overhead. The matrix records the same effect for TensorRT, whose serialized
+engine beat its in-process compile by 1.48x. Whatever `torch.compile` keeps
 doing per call, the packaged wrapper does not.
 
-**Time to first inference barely favours the artifact here** (2.90 s vs 3.43 s
-cold) and the reason is not flattering to either: the MLP compiles in about 2 s,
-so there is little for the artifact to save. The gap widens with model size,
-which is exactly what the bigger rows are for.
+**Time to first inference barely favours the artifact here**, 2.90 s against
+3.43 s, because this MLP compiles in 2.2 s and there is almost nothing to save.
+The 135M model is where that gap becomes 4.91 s against a JIT path that never
+finished a comparable measurement on a shared card.
 
 ### Where the 1.78 s goes
 
-Phase breakdown of the cold `lm7.load_artifact` process:
+Phases of the cold `lm7.load_artifact` process on `sm120`:
 
 | phase | ms |
 | --- | --- |
 | `import torch` | 741 |
 | `import lm7` | 16 |
 | CUDA context init | 133 |
-| load the artifact | 1779 |
+| reload the artifact | 1779 |
 | first call | 86 |
-| *second load, same process* | *45* |
+| *second reload, same process* | *45* |
 
-Two things worth taking from this.
+**Reloading costs more than importing PyTorch.** At this size LM7's extra work is
+59 ms cold and 134 ms warm — 3.3% and 7.7% of the reload — so on a small artifact
+the cost really is inside `aoti_load_package`, unpacking the `.pt2` and
+`dlopen`ing the wrapper. The SmolLM2 table above is what the same comparison
+looks like once the `ExportedProgram` is large.
 
-**Reloading costs more than importing PyTorch, and LM7 is not why.** The
-`--api torch` rows call `torch._inductor.aoti_load_package` on the payload
-alone, skipping the manifest, both SHA-256 checks and the `ExportedProgram`
-entirely; they land within 60–170 ms of the full API. LM7's validation is
-roughly 4% of a reload at this size. The cost is inside `aoti_load_package` —
-unpacking the `.pt2` and `dlopen`ing the wrapper.
+**A second reload in the same process is 40x cheaper** (45 ms, or 9 ms through
+the torch API), so reload cost is per-process, not per-model.
 
-**A second load in the same process is 40x cheaper** (45 ms, or 9 ms through the
-torch API). Reload cost is per-process, not per-model, so a server that reloads
-between requests is paying for the process, not the artifact.
-
-**Cold and warm are within noise** (1.779 s vs 1.746 s). The pages were really
-evicted — `POSIX_FADV_DONTNEED` after an `fsync`, and the harness records
-whether the call was available — but at 35 MB the read is not the bottleneck.
-This number is a placeholder until a multi-GB artifact goes through the same
-path; do not read it as "storage does not matter".
-
-**Nearly half the artifact never runs.** `compiled_model.pt2` is 18.4 MB and
-`exported_program.pt2` is 16.8 MB. The AOTInductor runtime executes the former;
-the latter is carried for inspection, rebuilds and non-AOTI fallback. It is also
-why the matrix shows the export paths peaking higher in VRAM than the JIT ones.
+**Cold and warm are within noise at 35 MB** (1.779 s vs 1.746 s). The pages were
+really evicted — `POSIX_FADV_DONTNEED` after a sync, and the harness records
+whether the call was available — the read is simply not the bottleneck at this
+size. At 546 MB on `sm89` the two are also close (12.11 s vs 11.85 s), which
+says the same thing about a decompress-and-link-bound reload.
 
 ## What an artifact refuses
 
 Each case takes a valid artifact, changes one thing, and loads it in a fresh
-process. Run on both cards.
+process. Every row was run on both cards, with identical outcomes.
 
-| case | outcome | error |
+| case | outcome | what the user sees |
 | --- | --- | --- |
 | architecture claims another GPU | rejected | `its aot_inductor payload was built for nvidia:sm120, but this machine is nvidia:sm89 ... Re-export on this GPU, or ship a bundle` |
 | `format_version` bumped | rejected | `Unsupported LM7 artifact format 2; this LM7 version supports format 1` |
@@ -113,15 +135,12 @@ process. Run on both cards.
 | **different PyTorch (2.13.0 → 2.12.1)** | **loaded and ran** | — |
 
 Five of the seven are caught by metadata before PyTorch is asked to do anything.
-The sixth is the interesting one, and the seventh changed the code.
-
-**A corrupt package that passes the checksum is the only case where PyTorch has
-to be the one to refuse**, and its own error (`failed finding central
-directory`) says nothing about where the artifact came from. LM7 now appends the
-build environment to that failure — and, when the environment matches, says so,
-because telling someone to re-export a package that was built right here sends
-them to the wrong place. When something has genuinely moved the same message
-names the field:
+The sixth is the only case where PyTorch has to be the one to refuse, and its own
+error (`failed finding central directory`) says nothing about where the artifact
+came from. LM7 now appends the build environment to that failure — and when the
+environment matches, says so, because telling someone to re-export a package
+that was built right here sends them to the wrong place. When something has
+genuinely moved, the same message names it:
 
 ```
 The artifact was built with PyTorch 2.13.0+cu130, CUDA runtime 13.0, GPU
@@ -133,18 +152,17 @@ wrapper linked against one CUDA runtime, so re-export the model on this machine.
 ## Two things the measurement changed
 
 **A PyTorch version guard would have been wrong.** The manifest has always
-recorded `torch_version`, and rejecting a mismatch looked like an obvious
+recorded `torch_version`, and rejecting a mismatch looked like obvious
 hardening. It is not: a `2.13.0+cu130` package loaded and ran under
-`2.12.1+cu130`, bit-identical to eager, on `sm120` and again on `sm89`. That was
-measured before anything was written, and the result is that LM7 still does not
-enforce the version — it records it, and uses it only to explain a failure that
-happened for some other reason.
+`2.12.1+cu130`, bit-identical, on `sm120` and again on `sm89`. LM7 still does
+not enforce the version — it records it, and uses it only to explain a failure
+that happened for some other reason.
 
-The claim is bounded, and the bounds matter: **newer-built loaded on older**,
-one minor version apart, same CUDA major (`cu130`), on the two models below. The
-reverse direction is not measured, nor is a CUDA-major change, nor a gap wider
-than one release. It is evidence that a strict equality guard would reject
-working artifacts — not a promise that any two PyTorch versions interoperate.
+The bounds matter: **newer-built loaded on older**, one minor version apart, same
+CUDA major, two models. The reverse direction is not measured, nor a CUDA-major
+change, nor a wider gap. It is evidence that a strict equality guard would
+reject working artifacts, not a promise that any two PyTorch versions
+interoperate.
 
 **An NVIDIA artifact could not say what it was built against.** It recorded the
 compute capability under `target.architecture` and nothing else — no CUDA
@@ -164,24 +182,31 @@ same grounds. Now:
 }
 ```
 
+`lm7 artifact inspect` already had a branch for a device-bound AOTInductor
+package that could never fire, because nothing set `device_bound` for this
+backend. It fires now.
+
 CPU and Apple artifacts record nothing new. Their payload is bound to a host
 toolchain too, but LM7 has not characterized how, and a guess in a manifest is
 worse than a gap.
 
 ## Scope
 
-- **One model on `sm120` so far.** The MLP is the smallest thing in the harness
-  and the least favourable to an artifact: it compiles in about 2 s, so the
-  reload-versus-recompile comparison has almost nothing to weigh. SmolLM2-135M
-  and Llama-3.2-1B are the rows that matter and are not measured here — the
-  Blackwell studio is interruptible-priced and was preempted mid-run.
-- **Cold and warm are indistinguishable at 35 MB**, and the `sm120` artifact sat
-  on Lightning's network filesystem. A multi-GB artifact on local NVMe is the
-  case where "reload time" needs two numbers.
-- **The `sm89` latencies are noisy.** That card was shared with another workload
-  while these ran, which is fine for correctness and rejection behaviour and not
-  fine for milliseconds.
-- **A foreign-architecture payload is refused, never executed.** That the guard
-  is *necessary* on Blackwell — that an `sm89` package would actually fail there
-  rather than being JIT-compiled forward from PTX — is untested. LM7 ships real
-  `sm89` artifacts through the harness to answer it; the answer needs the card.
+- **One model on `sm120`.** The MLP is the smallest thing in the harness and the
+  least favourable case for an artifact. SmolLM2-135M and Llama-3.2-1B on
+  Blackwell are the rows that would matter and are not here: the studio was
+  preempted mid-run and is currently off. The harness runs unchanged when it
+  returns.
+- **The `sm89` card was shared with another workload.** That is fine for
+  correctness, sizes, and the reload-API ratio measured under identical
+  conditions; it is not fine for absolute milliseconds. The JIT comparison on
+  that box is omitted rather than published, because its warm-cache compile was
+  no faster than its cold one and that is not explained.
+- **Numerics are checked against eager on the same card** — exact for the MLP,
+  `5.86e-2` max absolute difference for SmolLM2 at FP16, agreeing on the greedy
+  next token. That last check is as weak here as everywhere else.
+- **A foreign-architecture payload is refused, never executed.** Whether the
+  guard is *necessary* on Blackwell — whether an `sm89` package would genuinely
+  fail there rather than being JIT-compiled forward from its PTX — is untested.
+  Real `sm89` artifacts exist for the harness to answer it with; the answer
+  needs the card back.
