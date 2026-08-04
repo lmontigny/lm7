@@ -46,11 +46,15 @@ coverage is CPU.
   The failing cell is the one this project originally generalized from. Mixtral's
   pre-5.x implementation routes tokens with a data-dependent Python loop (`for
   expert_idx in expert_hit: ...`) whose iteration count is only known at runtime.
-  `torch.compile` tolerates it — Dynamo graph-breaks around the loop and runs it
-  eagerly — so `inductor` and `tensorrt` were always fine. `torch.export` must
-  capture one static graph and hard-fails on it, and every export-based backend
-  (`aot_inductor`, `openvino`, `onnxruntime`, `executorch`, `iree_vulkan`,
-  `litert`, `stablehlo`) calls `torch.export` internally.
+  `torch.compile` tolerates it and `torch.export` does not: export must capture
+  one static graph and hard-fails on it, which takes down every export-based
+  backend (`aot_inductor`, `openvino`, `onnxruntime`, `executorch`,
+  `iree_vulkan`, `litert`, `stablehlo`), while `inductor` and `tensorrt` were
+  always fine.
+
+  This loop is an **export** problem specifically. It is not what makes Dynamo
+  break up a sparse MoE — that is a separate mechanism, measured
+  [below](#what-torchcompile-actually-does-to-a-sparse-moe).
 
   Two things make the old blanket claim wrong. **OLMoE never had the problem**,
   even on the pinned transformers — its routing does not use that loop, so
@@ -67,18 +71,74 @@ coverage is CPU.
 
   At real scale, `allenai/OLMoE-1B-7B-0924-Instruct` (6.92B total, 64 experts, 8
   active) runs on an AMD EPYC CPU through `eager` (525.1 ms), `inductor`
-  (506.8 ms) and `zentorch` (522.1 ms), all agreeing on the greedy next token.
-  Compiling buys almost nothing on an MoE — Dynamo graph-breaks around the
-  routing regardless of backend, so most of the model runs eagerly either way,
-  and `zentorch`'s usual small-model advantage disappears. Exporting that model
-  is **not** verified: the attempt destabilized a 62 GB host twice during weight
+  (506.8 ms) and `zentorch` (522.1 ms), all agreeing on the greedy next token, so
+  `zentorch`'s usual small-model advantage disappears. Exporting that model is
+  **not** verified: the attempt destabilized a 62 GB host twice during weight
   loading and was abandoned rather than retried.
+
+  That 1.04x used to be explained here as "Dynamo graph-breaks around the routing
+  regardless of backend, so most of the model runs eagerly either way". The
+  measurement holds and **the explanation was wrong** — see below.
 
   > [!NOTE]
   > `grouped_mm` on transformers 5.x requires tensor strides that are multiples
   > of 16 bytes, so very small hand-built configs (an `intermediate_size` of 37,
   > say) now fail in *eager* with `strides should be multiple of 16 bytes`. That
   > is a config constraint, not an LM7 or export limitation.
+
+### What `torch.compile` actually does to a sparse MoE
+
+The graph-break claim above was inferred from a latency result rather than from
+Dynamo. Asking Dynamo directly, with `torch._dynamo.explain` through
+[`benchmarks/moe.py`](../benchmarks/moe.py), gives a different answer on every
+point:
+
+| model | transformers | target | graphs | breaks | eager | inductor | speedup |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Mixtral, tiny | 4.57.3 | cpu | 10 | 9 | 6.87 ms | 1.62 ms | **4.24x** |
+| OLMoE, tiny | 4.57.3 | cpu | 9 | 8 | 2.17 ms | 2.21 ms | 0.98x |
+| Mixtral, tiny | 5.14.1 | nvidia `sm120` | **1** | **0** | 1.84 ms | 0.59 ms | **3.12x** |
+| OLMoE, tiny | 5.14.1 | nvidia `sm120` | **1** | **0** | 2.03 ms | 0.71 ms | **2.85x** |
+| OLMoE-1B-7B (6.92B) | 5.14.1 | nvidia `sm120` | **1** | **0** | 17.88 ms | 11.20 ms | **1.60x** |
+| OLMoE-1B-7B (6.92B) | 5.14.1 | cpu | **1** | **0** | 345.0 ms | 335.0 ms | 1.03x |
+
+Four corrections come out of that.
+
+**The break is `aten.nonzero`, not the Python loop.** On transformers 4.57.3 the
+reported reason is *"Operator `aten.nonzero.default`'s output shape depends on
+input Tensor data"* — the router's top-k scatter, which both architectures use.
+The `for expert_idx in expert_hit` loop is what breaks `torch.export`. Two
+different mechanisms with two different blast radii, previously described as one.
+
+**OLMoE breaks just as much as Mixtral.** This document says OLMoE "never had the
+problem", which is true of export and false of compile: on 4.57.3 it breaks eight
+times, the same reason and roughly the same count as Mixtral. Exact counts drift
+by ±1 between runs, so read them as "eight or nine", not as exact.
+
+**On transformers 5.x there are no breaks at all** — one graph, zero breaks, for
+both tiny architectures and for the real 6.92B model. The `grouped_mm` rewrite
+that fixed export removed the `nonzero` capture problem as well.
+
+**Graph breaks do not predict the speedup anyway.** Tiny Mixtral compiles 4.24x
+faster *with* nine breaks, while tiny OLMoE gets 0.98x *with* eight. The causal
+story — breaks, therefore most of the model runs eagerly, therefore no speedup —
+does not survive being measured.
+
+So the honest version of the original claim is that **it was about the target,
+not about MoE.** With the same transformers and zero graph breaks, the same 6.92B
+model gets 1.03x on CPU and 1.60x on an `sm120` GPU. The 1.03x reproduces the
+1.04x measured on a different EPYC host, so the original number was right; what
+did not generalize was reading a CPU result as a property of sparse MoE.
+
+Every row agrees with `eager` on the greedy next token.
+
+> [!NOTE]
+> Measuring this needs care. Dynamo traces whatever it is handed, so a model left
+> on the host is measured in a configuration that never runs, and
+> `logger.warning_once` calls inside `forward` break the *first* trace only. An
+> early revision of `benchmarks/moe.py` reported 14 breaks on a model that
+> captures as one graph. The script now moves the model to the target device and
+> makes one eager call before tracing.
 
 ## Per-backend scope
 
@@ -109,10 +169,11 @@ coverage is CPU.
   cannot say anything about multi-chip behaviour. See
   [Google TPU](google-tpu.md).
 - NVIDIA Inductor, quantization, and TensorRT have been exercised on two GPU
-  generations: a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000. All
-  three NVIDIA compile backends run on Blackwell unmodified — `inductor`,
-  `aot_inductor`, and `tensorrt`, the last in its own environment because it
-  pins PyTorch 2.12. Neither generation has CI. See
+  generations: a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000.
+  Detection, backend selection, and every weight-only mode worked on Blackwell
+  with no code changes, and all three NVIDIA compile backends run there
+  unmodified — `inductor`, `aot_inductor`, and `tensorrt`, the last in its own
+  environment because it pins PyTorch 2.12. None of it has CI. See
   [NVIDIA Blackwell](nvidia-blackwell.md).
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
   **no Intel NPU has ever executed it**. Its integration tests skip unless
@@ -140,11 +201,16 @@ not implemented here. Two export backends quantize the artifact through their
 own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and OpenVINO's
 NNCF weight compression, the latter validated for two models out of three tried.
 
-Footprint is the reliable benefit, not speed. On sm89 every mode measured
-*slower* than the BF16 baseline once compiled. On CPU, INT8 was at parity for
-SmolLM2-135M and 2.6x slower for Llama-3.2-1B, on an AVX2-only part with no
-VNNI — so the latency result does not generalize to server CPUs or ARM.
-`nvfp4` gives the smallest footprint and the largest accuracy loss, clearing the
-validation bar for one model out of four tried. See
-[quantization](quantization.md) for which layers each mode converts and the
-measurements behind it.
+Footprint is the reliable benefit, not speed. On both GPUs measured — Ada
+(`sm89`) and Blackwell (`sm120`) — every mode came out *slower* than the BF16
+baseline once compiled. Blackwell shrinks the penalty a long way without
+removing it: `nvfp4` costs 1.24x there against 2.50x on Ada, for the same 2.30x
+footprint saving. Its FP4 tensor cores are not what does that, and cannot be —
+weight-only quantization unpacks to BF16 inside the kernel and never issues an
+FP4 matmul. On CPU, INT8 was at parity for SmolLM2-135M and 2.6x slower for
+Llama-3.2-1B, on an AVX2-only part with no VNNI — so the latency result does not
+generalize to server CPUs or ARM. `nvfp4` gives the smallest footprint and the
+largest accuracy loss, clearing the validation bar for one model out of four
+tried — and on a second, equally arbitrary set of four prompts that one model
+scores 3/4 rather than 4/4. See [quantization](quantization.md) for which layers
+each mode converts and the measurements behind it.
