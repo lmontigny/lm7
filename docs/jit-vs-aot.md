@@ -71,7 +71,10 @@ out = loaded(example_input)
 
 An `.lm7` artifact is a directory holding a versioned JSON manifest, checksums,
 and a PyTorch `.pt2` program. `load_artifact()` validates the manifest schema
-version and the checksums before loading anything.
+version and the checksums before loading anything. What that reload costs in a
+process that never compiled the model, and what it refuses to load on, is
+measured in
+[AOTInductor artifact compatibility](aot-artifact-compatibility.md).
 
 `aot_inductor` is validated for CPU, Apple Silicon, and NVIDIA GPU, and uses Beta
 PyTorch APIs. On other targets, export still works at level 1.

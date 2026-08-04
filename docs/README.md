@@ -53,6 +53,9 @@ This index covers everything else.
 - [Artifact inspection](artifact-inspection.md) -- verify payload integrity,
   portability, delegate coverage, and deployment requirements without loading
   an optional runtime.
+- [AOTInductor artifact compatibility](aot-artifact-compatibility.md) -- what a
+  packaged artifact costs to reload in a process that never compiled it, what it
+  refuses to load on, and which PyTorch differences it survives.
 - [Hugging Face model compatibility](model-compatibility.md) -- config-only
   preflight for model type, workflows, target/backend selection, and quantization.
 - [TorchInductor options](inductor-options.md) — compile modes, CUDA Graphs,
