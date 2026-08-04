@@ -9,10 +9,13 @@ from lm7 import detection
 from lm7.detection import (
     _detect_tenstorrent_targets,
     _detect_tpu_targets,
+    compute_capability,
     detect_cpu_target,
     detect_targets,
+    nvidia_generation,
     parse_cpu_info,
     parse_total_memory_bytes,
+    precision_support,
     resolve_target,
     torch_device,
 )
@@ -437,3 +440,77 @@ def test_explicit_remote_target_does_not_require_local_detection(monkeypatch):
 
     assert str(target) == "qualcomm:sm8750"
     assert target.remote is True
+
+
+def nvidia(architecture: str | None) -> TargetSpec:
+    return TargetSpec("nvidia", "gpu", architecture=architecture)
+
+
+@pytest.mark.parametrize(
+    ("architecture", "expected"),
+    [
+        ("sm75", "Turing"),
+        ("sm80", "Ampere"),
+        ("sm86", "Ampere"),
+        ("sm89", "Ada Lovelace"),
+        ("sm90", "Hopper"),
+        ("sm100", "Blackwell"),
+        ("sm120", "Blackwell"),
+    ],
+)
+def test_nvidia_generation_names_the_silicon(architecture, expected):
+    """`sm120` means nothing to a reader who has not memorized the table."""
+    assert nvidia_generation(nvidia(architecture)) == expected
+
+
+def test_nvidia_generation_declines_rather_than_guessing():
+    """A capability newer than the table costs the label and nothing else."""
+    assert nvidia_generation(nvidia(None)) is None
+    assert nvidia_generation(nvidia("gfx942")) is None
+    assert nvidia_generation(TargetSpec("amd", "gpu", architecture="gfx942")) is None
+    assert nvidia_generation(TargetSpec("cpu", "cpu", architecture="x86_64")) is None
+
+
+def test_compute_capability_orders_blackwell_above_ada():
+    """Every gate in LM7 compares these as plain integers, which is only correct
+    because CUDA capabilities sort that way as concatenated digits. This is the
+    property that let sm120 work with no special case anywhere."""
+    assert compute_capability(nvidia("sm120")) == 120
+    numbers = [compute_capability(nvidia(name)) for name in ("sm75", "sm80", "sm89", "sm90")]
+    assert numbers == [75, 80, 89, 90]
+    assert compute_capability(nvidia("sm120")) > compute_capability(nvidia("sm89"))
+    assert compute_capability(nvidia("sm100")) > compute_capability(nvidia("sm90"))
+
+
+def test_turing_reports_bfloat16_as_emulated():
+    """The case that motivated this report. A T4 answers True to
+    torch.cuda.is_bf16_supported() and then emulates BF16, which measured 3.4x
+    slower than FP16 on the same model. "native" and "emulated" have to be
+    distinguishable or that slowdown has no explanation."""
+    precision = precision_support(nvidia("sm75"))
+
+    assert precision["bf16"] == "emulated"
+    assert precision["fp16"] == "native"
+    assert precision["fp8"] == "absent"
+    assert precision["fp4"] == "absent"
+
+
+def test_fp4_is_native_only_on_blackwell():
+    assert precision_support(nvidia("sm89"))["fp4"] == "absent"
+    assert precision_support(nvidia("sm90"))["fp4"] == "absent"
+    assert precision_support(nvidia("sm100"))["fp4"] == "native"
+    assert precision_support(nvidia("sm120"))["fp4"] == "native"
+
+
+def test_blackwell_reports_every_format_as_native():
+    assert set(precision_support(nvidia("sm120")).values()) == {"native"}
+
+
+def test_precision_support_is_empty_when_it_cannot_be_known():
+    """An unqualified nvidia target has no architecture until it resolves, and no
+    other vendor's capability number is known to LM7. Reporting "native" for a
+    CPU whose AVX-512 BF16 support was never probed would be the same unmeasured
+    claim this report exists to prevent."""
+    assert precision_support(nvidia(None)) == {}
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx942")) == {}
+    assert precision_support(TargetSpec("cpu", "cpu", architecture="x86_64")) == {}

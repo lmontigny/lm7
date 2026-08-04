@@ -14,6 +14,48 @@ import torch
 from .errors import TargetNotFoundError
 from .targets import DeviceInfo, TargetSpec, parse_target
 
+# NVIDIA names its silicon by generation and torch reports only the compute
+# capability, so `sm120` says nothing to a reader who has not memorized the
+# table. The TPU path already names its generation -- see
+# `tpu_accelerator_type` -- and this is the NVIDIA counterpart.
+#
+# Thresholds are descending and inclusive, which is what makes the table short:
+# 86 and 87 fall through to Ampere, 89 is its own entry because Ada sits between
+# Ampere and Hopper, and both 100 (datacenter) and 120 (RTX/workstation) are
+# Blackwell. An unrecognized number returns None rather than guessing, so a
+# generation newer than this table costs the label and nothing else.
+_NVIDIA_GENERATIONS: tuple[tuple[int, str], ...] = (
+    (100, "Blackwell"),
+    (90, "Hopper"),
+    (89, "Ada Lovelace"),
+    (80, "Ampere"),
+    (75, "Turing"),
+    (70, "Volta"),
+    (60, "Pascal"),
+    (50, "Maxwell"),
+)
+
+# Whether the hardware computes a format or fakes it. The distinction matters
+# because torch will happily run an emulated format and report success: a Tesla
+# T4 answers True to `torch.cuda.is_bf16_supported()` and then emulates BF16,
+# which measured 3.4x slower than FP16 on the same model. Reporting "emulated"
+# is the difference between an unexplained slowdown and an expected one.
+#
+# Thresholds, and what each one is:
+#   fp16   sm60+  native half arithmetic (Pascal packed FP16 onwards)
+#   bf16   sm80+  native; sm70-sm79 runs it emulated; below that, absent
+#   int8   sm61+  native integer dot product (dp4a)
+#   fp8    sm89+  Ada-class tensor cores
+#   fp4    sm100+ Blackwell tensor cores
+#
+# These are hardware facts and say nothing about whether LM7 issues work in a
+# format. Weight-only NVFP4 dequantizes to BF16 inside the kernel, so `fp4:
+# native` on a Blackwell does not mean any FP4 matmul is executed -- see
+# docs/nvidia-blackwell.md.
+NATIVE = "native"
+EMULATED = "emulated"
+ABSENT = "absent"
+
 
 def detect_targets() -> list[DeviceInfo]:
     devices: list[DeviceInfo] = []
@@ -34,9 +76,16 @@ def detect_targets() -> list[DeviceInfo]:
                     major, minor = torch.cuda.get_device_capability(ordinal)
                     architecture = f"sm{major}{minor}"
                     capabilities["compute_capability"] = (major, minor)
+                spec = TargetSpec(vendor, "gpu", architecture, ordinal=ordinal)
+                generation = nvidia_generation(spec)
+                if generation is not None:
+                    capabilities["generation"] = generation
+                precisions = precision_support(spec)
+                if precisions:
+                    capabilities["precision"] = precisions
                 devices.append(
                     DeviceInfo(
-                        TargetSpec(vendor, "gpu", architecture, ordinal=ordinal),
+                        spec,
                         props.name,
                         getattr(props, "total_memory", None),
                         capabilities,
@@ -191,6 +240,67 @@ def inference_context(target: TargetSpec | None) -> AbstractContextManager[None]
     if target is not None and target.vendor in {"tpu", "tenstorrent"}:
         return torch.no_grad()
     return torch.inference_mode()
+
+
+def compute_capability(target: TargetSpec) -> int | None:
+    """The ``smXX`` number for a CUDA target, or None when it is not stated.
+
+    None means "do not gate on architecture". An unqualified ``nvidia`` target
+    has no architecture until it is resolved against real hardware, so refusing
+    on a missing value would reject the common case.
+
+    The number is compared as a plain integer everywhere, which orders correctly
+    only because CUDA capabilities happen to sort that way as concatenated
+    digits: 75 < 80 < 86 < 89 < 90 < 100 < 120. Blackwell is above Ada by this
+    comparison, which is why `sm120` needed no special case anywhere in LM7.
+    """
+    architecture = target.architecture
+    if not architecture or not architecture.startswith("sm"):
+        return None
+    try:
+        return int(architecture.removeprefix("sm"))
+    except ValueError:
+        return None
+
+
+def nvidia_generation(target: TargetSpec) -> str | None:
+    """The marketing generation for a CUDA target, for example ``Blackwell``.
+
+    Returns None for a non-NVIDIA target, an unqualified one, or a capability
+    number newer than `_NVIDIA_GENERATIONS`.
+    """
+    if target.vendor != "nvidia":
+        return None
+    capability = compute_capability(target)
+    if capability is None:
+        return None
+    for threshold, name in _NVIDIA_GENERATIONS:
+        if capability >= threshold:
+            return name
+    return None
+
+
+def precision_support(target: TargetSpec) -> dict[str, str]:
+    """Which numeric formats this target computes natively, fakes, or lacks.
+
+    Only NVIDIA is characterized, because it is the one vendor whose capability
+    number LM7 already knows. Everything else returns an empty mapping rather
+    than a guess: reporting "native" for a CPU whose AVX-512 BF16 support was
+    never probed would be exactly the kind of unmeasured claim this reports
+    against. An unqualified `nvidia` target also returns empty, since its
+    architecture is unknown until it resolves against real hardware.
+    """
+    capability = compute_capability(target) if target.vendor == "nvidia" else None
+    if capability is None:
+        return {}
+    return {
+        "fp32": NATIVE,
+        "fp16": NATIVE if capability >= 60 else ABSENT,
+        "bf16": NATIVE if capability >= 80 else (EMULATED if capability >= 70 else ABSENT),
+        "int8": NATIVE if capability >= 61 else ABSENT,
+        "fp8": NATIVE if capability >= 89 else ABSENT,
+        "fp4": NATIVE if capability >= 100 else ABSENT,
+    }
 
 
 def tpu_accelerator_type() -> str | None:

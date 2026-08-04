@@ -165,9 +165,9 @@ with `uv run`. Without `uv`:
 `python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e .`.
 
 Per-hardware setup: [CPU](docs/cpu.md) · [AMD CPU](docs/amd-cpu.md) ·
-[NVIDIA](docs/development.md#nvidia-cuda) · [AMD ROCm](docs/amd-rocm.md) ·
-[Apple Silicon](docs/apple-mps.md) · [Google TPU](docs/google-tpu.md) ·
-[Tenstorrent](docs/tenstorrent.md).
+[NVIDIA](docs/development.md#nvidia-cuda) · [NVIDIA Blackwell](docs/nvidia-blackwell.md) ·
+[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
+[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
 
 ## 2. Inspect the machine
 
@@ -240,8 +240,10 @@ deliberately lower priority because TensorRT builds engines more slowly and
 covers fewer models. On a local RTX 4070 SUPER, TensorRT beat Inductor 1.76x on
 a fixed-shape SmolLM2 FP16 forward pass, lost on two small MLPs, and took 56
 seconds for the SmolLM2 first call — see the
-[evaluation](docs/nvidia-tensorrt-evaluation.md). LM7 never invokes Triton
-itself; TorchInductor owns kernel generation and selection.
+[evaluation](docs/nvidia-tensorrt-evaluation.md). That holds on Blackwell too,
+at 1.83x with a 20.8 s build — see [NVIDIA Blackwell](docs/nvidia-blackwell.md).
+LM7 never invokes Triton itself; TorchInductor owns kernel generation and
+selection.
 
 ### Optional dependencies
 

@@ -168,10 +168,13 @@ Every row agrees with `eager` on the greedy next token.
   v6e — which the rest of that list has not. It still has no CI, and one chip
   cannot say anything about multi-chip behaviour. See
   [Google TPU](google-tpu.md).
-- NVIDIA Inductor and quantization have been exercised on two GPU generations:
-  a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000. Detection,
-  backend selection, and every weight-only mode worked on Blackwell with no code
-  changes. TensorRT remains `sm89`-only. None of it has CI.
+- NVIDIA Inductor, quantization, and TensorRT have been exercised on two GPU
+  generations: a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000.
+  Detection, backend selection, and every weight-only mode worked on Blackwell
+  with no code changes, and all three NVIDIA compile backends run there
+  unmodified — `inductor`, `aot_inductor`, and `tensorrt`, the last in its own
+  environment because it pins PyTorch 2.12. None of it has CI. See
+  [NVIDIA Blackwell](nvidia-blackwell.md).
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
   **no Intel NPU has ever executed it**. Its integration tests skip unless
   OpenVINO reports an NPU; everything else about it is unit-tested against a
