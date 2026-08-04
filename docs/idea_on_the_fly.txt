@@ -55,8 +55,9 @@ clarify .compile limtation, moE graph break?!
 -Handling Graph Breaks Gracefully: Does your shape cache and safe eager fallback prevent hard crashes when dynamic control flow or custom Python ops break static compilation?
 -Demonstrable Performance Speedups: Show clear benchmark graphs proving that LM7’s auto-selected backend performs at least as fast as standard native vendor pipelines (e.g., native TensorRT or OpenVINO).
 risc-v
-arm mali via Vulkan
 LiteRT
+arm mali via SPRI-V to Vulkan IR, arm-M, arm-A...
+
 
 ### Done ###
 add config-only Hugging Face model compatibility preflight
