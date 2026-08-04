@@ -240,8 +240,10 @@ deliberately lower priority because TensorRT builds engines more slowly and
 covers fewer models. On a local RTX 4070 SUPER, TensorRT beat Inductor 1.76x on
 a fixed-shape SmolLM2 FP16 forward pass, lost on two small MLPs, and took 56
 seconds for the SmolLM2 first call — see the
-[evaluation](docs/nvidia-tensorrt-evaluation.md). LM7 never invokes Triton
-itself; TorchInductor owns kernel generation and selection.
+[evaluation](docs/nvidia-tensorrt-evaluation.md). That holds on Blackwell too,
+at 1.83x with a 20.8 s build — see [NVIDIA Blackwell](docs/nvidia-blackwell.md).
+LM7 never invokes Triton itself; TorchInductor owns kernel generation and
+selection.
 
 ### Optional dependencies
 

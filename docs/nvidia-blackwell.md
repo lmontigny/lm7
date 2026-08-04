@@ -4,8 +4,10 @@ What LM7 does on Blackwell, measured on an RTX PRO 6000 Blackwell Server Edition
 (`sm120`, 96 GB, driver 580.126.20) with `torch 2.13.0+cu130`, `torchao
 0.17.0+cu130` and `transformers 5.14.1`.
 
-The short version: **Blackwell needed no code changes to run.** It needed code
-changes to be *reported* honestly, which is what most of this page is about.
+The short version: **Blackwell needed no code changes to run.** All three NVIDIA
+compile backends — `inductor`, `aot_inductor` and `tensorrt` — work on it
+unmodified. What it needed was code to be *reported* honestly, which is what most
+of this page is about.
 
 ## Nothing had to be special-cased
 
@@ -32,9 +34,9 @@ already names its generation, and NVIDIA now does the same:
 ```console
 $ lm7 targets
 Detected targets (2):
-  nvidia:sm120: NVIDIA RTX PRO 6000 Blackwell Server Edition (Blackwell), 95.6 GiB
+  nvidia:sm120: NVIDIA RTX PRO 6000 Blackwell Server Edition (Blackwell), 95.0 GiB
     precision: native fp32, fp16, bf16, int8, fp8, fp4
-  cpu:x86_64: ..., 176.0 GiB
+  cpu:x86_64: AMD EPYC 9B45, 176.9 GiB
 ```
 
 **Precision is now reported as native, emulated, or absent.** This is the more
@@ -91,14 +93,37 @@ as "your quantized model is using it".
 
 ## Backend status
 
-| backend | `sm120` status |
-| --- | --- |
-| `inductor` | **Verified.** Resolves, selects, and runs; PyTorch's `cu130` wheel ships `sm_120` kernels, so no source build is needed. |
-| `aot_inductor` | **Not yet verified.** Needs the `.[cuda-aot]` extra, which packages against a CUDA toolkit the PyTorch wheel does not ship. |
-| `tensorrt` | **Not yet verified.** LM7 pins `torch-tensorrt==2.12.1`, built against PyTorch 2.12, while a `sm_120` stack wants 2.13 — expect a version conflict rather than a clean run. |
+All three NVIDIA compile backends run on `sm120`. None needed a code change.
 
-The two unverified rows are unverified, not broken: nobody has run them on this
-silicon. Do not read the `inductor` row as covering them.
+| backend | `sm120` | evidence |
+| --- | --- | --- |
+| `inductor` | **Verified** | `tests/test_detection.py` + `tests/test_nvidia_integration.py`, 47 passed |
+| `aot_inductor` | **Verified** | `tests/test_nvidia_aot_integration.py` + `tests/test_aot_inductor.py`, 22 passed, after `uv pip install -e ".[cuda-aot]"` |
+| `tensorrt` | **Verified** | `tests/test_tensorrt_integration.py` + `tests/test_tensorrt_backend.py`, 14 passed 1 skipped |
+
+`tensorrt` needs its own environment, because `torch-tensorrt==2.12.1` pins
+PyTorch 2.12 while the rest of this page runs on 2.13. That was expected to be a
+blocker and is not: `torch 2.12.1+cu130` ships `sm_120` kernels too, so the pinned
+pair installs and runs on Blackwell without a source build.
+
+### TensorRT is still worth the engine build, and more so here
+
+SmolLM2-135M, FP16, fixed shape, median of 20 after warmup:
+
+| backend | first call | steady | vs `inductor` |
+| --- | --- | --- | --- |
+| `eager` | 0.31 s | 7.378 ms | — |
+| `inductor` | 13.4 s | 3.849 ms | baseline |
+| `tensorrt` | 20.8 s | **2.100 ms** | **1.83x faster** |
+
+The Ada measurement was 1.76x on the same model, so the advantage holds across
+generations and widens slightly. The engine build got substantially cheaper:
+20.8 s here against 56 s on Ada.
+
+The small-MLP result also reproduces — `tensorrt` at 0.114 ms against `eager` at
+0.047 ms and `inductor` at 0.072 ms. TensorRT continues to lose on workloads too
+small to amortize anything, which is why it stays opt-in and lower priority than
+`inductor`. See the [evaluation](nvidia-tensorrt-evaluation.md).
 
 ## Scope
 
