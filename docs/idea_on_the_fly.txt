@@ -57,6 +57,11 @@ clarify .compile limtation, moE graph break?!
 risc-v
 LiteRT
 arm mali via SPRI-V to Vulkan IR, arm-M, arm-A...
+lm7.serve()  <-- see chatGPT chat details
+    ├── vLLM
+    ├── SGLang
+    └── TensorRT-LLM
+
 
 
 ### Done ###
