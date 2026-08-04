@@ -55,13 +55,19 @@ def test_validation_is_per_mode_not_per_model():
 
 
 def test_llama_8b_is_admitted_for_int8_only():
-    """The 8B pair was measured on CPU alone, so only INT8 is claimed for it.
+    """Only INT8 is claimed for the 8B pair, now on evidence from both targets.
 
-    Its FP32 baseline is 30 GiB of weights, which no GPU here can hold, so the
-    NVIDIA half of the usual two-target check is unmeasured. FP8 and NVFP4 need
-    Ada-class tensor cores and were never run against it at all.
+    This entry used to rest on CPU measurements alone, because no GPU here could
+    hold the model. A Blackwell sm120 can, and INT8 passed there at 4/4 top-1
+    (maximum logit difference 0.39), so the NVIDIA half is measured rather than
+    assumed. The same run rejected FP8 (3/4) and NVFP4 (2/4) on that model, which
+    is why widening this set would be wrong even though the hardware now exists
+    to try. See docs/quantization.md.
     """
-    assert VALIDATED_WEIGHT_ONLY["unsloth/Llama-3.1-8B-Instruct"] == frozenset({INT8})
+    admitted = VALIDATED_WEIGHT_ONLY["unsloth/Llama-3.1-8B-Instruct"]
+    assert admitted == frozenset({INT8})
+    assert FP8 not in admitted
+    assert NVFP4 not in admitted
 
 
 def test_long_form_names_normalize_to_short_names():

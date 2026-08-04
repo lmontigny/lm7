@@ -136,7 +136,7 @@ for details.
 | [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization, on Ada (`sm89`) and Blackwell (`sm120`) |
 | [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
-| [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization on CPU only — 30 GiB FP32 baseline, see [quantization](docs/quantization.md) |
+| [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization, CPU and Blackwell GPU — FP8/NVFP4 measured and rejected, see [quantization](docs/quantization.md) |
 | [OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct) | Sparse MoE at 6.9B — `eager`, `inductor`, `zentorch` on AMD CPU |
 | BERT, ViT, LSTM, Conv+BatchNorm, sparse MoE, and five causal LMs | `openxla` parity on a Google TPU v6e — see [coverage](docs/google-tpu.md#model-coverage) |
 
@@ -316,10 +316,13 @@ Silicon, with slightly wider float16 tolerance on MPS than CUDA; DeepSeek was
 validated on CPU and NVIDIA only, across every backend installable on one host —
 see [DeepSeek coverage](docs/deepseek.md).
 
-`unsloth/Llama-3.1-8B-Instruct` is validated too, but only on CPU and only for
-INT8: at FP32 it needs 30 GiB of weights and roughly 40 GiB of RAM to load and
-quantize, which is a large-memory host rather than a compact one. Expect a
-multi-second forward pass — 2.2 s at sequence length 16 on eight AVX2 cores.
+`unsloth/Llama-3.1-8B-Instruct` is validated too, for INT8 only, now on CPU and
+NVIDIA alike. On CPU it is a large-memory host rather than a compact one: at
+FP32 it needs 30 GiB of weights and roughly 40 GiB of RAM to load and quantize,
+and a forward pass takes 2.2 s at sequence length 16 on eight AVX2 cores. On a
+96 GB Blackwell GPU the BF16 baseline is 16.1 GB and the same pass takes 12.5 ms.
+FP8 and NVFP4 were measured against it there and both fail the accuracy gate —
+see [quantization](docs/quantization.md).
 
 For greedy token generation, use the static KV-cache path:
 
