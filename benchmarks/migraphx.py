@@ -12,6 +12,9 @@ Run it on a ROCm-enabled PyTorch build with Torch-MIGraphX installed:
     python benchmarks/migraphx.py --dtype float16 --batch-size 8 \
       --output artifacts/benchmarks/migraphx-mlp-fp16-b8.json
 
+    python benchmarks/migraphx.py --model smollm2 --dtype float16 \
+      --output artifacts/benchmarks/migraphx-smollm2-fp16.json
+
 Paths whose runtime is missing are reported as unavailable and skipped rather
 than failing the run, so an inductor-only baseline still works before
 Torch-MIGraphX is installed.
@@ -34,6 +37,14 @@ import torch
 # validated float16/bfloat16 paths elsewhere in LM7.
 _DEFAULT_ATOL = {"float32": 1e-4, "float16": 2e-2, "bfloat16": 5e-2}
 
+# The causal-LM shapes from the acceptance criteria in docs/amd-migraphx.md.
+HF_MODELS = {
+    "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "lfm25": "LiquidAI/LFM2.5-230M",
+    "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
+    "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
+}
+
 
 def _dtype(name: str) -> torch.dtype:
     return {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[name]
@@ -51,14 +62,49 @@ def _migraphx_available() -> bool:
     return True
 
 
-def _mlp(batch_size: int, dtype: torch.dtype) -> tuple[torch.nn.Module, tuple[torch.Tensor, ...]]:
+def _mlp(batch_size: int, dtype: torch.dtype) -> tuple[torch.nn.Module, tuple[Any, ...], dict]:
     model = torch.nn.Sequential(
         torch.nn.Linear(1024, 4096),
         torch.nn.GELU(),
         torch.nn.Linear(4096, 1024),
     ).eval()
     inputs = (torch.randn(batch_size, 1024, device="cuda", dtype=dtype),)
-    return model.to(device="cuda", dtype=dtype), inputs
+    return model.to(device="cuda", dtype=dtype), inputs, {}
+
+
+def _causal_lm(
+    model_id: str, batch_size: int, dtype: torch.dtype, prompt: str
+) -> tuple[torch.nn.Module, tuple[Any, ...], dict]:
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError:
+        raise SystemExit('Install Hugging Face support with: pip install -e ".[hf]"') from None
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype).eval().to("cuda")
+    encoded = tokenizer([prompt] * batch_size, return_tensors="pt")
+    kwargs = {name: value.to("cuda") for name, value in encoded.items()}
+    kwargs["use_cache"] = False
+    return model, (), kwargs
+
+
+def _workload(
+    name: str, *, batch_size: int, dtype: torch.dtype, prompt: str
+) -> tuple[torch.nn.Module, tuple[Any, ...], dict]:
+    if name == "mlp":
+        return _mlp(batch_size, dtype)
+    return _causal_lm(HF_MODELS[name], batch_size, dtype, prompt)
+
+
+def _output_tensor(value: Any) -> torch.Tensor:
+    """Causal LMs return CausalLMOutputWithPast; the MLP returns a plain tensor."""
+    return value.logits if hasattr(value, "logits") else value
+
+
+def _batch_size(args: tuple[Any, ...], kwargs: dict) -> int:
+    for value in (*args, *kwargs.values()):
+        if isinstance(value, torch.Tensor) and value.dim() > 0:
+            return value.shape[0]
+    return 1
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -79,27 +125,29 @@ def _build(path: str, model: torch.nn.Module) -> Any:
     return torch.compile(model, backend=path)
 
 
-def _measure(fn: Any, args: tuple[torch.Tensor, ...], warmup: int, repeats: int) -> dict[str, Any]:
+def _measure(
+    fn: Any, args: tuple[torch.Tensor, ...], kwargs: dict, warmup: int, repeats: int
+) -> dict[str, Any]:
     torch.cuda.reset_peak_memory_stats()
     with torch.inference_mode():
         started = time.perf_counter()
-        reference = fn(*args)
+        reference = fn(*args, **kwargs)
         torch.cuda.synchronize()
         first_call_ms = (time.perf_counter() - started) * 1000
 
         for _ in range(warmup):
-            fn(*args)
+            fn(*args, **kwargs)
         torch.cuda.synchronize()
 
         latencies_ms: list[float] = []
         for _ in range(repeats):
             started = time.perf_counter()
-            fn(*args)
+            fn(*args, **kwargs)
             torch.cuda.synchronize()
             latencies_ms.append((time.perf_counter() - started) * 1000)
 
     median_ms = statistics.median(latencies_ms)
-    batch_size = args[0].shape[0] if args and args[0].ndim else 1
+    batch_size = _batch_size(args, kwargs)
     return {
         "output": reference,
         "first_call_ms": first_call_ms,
@@ -115,6 +163,12 @@ def main() -> None:
         description="Compare eager, TorchInductor, and Torch-MIGraphX on an AMD GPU."
     )
     parser.add_argument(
+        "--model",
+        choices=("mlp", *HF_MODELS),
+        default="mlp",
+        help="Workload to benchmark.",
+    )
+    parser.add_argument(
         "--path",
         nargs="+",
         default=["eager", "inductor", "migraphx"],
@@ -124,6 +178,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--prompt", default="The capital of France is")
     parser.add_argument(
         "--atol",
         type=float,
@@ -146,9 +201,11 @@ def main() -> None:
     # Build the model and inputs once so every path runs identical weights and
     # inputs; only then is the accuracy comparison against eager meaningful.
     torch.manual_seed(0)
-    base_model, inputs = _mlp(arguments.batch_size, dtype)
+    base_model, args, kwargs = _workload(
+        arguments.model, batch_size=arguments.batch_size, dtype=dtype, prompt=arguments.prompt
+    )
     with torch.inference_mode():
-        reference_output = base_model(*inputs)
+        reference_output = _output_tensor(base_model(*args, **kwargs))
         torch.cuda.synchronize()
 
     paths = ["eager", *[p for p in arguments.path if p != "eager"]]
@@ -160,8 +217,8 @@ def main() -> None:
             continue
 
         model = copy.deepcopy(base_model)
-        measured = _measure(_build(path, model), inputs, arguments.warmup, arguments.repeats)
-        output = measured.pop("output")
+        measured = _measure(_build(path, model), args, kwargs, arguments.warmup, arguments.repeats)
+        output = _output_tensor(measured.pop("output"))
         max_abs_diff = (reference_output - output.to(reference_output.dtype)).abs().max().item()
         measured.update(
             {
@@ -188,9 +245,11 @@ def main() -> None:
     report = {
         "schema_version": 1,
         "workload": {
-            "model": "mlp",
+            "model": arguments.model,
+            "model_id": HF_MODELS.get(arguments.model),
             "dtype": arguments.dtype,
             "batch_size": arguments.batch_size,
+            "prompt": arguments.prompt if arguments.model in HF_MODELS else None,
             "target": "amd",
             "atol": atol,
         },
