@@ -180,6 +180,12 @@ that — the same limit of greedy checking that
 [quantization](quantization.md#the-four-prompts-were-never-recorded-and-they-matter)
 runs into.
 
+The `aot_inductor` row exports and reloads inside one process, which is a weaker
+claim than it reads as. For the same artifact reloaded in an interpreter that
+never compiled it — with cold and warm page caches, a rejection matrix, and what
+happens under a different PyTorch — see
+[AOTInductor artifact compatibility](aot-artifact-compatibility.md).
+
 ### Reading these numbers
 
 - **Three environments.** `tensorrt` pins PyTorch 2.12.1; everything else ran on

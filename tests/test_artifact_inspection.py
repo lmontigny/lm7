@@ -117,3 +117,72 @@ def test_artifact_inspect_cli_returns_one_for_corrupt_payload(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Checksums:        invalid" in output
     assert "compiled_model.pte: missing" in output
+
+
+def _write_aot_artifact(tmp_path, **requirements):
+    artifact = tmp_path / "model-aot.lm7"
+    artifact.mkdir()
+    program = b"portable exported program"
+    compiled = b"architecture-bound package"
+    (artifact / "exported_program.pt2").write_bytes(program)
+    (artifact / "compiled_model.pt2").write_bytes(compiled)
+    manifest = ArtifactManifest(
+        format_version=1,
+        lm7_version="0.1.0",
+        torch_version="2.13.0+cu130",
+        created_at="2026-08-04T00:00:00+00:00",
+        target={
+            "vendor": "nvidia",
+            "kind": "gpu",
+            "architecture": "sm120",
+            "model": None,
+            "ordinal": 0,
+            "remote": False,
+        },
+        model_graph_hash="graph",
+        cache_key="cache",
+        input_signature=None,
+        program_file="exported_program.pt2",
+        program_sha256=_sha256(program),
+        backend="aot_inductor",
+        backend_version="2.13.0+cu130",
+        compiled_file="compiled_model.pt2",
+        compiled_sha256=_sha256(compiled),
+        runtime_requirements={
+            "torch": "2.13.0+cu130",
+            "device": "nvidia",
+            "api_status": "beta",
+            **requirements,
+        },
+    )
+    (artifact / "manifest.json").write_text(json.dumps(asdict(manifest)), encoding="utf-8")
+    return artifact
+
+
+def test_inspection_reports_the_gpu_an_aot_package_needs(tmp_path):
+    artifact = _write_aot_artifact(
+        tmp_path,
+        device_bound=True,
+        compute_capability="sm120",
+        cuda="13.0",
+        device_name="NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    )
+
+    result = inspect_artifact(artifact)
+
+    assert result.device_bound is True
+    assert "sm120" in result.deployment
+    assert "CUDA 13.0" in result.deployment
+    # A minor PyTorch difference is survivable, so the summary must not demand a
+    # matching one -- see docs/aot-artifact-compatibility.md.
+    assert "PyTorch runtime" in result.deployment
+    assert "matching PyTorch" not in result.deployment
+
+
+def test_inspection_of_a_cpu_aot_package_claims_no_device(tmp_path):
+    artifact = _write_aot_artifact(tmp_path)
+
+    result = inspect_artifact(artifact)
+
+    assert result.device_bound is False
+    assert "sm120" not in result.deployment

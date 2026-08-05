@@ -257,7 +257,14 @@ def _deployment_summary(backend: str, requirements: Mapping[str, Any]) -> str:
         architecture = requirements.get("compute_capability") or "matching NVIDIA GPU"
         return f"requires matching CUDA, TensorRT, and GPU architecture ({architecture})"
     if backend == "aot_inductor" and requirements.get("device_bound"):
-        return "requires matching accelerator architecture and PyTorch runtime"
+        # Name the architecture the way the tensorrt branch does. "Matching
+        # PyTorch" is deliberately not claimed: a package built by one minor
+        # release loads under its neighbour, so the CUDA runtime is the part
+        # that has to line up -- see docs/aot-artifact-compatibility.md.
+        architecture = requirements.get("compute_capability") or "matching GPU"
+        cuda = requirements.get("cuda")
+        runtime = f"CUDA {cuda} PyTorch runtime" if cuda else "matching CUDA PyTorch runtime"
+        return f"requires a matching GPU architecture ({architecture}) and a {runtime}"
     if backend == "export":
         return "portable PyTorch ExportedProgram"
     if requirements.get("device_bound"):
