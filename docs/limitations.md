@@ -184,7 +184,7 @@ had stated.
 
 | Backend | Scope and caveats |
 | --- | --- |
-| `inductor` | The default and the best-covered path. CPU is the only target with CI. |
+| `inductor` | The default and the best-covered path. CPU and Apple Silicon (MPS) are the only targets with CI. |
 | `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). |
 | `tensorrt` | NVIDIA only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). `lm7.export` serializes the engine so a second process need not rebuild it; the artifact is static-shape and bound to the GPU architecture, TensorRT version, and Torch-TensorRT version that built it. |
 | `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on both `model run` and `model export`, validated per model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
@@ -200,10 +200,15 @@ had stated.
 
 ## Hardware validation
 
-- **CPU is the only target with CI.** Everything else has been exercised
-  manually, or not at all.
-- AMD ROCm, Apple Silicon (MPS), Intel XPU, OpenXLA TPU, and Tenstorrent are
-  initial single-process integrations **without physical-hardware CI**.
+- **CPU and Apple Silicon (MPS) are the only targets with CI.** Everything
+  else has been exercised manually, or not at all.
+- **Apple Silicon (MPS) runs on real hardware in CI** — GitHub's `macos-26`
+  runner is arm64, so `tests/test_mac_integration.py` (Inductor and
+  AOTInductor through MPS) runs on an actual Apple GPU on every commit, not a
+  mock. It is the only accelerator target with that property; everything
+  below is exercised by hand at best.
+- AMD ROCm, Intel XPU, OpenXLA TPU, and Tenstorrent are initial
+  single-process integrations **without physical-hardware CI**.
 - OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU
   v6e — which the rest of that list has not. It still has no CI, and one chip
   cannot say anything about multi-chip behaviour. See
