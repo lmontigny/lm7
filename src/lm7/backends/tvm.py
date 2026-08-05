@@ -4,11 +4,12 @@ import importlib
 import importlib.metadata
 import importlib.util
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import torch
 
-from ..errors import CompilationError
+from ..errors import ArtifactLoadError, CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
 # Priority sits below `eager` deliberately -- see `supports()`. Kept as a named
@@ -103,23 +104,15 @@ class TVMBackend:
                 "example model(input_ids, attention_mask)."
             )
         try:
-            tvm = importlib.import_module("tvm")
-            relax = importlib.import_module("tvm.relax")
-            frontend = importlib.import_module("tvm.relax.frontend.torch")
+            tvm, relax, frontend = _import_tvm()
         except ImportError as exc:  # pragma: no cover - probe already guards this
             raise CompilationError(f"Apache TVM could not be imported: {exc}.") from exc
 
         options = dict(request.options)
-        target_string = options.pop("target", "llvm")
         try:
             with torch.no_grad():
                 exported = torch.export.export(request.model, tuple(example_args))
-            # keep_params_as_input=False bakes the weights into the module, so
-            # the built VM takes only the call's real arguments.
-            module = frontend.from_exported_program(exported, keep_params_as_input=False)
-            target = tvm.target.Target(target_string)
-            with target:
-                executable = relax.build(module, target=target)
+            executable, target_string = _lower_and_build(exported, options, tvm, relax, frontend)
             device = tvm.cpu(0)
             machine = relax.VirtualMachine(executable, device)
             runner = _TVMRunner(machine, device, tvm)
@@ -144,9 +137,124 @@ class TVMBackend:
             },
         )
 
+    def compile_exported(
+        self,
+        exported_program: torch.export.ExportedProgram,
+        library_path: Path,
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> Path:
+        """Build a standalone Relax VM library and save it to ``library_path``.
+
+        Unlike ``compile()``, the saved library reloads through
+        ``load_library()`` with only the TVM *runtime* -- ``tvm.runtime`` plus
+        ``relax.VirtualMachine`` -- so the process loading it later never needs
+        ``torch.export`` or the Relax PyTorch frontend that built it. Weights
+        are baked in the same way as the JIT path
+        (``keep_params_as_input=False``).
+
+        The library embeds the exporting host's target triple (arm64 vs
+        x86-64, and any ``mcpu`` given in ``options``), so it only reloads on
+        a matching architecture -- see docs/tvm.md.
+        """
+        probe = self.probe()
+        if not probe.available:
+            raise CompilationError(probe.reason)
+        args, kwargs = getattr(exported_program, "example_inputs", None) or ((), {})
+        if kwargs:
+            raise CompilationError(
+                "The tvm backend captures positional inputs only; got keyword inputs "
+                f"{', '.join(sorted(kwargs))}. Export the model with positional args, for "
+                "example args=(input_ids, attention_mask)."
+            )
+        try:
+            tvm, relax, frontend = _import_tvm()
+        except ImportError as exc:  # pragma: no cover - probe already guards this
+            raise CompilationError(f"Apache TVM could not be imported: {exc}.") from exc
+
+        resolved_options = dict(options or {})
+        try:
+            executable, _ = _lower_and_build(
+                exported_program, resolved_options, tvm, relax, frontend
+            )
+            library_path.parent.mkdir(parents=True, exist_ok=True)
+            executable.export_library(str(library_path))
+            if args:
+                # Round-trips through the saved library rather than the
+                # in-memory `executable`, so a save/reload mismatch -- not just
+                # a codegen failure -- surfaces here.
+                _TVMRunner(
+                    relax.VirtualMachine(tvm.runtime.load_module(str(library_path)), tvm.cpu(0)),
+                    tvm.cpu(0),
+                    tvm,
+                )(*args)
+        except Exception as exc:
+            library_path.unlink(missing_ok=True)
+            raise CompilationError(
+                f"TVM AOT export failed for {library_path}: {exc}. Verify the TVM "
+                "installation or use fallback='warn'."
+            ) from exc
+        return library_path
+
+    def load_library(self, library_path: Path) -> Callable[..., Any]:
+        """Reload a library written by ``compile_exported()``.
+
+        Uses only the TVM runtime -- no ``torch.export`` or Relax PyTorch
+        frontend import required, unlike ``load()`` for the JIT path.
+        """
+        probe = self.probe()
+        if not probe.available:
+            raise ArtifactLoadError(probe.reason)
+        try:
+            tvm = importlib.import_module("tvm")
+            relax = importlib.import_module("tvm.relax")
+        except ImportError as exc:  # pragma: no cover - probe already guards this
+            raise ArtifactLoadError(f"Apache TVM could not be imported: {exc}.") from exc
+        try:
+            loaded = tvm.runtime.load_module(str(library_path))
+            device = tvm.cpu(0)
+            machine = relax.VirtualMachine(loaded, device)
+        except Exception as exc:
+            raise ArtifactLoadError(
+                f"Artifact load stage failed for {library_path}: {exc}. TVM libraries embed "
+                "the exporting host's CPU architecture and do not reload on a different one."
+            ) from exc
+        return _TVMRunner(machine, device, tvm)
+
     def load(self, artifact: Artifact) -> Callable[..., Any]:
         assert artifact.callable is not None
         return artifact.callable
+
+
+def _import_tvm() -> tuple[Any, Any, Any]:
+    tvm = importlib.import_module("tvm")
+    relax = importlib.import_module("tvm.relax")
+    frontend = importlib.import_module("tvm.relax.frontend.torch")
+    return tvm, relax, frontend
+
+
+def _lower_and_build(
+    exported_program: torch.export.ExportedProgram,
+    options: Mapping[str, Any],
+    tvm: Any,
+    relax: Any,
+    frontend: Any,
+) -> tuple[Any, Any]:
+    """Lower an ExportedProgram to Relax and build it for ``options["target"]``.
+
+    Shared by the JIT and AOT export paths so they cannot drift on how the
+    target option is read or how weights are baked in. Returns the built
+    executable and the target value actually used (for artifact metadata).
+    """
+    resolved_options = dict(options)
+    target_string = resolved_options.pop("target", "llvm")
+    # keep_params_as_input=False bakes the weights into the module, so the
+    # built VM/library takes only the call's real arguments.
+    module = frontend.from_exported_program(exported_program, keep_params_as_input=False)
+    target = tvm.target.Target(target_string)
+    with target:
+        executable = relax.build(module, target=target)
+    return executable, target_string
 
 
 class _TVMRunner:

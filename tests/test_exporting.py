@@ -215,6 +215,29 @@ def test_matching_architecture_loads(monkeypatch, tmp_path):
     )
 
 
+def test_cpu_architecture_bound_artifact_is_refused_on_a_different_cpu(monkeypatch, tmp_path):
+    """A TVM library built for arm64 must not load on an x86-64 host.
+
+    TVM's LLVM codegen bakes in the exporting host's target triple, so unlike
+    AOTInductor/TensorRT this is a CPU-vendor, not GPU-vendor, mismatch.
+    """
+    monkeypatch.setattr(
+        exporting, "resolve_target", lambda _: TargetSpec("cpu", "cpu", architecture="x86_64")
+    )
+    manifest = _architecture_manifest("tvm", "arm64", vendor="cpu")
+    with pytest.raises(ArtifactLoadError, match="built for cpu:arm64"):
+        exporting._validate_target_architecture(manifest, tmp_path)
+
+
+def test_cpu_matching_architecture_loads(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        exporting, "resolve_target", lambda _: TargetSpec("cpu", "cpu", architecture="arm64")
+    )
+    exporting._validate_target_architecture(
+        _architecture_manifest("tvm", "arm64", vendor="cpu"), tmp_path
+    )
+
+
 @pytest.mark.parametrize(
     "backend", ["export", "openvino", "executorch", "qnn", "stablehlo", "litert"]
 )

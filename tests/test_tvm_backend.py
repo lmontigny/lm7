@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,7 @@ import torch
 from lm7.backends import registry
 from lm7.backends.base import CompileRequest
 from lm7.backends.tvm import TVMBackend
-from lm7.errors import CompilationError
+from lm7.errors import ArtifactLoadError, CompilationError
 from lm7.targets import parse_target
 
 tvm_backend_module = importlib.import_module("lm7.backends.tvm")
@@ -91,10 +92,23 @@ def install_fake_tvm(monkeypatch, *, output=None, build_error: Exception | None 
     def from_dlpack(tensor):
         return _FakeTensor(tensor)
 
+    class FakeExecutable:
+        """Stands in for tvm.runtime.executable.Executable, AOT export's payload."""
+
+        def export_library(self, path):
+            calls["exported_library_path"] = path
+            Path(path).write_bytes(b"fake-tvm-library")
+
     def build(mod, target=None):
         calls["built_target"] = str(target)
         if build_error is not None:
             raise build_error
+        return FakeExecutable()
+
+    def load_module(path):
+        calls["loaded_library_path"] = path
+        if not Path(path).is_file():
+            raise RuntimeError(f"cannot find file {path}")
         return SimpleNamespace()
 
     class Target:
@@ -135,7 +149,7 @@ def install_fake_tvm(monkeypatch, *, output=None, build_error: Exception | None 
         __version__="0.25.0-test",
         target=SimpleNamespace(Target=Target),
         cpu=lambda index: SimpleNamespace(name="cpu", index=index),
-        runtime=SimpleNamespace(from_dlpack=from_dlpack),
+        runtime=SimpleNamespace(from_dlpack=from_dlpack, load_module=load_module),
     )
     for name, module in {
         "tvm": tvm_module,
@@ -310,3 +324,99 @@ def test_to_torch_keeps_multiple_outputs_as_a_tuple():
 
 def test_backend_is_registered():
     assert isinstance(registry.get("tvm"), TVMBackend)
+
+
+def exported_program_for(module: torch.nn.Module = None, args=None, kwargs=None):
+    with torch.no_grad():
+        return torch.export.export(module or model(), args or (torch.randn(8, 4),), kwargs or {})
+
+
+def test_compile_exported_writes_and_validates_a_library(monkeypatch, tmp_path):
+    calls = install_fake_tvm(monkeypatch)
+    library_path = tmp_path / "compiled_model.tvm.so"
+
+    result = TVMBackend().compile_exported(exported_program_for(), library_path)
+
+    assert result == library_path
+    # from_fx cannot lower `embedding`; baking params in keeps the reloaded
+    # library's call signature equal to the exported program's real arguments.
+    assert calls["keep_params_as_input"] is False
+    assert calls["exported_library_path"] == str(library_path)
+    # Round-trips through the saved library (not the in-memory executable) to
+    # validate the save/reload path itself, not just codegen.
+    assert calls["loaded_library_path"] == str(library_path)
+    assert library_path.is_file()
+
+
+def test_compile_exported_honours_a_target_option(monkeypatch, tmp_path):
+    calls = install_fake_tvm(monkeypatch)
+    library_path = tmp_path / "compiled_model.tvm.so"
+
+    TVMBackend().compile_exported(
+        exported_program_for(), library_path, options={"target": {"kind": "llvm", "mcpu": "x"}}
+    )
+
+    assert calls["built_target"] == "{'kind': 'llvm', 'mcpu': 'x'}"
+
+
+def test_compile_exported_rejects_keyword_inputs(monkeypatch, tmp_path):
+    install_fake_tvm(monkeypatch)
+    library_path = tmp_path / "compiled_model.tvm.so"
+
+    class TwoArgs(torch.nn.Module):
+        def forward(self, x, y):
+            return x + y
+
+    exported = exported_program_for(
+        TwoArgs().eval(), args=(torch.randn(4),), kwargs={"y": torch.randn(4)}
+    )
+
+    with pytest.raises(CompilationError, match="positional inputs only"):
+        TVMBackend().compile_exported(exported, library_path)
+
+    assert not library_path.exists()
+
+
+def test_compile_exported_wraps_build_failure_and_cleans_up(monkeypatch, tmp_path):
+    install_fake_tvm(monkeypatch, build_error=RuntimeError("cannot legalize op"))
+    library_path = tmp_path / "compiled_model.tvm.so"
+
+    with pytest.raises(CompilationError, match="cannot legalize op"):
+        TVMBackend().compile_exported(exported_program_for(), library_path)
+
+    assert not library_path.exists()
+
+
+def test_compile_exported_reports_missing_optional_dependency(monkeypatch, tmp_path):
+    patch_find_spec(monkeypatch, present=False)
+    library_path = tmp_path / "compiled_model.tvm.so"
+
+    with pytest.raises(CompilationError, match=".\\[tvm\\]"):
+        TVMBackend().compile_exported(exported_program_for(), library_path)
+
+
+def test_load_library_returns_a_working_callable(monkeypatch, tmp_path):
+    expected = torch.arange(24, dtype=torch.float32).reshape(8, 3)
+    calls = install_fake_tvm(monkeypatch, output=expected)
+    library_path = tmp_path / "compiled_model.tvm.so"
+    TVMBackend().compile_exported(exported_program_for(), library_path)
+
+    result = TVMBackend().load_library(library_path)(torch.randn(8, 4))
+
+    assert calls["loaded_library_path"] == str(library_path)
+    assert isinstance(result, torch.Tensor)
+    torch.testing.assert_close(result, expected)
+
+
+def test_load_library_reports_a_missing_file(monkeypatch, tmp_path):
+    install_fake_tvm(monkeypatch)
+
+    with pytest.raises(ArtifactLoadError, match="embed the exporting host's CPU architecture"):
+        TVMBackend().load_library(tmp_path / "does-not-exist.so")
+
+
+def test_load_library_reports_missing_optional_dependency(monkeypatch, tmp_path):
+    patch_find_spec(monkeypatch, present=False)
+
+    with pytest.raises(ArtifactLoadError, match=".\\[tvm\\]"):
+        TVMBackend().load_library(tmp_path / "compiled_model.tvm.so")

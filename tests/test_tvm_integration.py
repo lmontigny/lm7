@@ -7,7 +7,8 @@ import torch
 
 import lm7
 from lm7.backends.tvm import TVMBackend
-from lm7.errors import CompilationError
+from lm7.errors import BackendUnavailableError, CompilationError
+from lm7.exporting import DynamicDimension, ShapeProfile
 
 
 def _tvm_available() -> bool:
@@ -169,4 +170,121 @@ def test_keyword_inputs_are_rejected():
             ),
             (),
             {"x": torch.randn(8, 16)},
+        )
+
+
+def test_export_writes_a_tvm_library_and_round_trips(tmp_path):
+    """AOT export: unlike compile(), the saved .so reloads through only the
+    TVM runtime -- no torch.export or Relax PyTorch frontend needed to load
+    it back, which is the whole point of exporting ahead of time."""
+    source = model()
+    example = torch.randn(8, 16)
+    with torch.no_grad():
+        expected = source(example)
+
+    artifact = lm7.export(
+        source,
+        args=(example,),
+        target="cpu",
+        backend="tvm",
+        output=tmp_path / "model.lm7",
+    )
+
+    assert artifact.manifest.backend == "tvm"
+    assert artifact.manifest.backend_version is not None
+    assert artifact.manifest.runtime_requirements["tvm_target"] == "llvm"
+    assert artifact.manifest.runtime_requirements["device_bound"] is True
+    assert (artifact.path / "compiled_model.tvm.so").is_file()
+    torch.testing.assert_close(artifact(example), expected, rtol=1e-4, atol=1e-4)
+
+    reloaded = lm7.load_artifact(artifact.path)
+    torch.testing.assert_close(reloaded(example), expected, rtol=1e-4, atol=1e-4)
+
+
+def test_export_embedding_compiles(tmp_path):
+    """Same reason as test_embedding_compiles: proves the AOT path also uses
+    the exported-program frontend, not the from_fx path that rejects it."""
+
+    class Embed(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = torch.nn.Embedding(32, 8)
+            self.out = torch.nn.Linear(8, 4)
+
+        def forward(self, ids):
+            return self.out(self.embedding(ids))
+
+    source = Embed().eval()
+    ids = torch.randint(0, 32, (2, 6))
+    with torch.no_grad():
+        expected = source(ids)
+
+    artifact = lm7.export(
+        source, args=(ids,), target="cpu", backend="tvm", output=tmp_path / "model.lm7"
+    )
+
+    torch.testing.assert_close(artifact(ids), expected, rtol=1e-4, atol=1e-4)
+
+
+def test_export_rejects_tvm_for_non_cpu_targets(tmp_path):
+    with pytest.raises(BackendUnavailableError, match="CPU \\(LLVM\\) targets only"):
+        lm7.export(
+            model(),
+            args=(torch.randn(8, 16),),
+            target="nvidia",
+            backend="tvm",
+            output=tmp_path / "model.lm7",
+        )
+
+
+def test_export_rejects_dynamic_shapes():
+    with pytest.raises(BackendUnavailableError, match="static shapes"):
+        lm7.export(
+            model(),
+            args=(torch.randn(8, 16),),
+            target="cpu",
+            backend="tvm",
+            output="unused.lm7",
+            shape_profile=ShapeProfile(inputs={"x": {0: DynamicDimension("batch", min=1, max=32)}}),
+        )
+
+
+def test_export_rejects_keyword_inputs(tmp_path):
+    class TwoArgs(torch.nn.Module):
+        def forward(self, x, y):
+            return x + y
+
+    with pytest.raises(CompilationError, match="positional inputs only"):
+        lm7.export(
+            TwoArgs().eval(),
+            args=(torch.randn(4),),
+            kwargs={"y": torch.randn(4)},
+            target="cpu",
+            backend="tvm",
+            output=tmp_path / "model.lm7",
+        )
+
+
+def test_export_honours_a_target_option(tmp_path):
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(8, 16),),
+        target="cpu",
+        backend="tvm",
+        output=tmp_path / "model.lm7",
+        options={"target": {"kind": "llvm"}},
+    )
+
+    assert artifact.manifest.runtime_requirements["tvm_target"] == {"kind": "llvm"}
+
+
+def test_export_rejects_the_old_cli_style_target_string(tmp_path):
+    with pytest.raises(CompilationError, match="no longer supported"):
+        lm7.export(
+            model(),
+            args=(torch.randn(8, 16),),
+            target="cpu",
+            backend="tvm",
+            output=tmp_path / "model.lm7",
+            options={"target": "llvm -mcpu=x"},
         )

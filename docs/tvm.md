@@ -13,6 +13,14 @@ compiled = lm7.compile(model.eval(), target="cpu", backend="tvm", fallback="erro
 output = compiled(example_input)
 ```
 
+TVM also has an AOT export path — see [AOT export](#aot-export) below:
+
+```python
+artifact = lm7.export(model.eval(), args=(example_input,), target="cpu", backend="tvm", output="model.lm7")
+reloaded = lm7.load_artifact("model.lm7")
+output = reloaded(example_input)
+```
+
 > [!WARNING]
 > This backend is **explicit-only and far slower than Inductor** — 62-167x
 > slower than eager, depending on host, on the benchmarks below. It exists so
@@ -153,7 +161,6 @@ selection, so tuning what LLVM targets does not move it.
   even then Relax has no cuBLAS dispatch. Not wired up.
 - **Positional tensor inputs only.** The Relax VM entry point takes a flat
   positional list, so a model must be called as `model(a, b)`, not with kwargs.
-- **JIT only.** No `.lm7` artifact; `lm7.export` does not accept `backend="tvm"`.
 - **No autotuning, no quantization, no dynamic shapes.** Each input signature
   compiles its own module.
 - **Weights are baked in.** LM7 converts with `keep_params_as_input=False`, so
@@ -168,6 +175,44 @@ Set a different TVM target with `options={"target": {"kind": "llvm", "mcpu":
 the CLI-string target form (`"llvm -mcpu=..."`) entirely — passing it raises
 `ValueError: CLI target string form ... is no longer supported`, wrapped in
 LM7's `CompilationError`. Use the JSON-dict form shown above instead.
+
+## AOT export
+
+```python
+artifact = lm7.export(
+    model.eval(), args=(example_input,), target="cpu", backend="tvm", output="model.lm7"
+)
+reloaded = lm7.load_artifact("model.lm7")
+output = reloaded(example_input)
+```
+
+This writes `compiled_model.tvm.so` — TVM's own `Executable.export_library()`
+output — into the `.lm7` artifact directory. Reloading it, either through the
+`artifact` returned by `export()` or later through `load_artifact()`, uses
+only `tvm.runtime.load_module()` plus `relax.VirtualMachine` — no
+`torch.export` and no Relax PyTorch frontend import, unlike the JIT path's
+`load()`. That is the actual point of exporting ahead of time: the process
+that runs the model does not need the compiler.
+
+It does not run any faster: the `.so` holds the same untuned Relax codegen
+measured above, so exporting only removes the `torch.export` + `relax.build`
+cost from every process start, not the per-call cost shown in
+[performance](#performance). Same constraints as the JIT path apply —
+positional inputs only, static shapes only (`dynamic_shapes` and
+`shape_profile` raise `BackendUnavailableError`), weights baked in — plus one
+new one: **the library is bound to the exporting host's CPU architecture**.
+TVM's LLVM codegen targets the host's triple (`arm64-apple-darwin...` on this
+project's own validation host) and any `mcpu` given in `options`, so a `.so`
+built on arm64 does not reload on x86-64, or vice versa.
+
+LM7 refuses to load an artifact whose recorded architecture does not match
+the local host, the same protection AOTInductor and TensorRT get for GPU
+architectures — but only when the export's target carried a concrete
+architecture in the first place. `target="cpu"` is intentionally unqualified
+throughout this document and does not record one, so exporting and reloading
+across two different Macs (both `target="cpu"`) will not be caught by this
+check; the underlying `.so` still will not run correctly. Use
+`target="cpu:arm64"` or `target="cpu:x86_64"` explicitly to get the check.
 
 ## Is TVM abandoned?
 
