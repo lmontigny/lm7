@@ -143,7 +143,7 @@ other does not. Confirmed directly:
 
 ```python
 ep = torch.export.export(model, (x,))
-torch_tensorrt.dynamo.compile(ep, arg_inputs=[x])                    # 0 engines
+torch_tensorrt.dynamo.compile(ep, arg_inputs=[x])  # 0 engines
 torch_tensorrt.dynamo.compile(ep, arg_inputs=[x], min_block_size=1)  # 1 engine
 ```
 
@@ -181,7 +181,7 @@ with torch.no_grad():
     actual = torch.compile(bert, backend="tensorrt")(
         input_ids=ids, attention_mask=mask
     ).last_hidden_state
-print((actual - reference).abs().max())   # ~8.7
+print((actual - reference).abs().max())  # ~8.7
 ```
 
 This is a Torch-TensorRT defect rather than an LM7 one. LM7's exposure is that
