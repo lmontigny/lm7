@@ -103,7 +103,7 @@ Representative local run (`mlp`, batch size 8, float16, M4):
 
 ## Hugging Face models
 
-The [Hugging Face causal-LM path](../README.md#hugging-face-models) runs on
+The [Hugging Face causal-LM path](../README.md#4-run-a-hugging-face-model) runs on
 Apple Silicon through `target="auto"` or `target="apple"`:
 
 ```bash

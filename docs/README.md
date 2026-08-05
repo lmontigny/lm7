@@ -8,6 +8,7 @@ This index covers everything else.
 | Document | What it covers |
 | --- | --- |
 | [Limitations](limitations.md) | What LM7 does not do, per backend and overall. Read before depending on it. |
+| [Tested hardware](tested-hardware.md) | The physical machines LM7 has actually run on, versus the supported-hardware matrix. |
 | [Architecture](architecture.md) | Targets, backends, the planner, and artifact design. |
 | [JIT vs. AOT](jit-vs-aot.md) | When compilation happens, the two export levels, bundles, and signature rules. |
 | [What LM7 replaces](what-this-replaces.md) | The per-vendor code you would otherwise write yourself. |
