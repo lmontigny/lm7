@@ -425,8 +425,29 @@ python examples/basic_mlp.py                        # CPU
 python examples/cuda_mlp.py --target nvidia         # NVIDIA
 python examples/mac_mlp.py                          # Apple Silicon
 python examples/tenstorrent_mlp.py                  # Tenstorrent
+python examples/tpu_mlp.py                          # Google TPU
+python examples/rocm_mlp.py                         # AMD ROCm
 python examples/local_targets.py --require-nvidia   # CPU vs NVIDIA parity
+python examples/hf_causal_lm.py --target nvidia     # A Hugging Face causal LM
+python examples/sparse_moe.py                       # A sparse Mixture-of-Experts model
+python examples/aot_mlp.py                          # AOTInductor export, reload, and verify
 python benchmarks/local.py --target cpu nvidia --backend eager inductor
+```
+
+One example per non-default backend, each exporting or compiling explicitly:
+
+```bash
+python examples/tensorrt_mlp.py                     # NVIDIA, backend="tensorrt"
+python examples/quantization_hf.py --quantize int8  # CPU or NVIDIA, weight quantization
+python examples/openvino_mlp.py                     # Intel CPU, backend="openvino"
+python examples/intel_npu_mlp.py                    # Intel NPU (Core Ultra AI Boost)
+python examples/onnxruntime_mlp.py                  # CPU (or NVIDIA), backend="onnxruntime"
+python examples/iree_vulkan_mlp.py                  # NVIDIA/AMD/Intel, backend="iree_vulkan"
+python examples/litert_mlp.py                       # CPU, backend="litert" (.tflite)
+python examples/executorch_mlp.py                   # CPU, backend="executorch" (.pte, XNNPACK)
+python examples/stablehlo_mlp.py                    # any target, portable StableHLO + PJRT
+python examples/tvm_mlp.py --mode jit               # CPU, backend="tvm" (explicit; slow)
+python examples/zentorch_mlp.py                     # AMD CPU, backend="zentorch"
 ```
 
 More in [`examples/`](examples) and [`benchmarks/`](benchmarks).
