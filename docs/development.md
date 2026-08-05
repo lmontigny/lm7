@@ -5,7 +5,8 @@ user-facing README.
 
 ## Environment
 
-LM7 currently targets Linux. Create a development environment:
+These commands assume Linux or macOS; on Windows, activate with
+`.venv\Scripts\activate` instead. Create a development environment:
 
 ```bash
 uv venv --python 3.12
@@ -31,8 +32,11 @@ runner and runs each backend's marker:
 | Job | Covers |
 | --- | --- |
 | `Python 3.10` / `Python 3.12` | The portable suite, ruff, and mypy |
-| `Backend onnxruntime` / `openvino` / `iree-vulkan` / `litert` | One job per extra, running `pytest -m <marker>` |
+| `Backend onnxruntime` / `openvino` / `iree-vulkan` / `litert` / `tvm` | One job per extra, running `pytest -m <marker>` |
 | `ExecuTorch ARM64` | The ExecuTorch export on real ARM64 hardware |
+| `Apple Silicon MPS` | Real Apple GPU execution, on GitHub's `macos-26` hardware |
+| `Apple Core ML` | Real Core ML execution through ExecuTorch, same hardware |
+| `Windows CPU` | The portable suite on native Windows, with `cl.exe` on `PATH` for TorchInductor's C++ codegen |
 | `Linux CPU AOTInductor` | The AOT artifact, written then reloaded in a fresh process |
 | `TorchBench CPU torch.compile` | ResNet/MobileNet, and BERT/ViT/Mixtral in the slow job |
 
@@ -43,13 +47,16 @@ python -m pip install -e ".[dev,openvino]"
 python -m pytest -m openvino
 ```
 
-Several backends are deliberately absent. CUDA, ROCm, MPS, TPU, Tenstorrent and
-TensorRT need hardware. QNN needs the Qualcomm AI Engine Direct SDK, which is
-behind a login. `apache-tvm`'s published wheel fails to import with an
-undefined symbol in `libtvm_runtime.so`. `zentorch` expects an AMD host a
-hosted runner does not guarantee. The device gate in
+Several backends are still deliberately absent. CUDA, ROCm, TPU, Tenstorrent
+and TensorRT need hardware no hosted runner provides; GitHub's GPU-hosted
+runners would close the NVIDIA gap, but they are an Organization-only,
+Team/Enterprise-Cloud-gated feature a personal repo cannot provision. QNN
+needs the Qualcomm AI Engine Direct SDK, which is behind a login. `zentorch`
+expects an AMD host a hosted runner does not guarantee. The device gate in
 [android-device-testing.md](android-device-testing.md) is manual for the same
-class of reason.
+class of reason. `apache-tvm` *was* absent too — its published wheel failed to
+import with an undefined symbol in `libtvm_runtime.so` — until the `tvm` extra
+started pinning the matching `apache-tvm-ffi`; see [Apache TVM](tvm.md).
 
 ## CPU compilation
 
