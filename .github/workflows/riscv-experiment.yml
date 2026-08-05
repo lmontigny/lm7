@@ -7,9 +7,10 @@
 # non-blocking: each step reports what it found and the job never fails the
 # pull request, because the point is to learn what breaks, not to gate on it.
 #
-# What it cannot answer: performance. RISE runs on Scaleway EM-RV1, whose T-Head
-# C910 implements the draft RVV 0.7.1 rather than ratified RVV 1.0, so upstream
-# LLVM and GCC will not auto-vectorise there at all.
+# What it cannot answer: performance. RISE runs on Scaleway EM-RV1, and the
+# "Describe the machine" step below shows why that is fatal to any speed claim --
+# the ISA string is rv64imafdcsu, with no `v` at all, so there is no vector
+# extension here to measure with any toolchain.
 name: RISC-V experiment
 
 on:
@@ -28,6 +29,12 @@ jobs:
     runs-on: ubuntu-24.04-riscv
     continue-on-error: true
     timeout-minutes: 60
+
+    # Python block-buffers stdout when it is a pipe, so a traceback on stderr
+    # lands in the log above the prints that introduce it. The whole value of
+    # this job is a readable record, so keep the two streams in order.
+    env:
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - uses: actions/checkout@v6
@@ -117,21 +124,26 @@ jobs:
           # fails with ModuleNotFoundError and LM7 falls back to eager, which
           # reads like an architecture limitation and is not one.
           uv pip install --python "$PYBIN" setuptools wheel
-          # numpy is optional for Inductor but torch warns without it; riscv64
-          # may have no wheel, so this must not fail the step.
-          uv pip install --python "$PYBIN" numpy || echo "no numpy for riscv64; continuing"
+          # The pin is not caution, it is the wheel's own requirement: this torch
+          # was built against NumPy 1.x, so an unpinned install resolves to 2.x
+          # and torch then refuses it with "Failed to initialize NumPy:
+          # _ARRAY_API not found" on every subsequent import. There is no riscv64
+          # numpy wheel either way, so this compiles from source and is the
+          # slowest step in the job by an order of magnitude.
+          uv pip install --python "$PYBIN" "numpy<2" || echo "no numpy for riscv64; continuing"
           "$PYBIN" -c "import lm7; print('lm7 imported')"
 
-      # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own.
-      # TorchInductor's CPU flags hardcode -march=native. GCC accepts that on
-      # x86 and Arm; on RISC-V it demands a real ISA string, so every compile
-      # dies with "ISA string must begin with rv32 or rv64". torch 2.3's
-      # codecache.py special-cases only ppc64le, so RISC-V takes the x86 path.
+      # torch 2.3's codecache.py hardcodes -march=native for every machine but
+      # ppc64le, so RISC-V takes the x86 path and GCC rejects it: "'-march=native':
+      # ISA string must begin with rv32 or rv64". PyTorch has since fixed this
+      # (pytorch#167071, in 2.10: riscv64 gets -march=rv64gc), but the only
+      # riscv64 wheel that exists is 2.3.0a1, which predates the fix.
       #
-      # That is a PyTorch bug rather than an LM7 one, and LM7 should not ship a
-      # compiler shim. This one exists so CI can answer the question underneath
-      # it: once the flag is valid, does LM7 actually compile on RISC-V?
-      - name: Work around Inductor's -march=native on RISC-V
+      # So this shim is not a workaround LM7 should ship -- it is that upstream
+      # fix, backported into a compiler wrapper, so the job can isolate the flag
+      # as the variable and answer the question underneath it: with the flag
+      # corrected, does LM7 compile on RISC-V?
+      - name: Backport PyTorch's riscv64 -march fix into a g++ wrapper
         if: steps.torch.outcome == 'success'
         run: |
           mkdir -p /tmp/shim
@@ -147,10 +159,62 @@ jobs:
           exec /usr/bin/g++ "${args[@]}"
           SHIM
           chmod +x /tmp/shim/g++
-          echo "/tmp/shim" >> "$GITHUB_PATH"
-          echo "CXX=/tmp/shim/g++" >> "$GITHUB_ENV"
           /tmp/shim/g++ --version | head -1
 
+      # Written once and run twice, because the two runs differ by exactly one
+      # environment variable and any other difference would weaken the claim.
+      #
+      # It asks the compiled module which backend ran rather than inferring it
+      # from an absent warning: lm7.compile returns a numerically correct answer
+      # whether Inductor compiled or the eager fallback caught it, so "max abs
+      # diff 0.0" on its own says nothing about which one happened.
+      - name: Write the compile probe
+        if: steps.torch.outcome == 'success'
+        run: |
+          cat > /tmp/probe.py <<'PY'
+          import os
+          import traceback
+
+          import lm7
+          import torch
+
+          print("torch:", torch.__version__)
+          print("CXX:", os.environ.get("CXX", "<unset>"))
+
+          model = torch.nn.Sequential(
+              torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)
+          ).eval()
+          x = torch.randn(2, 8)
+          with torch.no_grad():
+              expected = model(x)
+
+          compiled = lm7.compile(model, target="cpu")
+          got = compiled(x)
+          print("backend that ran:", compiled.selected_backend)
+          print("max abs diff vs eager:", float((got - expected).abs().max()))
+
+          if compiled.selected_backend == "inductor":
+              raise SystemExit(0)
+
+          # LM7 fell back. Re-raise the backend's own error instead of guessing at
+          # it, then show torch.compile failing the same way with LM7 out of the
+          # picture -- otherwise a reader cannot tell whose problem this is.
+          print("=== why Inductor did not run ===")
+          try:
+              lm7.compile(model, target="cpu", fallback="error")(x)
+          except Exception:
+              traceback.print_exc()
+
+          print("=== bare torch.compile, no LM7 in the way ===")
+          try:
+              torch.compile(model)(x)
+              print("torch.compile worked")
+          except Exception:
+              traceback.print_exc()
+          PY
+
+      # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own,
+      # with no architecture-specific code in LM7.
       - name: Does LM7 detect this machine
         if: steps.torch.outcome == 'success'
         continue-on-error: true
@@ -172,51 +236,22 @@ jobs:
         run: |
           "$PYBIN" -m pytest tests/test_targets.py tests/test_planner.py -q
 
-      - name: Try compiling something
+      # What a RISC-V user gets today: the shim is on neither PATH nor CXX, so
+      # Inductor drives the compiler exactly as torch 2.3 configures it.
+      - name: Compile with the flags PyTorch 2.3 picks
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          "$PYBIN" - <<'PY'
-          import torch, lm7
-          model = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)).eval()
-          x = torch.randn(2, 8)
-          with torch.no_grad():
-              expected = model(x)
-          compiled = lm7.compile(model, target="cpu")
-          got = compiled(x)
-          print("max abs diff vs eager:", float((got - expected).abs().max()))
-          PY
+          "$PYBIN" /tmp/probe.py
 
-      # The fallback above reports that Inductor failed but not why, and "the
-      # PyTorch is too old" was a guess. fallback="error" re-raises instead, so
-      # the actual reason gets recorded rather than assumed.
-      - name: Why does Inductor fail here
+      # The same probe, one flag different. If this reports `inductor` where the
+      # step above reports `eager`, then nothing about the architecture was the
+      # obstacle -- a single stale compiler flag was.
+      - name: Compile with -march=native corrected
         if: steps.torch.outcome == 'success'
         continue-on-error: true
+        env:
+          CXX: /tmp/shim/g++
         run: |
-          "$PYBIN" - <<'PY'
-          import traceback
-          import torch, lm7
-
-          print("torch:", torch.__version__)
-          try:
-              import triton  # noqa: F401
-              print("triton: present")
-          except ImportError as exc:
-              print("triton: absent —", exc)
-
-          model = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU()).eval()
-          x = torch.randn(2, 8)
-          try:
-              lm7.compile(model, target="cpu", fallback="error")(x)
-              print("inductor compiled after all")
-          except Exception:
-              traceback.print_exc()
-
-          print("=== bare torch.compile, no LM7 in the way ===")
-          try:
-              torch.compile(model)(x)
-              print("torch.compile worked")
-          except Exception:
-              traceback.print_exc()
-          PY
+          export PATH="/tmp/shim:$PATH"
+          "$PYBIN" /tmp/probe.py
