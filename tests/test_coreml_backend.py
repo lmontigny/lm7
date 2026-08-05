@@ -142,7 +142,9 @@ def install_fake_coreml(
     patch_find_spec(monkeypatch, present=True)
     monkeypatch.setattr(coreml_backend_module, "_executorch_version", lambda: "1.3.1-test")
     monkeypatch.setattr(coreml_backend_module, "_flatc_path", lambda: tmp_path / "flatc")
-    monkeypatch.setattr(coreml_backend_module.sys, "platform", "darwin" if darwin else "linux")
+    monkeypatch.setattr(
+        coreml_backend_module.platform, "system", lambda: "Darwin" if darwin else "Linux"
+    )
     return calls
 
 

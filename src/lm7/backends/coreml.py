@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-import sys
+import platform
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,13 +90,17 @@ class ExecuTorchCoreMLBackend:
                 self.name, None, False, f"ExecuTorch is not installed; {_INSTALL_HINT}."
             )
         version = _executorch_version()
-        if sys.platform != "darwin":
+        # platform.system(), not sys.platform: mypy special-cases sys.platform
+        # literal comparisons and statically narrows them to whichever OS mypy
+        # itself is running on, which makes the code below "unreachable" on a
+        # Linux CI runner even though it is genuinely reachable on macOS.
+        if platform.system() != "Darwin":
             return BackendInfo(
                 self.name,
                 version,
                 False,
                 "Core ML compiles and executes through Apple's own framework, so it is "
-                f"macOS-only; this host reports sys.platform={sys.platform!r}.",
+                f"macOS-only; this host reports platform.system()={platform.system()!r}.",
             )
         try:
             importlib.import_module("executorch.backends.apple.coreml.partition.coreml_partitioner")
