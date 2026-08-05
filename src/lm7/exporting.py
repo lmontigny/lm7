@@ -40,6 +40,7 @@ from .backends.qnn import ExecuTorchQNNBackend
 from .backends.stablehlo import StableHLOBackend
 from .backends.tensorrt import SUPPORTED_VENDORS as TENSORRT_VENDORS
 from .backends.tensorrt import TensorRTBackend
+from .backends.tvm import TVMBackend
 from .cache import input_signature
 from .detection import resolve_target, torch_device
 from .errors import (
@@ -77,6 +78,7 @@ COMPILED_TFLITE_NAME = "compiled_model.tflite"
 # Torch-TensorRT serializes the engine into a .pt2 archive; the infix keeps
 # it distinct from the AOTInductor package, which uses the same extension.
 COMPILED_TRT_NAME = "compiled_model.trt.pt2"
+COMPILED_TVM_NAME = "compiled_model.tvm.so"
 DEBUG_DIR_NAME = "debug"
 EXPORT_BACKENDS = frozenset(
     {
@@ -90,6 +92,7 @@ EXPORT_BACKENDS = frozenset(
         "qnn",
         "stablehlo",
         "tensorrt",
+        "tvm",
     }
 )
 
@@ -267,6 +270,14 @@ def export(
         )
     if backend == "litert" and (dynamic_shapes is not None or shape_profile is not None):
         raise BackendUnavailableError("LiteRT artifacts currently require static shapes.")
+    if backend == "tvm" and resolved_target.vendor != "cpu":
+        raise BackendUnavailableError(
+            "TVM artifacts are wired up for CPU (LLVM) targets only; see docs/tvm.md."
+        )
+    if backend == "tvm" and (dynamic_shapes is not None or shape_profile is not None):
+        raise BackendUnavailableError(
+            "TVM artifacts currently require static shapes; export one artifact per shape."
+        )
     if backend == "litert" and isinstance(model, torch.export.ExportedProgram):
         raise BackendUnavailableError(
             "LiteRT conversion requires the source nn.Module and representative args; "
@@ -360,6 +371,7 @@ def export(
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
         litert_settings = None
+        tvm_target = None
         if debug:
             _write_export_debug_files(exported_program, debug_dir)
         if backend == "openvino":
@@ -507,6 +519,16 @@ def export(
             )
             compiled_file = COMPILED_TFLITE_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+        if backend == "tvm":
+            tvm_backend = _tvm_backend()
+            probe = tvm_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            tvm_target = dict(options or {}).get("target", "llvm")
+            compiled_path = staging / COMPILED_TVM_NAME
+            tvm_backend.compile_exported(exported_program, compiled_path, options=options)
+            compiled_file = COMPILED_TVM_NAME
+            compiled_sha256 = _file_sha256(compiled_path)
         debug_artifacts = _index_debug_artifacts(staging, debug_dir) if debug else ()
         manifest = ArtifactManifest(
             format_version=FORMAT_VERSION,
@@ -626,6 +648,20 @@ def export(
                     if backend == "qnn" and qnn_lowered is not None
                     else {}
                 ),
+                # The library embeds the exporting host's target triple (arm64
+                # vs x86-64, plus any mcpu given in options), so unlike the
+                # portable payloads above it only reloads on a matching
+                # architecture -- see docs/tvm.md.
+                **(
+                    {
+                        "tvm": _tvm_backend().probe().version,
+                        "tvm_target": tvm_target,
+                        "frontend": "relax.from_exported_program",
+                        "device_bound": True,
+                    }
+                    if backend == "tvm"
+                    else {}
+                ),
             },
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
@@ -673,21 +709,32 @@ def export(
         compiled_callable = _executorch_backend().load_pte(destination / COMPILED_PTE_NAME)
     elif backend == "qnn":
         compiled_callable = _qnn_backend().load_pte(destination / COMPILED_PTE_NAME)
+    elif backend == "tvm":
+        compiled_callable = _tvm_backend().load_library(destination / COMPILED_TVM_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
 
 
-# Backends whose compiled payload only runs on the GPU architecture it was built
-# for: AOTInductor emits kernels for one compute capability, and Torch-TensorRT
-# tunes an engine for one architecture. Everything else either carries a portable
-# program or targets the CPU, so an architecture difference is not a problem there.
-_ARCHITECTURE_BOUND_BACKENDS = frozenset({"aot_inductor", "tensorrt"})
+# Backends whose compiled payload only runs on the architecture it was built
+# for: AOTInductor emits kernels for one GPU compute capability, Torch-TensorRT
+# tunes an engine for one GPU architecture, and TVM's LLVM codegen bakes in the
+# exporting host's CPU target triple (arm64 vs x86-64). Everything else either
+# carries a portable program or does not vary by architecture at load time.
+_ARCHITECTURE_BOUND_BACKENDS = frozenset({"aot_inductor", "tensorrt", "tvm"})
+# aot_inductor/tensorrt are bound to a GPU compute capability (vendor nvidia or
+# amd); tvm is bound to the CPU instruction set (vendor cpu) instead.
+_ARCHITECTURE_BOUND_VENDORS = {
+    "aot_inductor": {"nvidia", "amd"},
+    "tensorrt": {"nvidia", "amd"},
+    "tvm": {"cpu"},
+}
 
 
 def _validate_target_architecture(manifest: ArtifactManifest, artifact_path: Path) -> None:
-    """Refuse an architecture-bound artifact built for a different GPU.
+    """Refuse an architecture-bound artifact built for a different chip.
 
-    Without this the driver reports "no kernel image is available for execution on
-    the device" on the first call, which names neither the artifact nor the fix.
+    Without this, a GPU artifact fails with "no kernel image is available for
+    execution on the device" -- naming neither the artifact nor the fix -- and
+    a TVM CPU artifact fails with an opaque dlopen/exec-format error instead.
     Verified by loading an ``sm89`` AOTInductor artifact on a Tesla T4 (``sm75``).
 
     Silent when the answer is not knowable: an artifact with no recorded
@@ -698,7 +745,7 @@ def _validate_target_architecture(manifest: ArtifactManifest, artifact_path: Pat
         return
     recorded = manifest.target.get("architecture")
     vendor = manifest.target.get("vendor")
-    if not recorded or vendor not in {"nvidia", "amd"}:
+    if not recorded or vendor not in _ARCHITECTURE_BOUND_VENDORS[manifest.backend]:
         return
     try:
         local = resolve_target(str(vendor)).architecture
@@ -712,7 +759,7 @@ def _validate_target_architecture(manifest: ArtifactManifest, artifact_path: Pat
     raise ArtifactLoadError(
         f"Artifact load stage failed for {artifact_path}: its {manifest.backend} payload was "
         f"built for {vendor}:{recorded}, but this machine is {vendor}:{local}. Kernels are "
-        f"compiled per architecture, so it cannot run here. Re-export on this GPU, or ship a "
+        f"compiled per architecture, so it cannot run here. Re-export on a matching machine, or ship a "
         f"bundle containing both architectures and load it with load_bundle(...).load()."
     )
 
@@ -836,6 +883,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
         )
         compiled_callable = _qnn_backend().load_pte(compiled_path)
+    elif manifest.backend == "tvm":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _tvm_backend().load_library(compiled_path)
     elif manifest.backend != "export":
         raise ArtifactLoadError(f"Unsupported artifact backend {manifest.backend!r}.")
     return ExportArtifact(artifact_path, manifest, exported_program, compiled_callable)
@@ -906,6 +958,13 @@ def _qnn_backend() -> ExecuTorchQNNBackend:
     backend = registry.get("qnn")
     if not isinstance(backend, ExecuTorchQNNBackend):
         raise BackendUnavailableError("The registered qnn backend is invalid.")
+    return backend
+
+
+def _tvm_backend() -> TVMBackend:
+    backend = registry.get("tvm")
+    if not isinstance(backend, TVMBackend):
+        raise BackendUnavailableError("The registered tvm backend is invalid.")
     return backend
 
 
@@ -1017,6 +1076,8 @@ def _backend_version(backend: str) -> str | None:
         return _executorch_backend().probe().version
     if backend == "qnn":
         return _qnn_backend().probe().version
+    if backend == "tvm":
+        return _tvm_backend().probe().version
     return None
 
 
