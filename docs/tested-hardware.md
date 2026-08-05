@@ -11,7 +11,7 @@ of its kind.
 | `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. See [TensorRT](nvidia-tensorrt-evaluation.md). |
 | `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified. See [NVIDIA Blackwell](nvidia-blackwell.md). |
 | `cpu` (AMD) | AMD EPYC 7B13 (Zen 3) | `zentorch` and CPU baselines. See [AMD CPU](amd-cpu.md). |
-| `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile (also in CI), an OpenVINO cross-check. See [Apple Silicon](apple-mps.md). |
+| `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile (also in CI), an OpenVINO cross-check, ExecuTorch Core ML export and execution. See [Apple Silicon](apple-mps.md), [Core ML](coreml.md). |
 | `tpu` | TPU v6e (Trillium), single chip | See [Google TPU](google-tpu.md). |
 | `qualcomm:sm8750` | Snapdragon 8 Elite, physical device (cloud-rented) | ExecuTorch export and QNN. See [Android device testing](android-device-testing.md). |
 

@@ -119,10 +119,41 @@ jobs:
           python examples/mac_mlp.py
           python -m pytest -m mps -v
 
-  # LM7 registers fifteen backends and CI exercised three: TorchInductor,
-  # ExecuTorch on ARM64, and MPS on Apple Silicon. Every other backend's tests
-  # skip themselves when the package is absent, so a green run said nothing
-  # about them at all -- the suite reported "46 skipped" and no one could tell
+  # A second macos-26 job rather than a step in apple-mps above: ExecuTorch
+  # pins PyTorch to a specific release (see docs/executorch.md), which would
+  # fight the latest-torch install the MPS job above wants. Unlike QNN, Core
+  # ML is not deployment-only -- it is part of macOS itself -- so this is a
+  # real hardware execution test, not just an export/packaging one.
+  apple-coreml:
+    name: Apple Core ML
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7 with ExecuTorch
+        run: |
+          python -m pip install -e ".[dev,executorch]"
+          python -m pip install "torch==2.12.*" --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Report backend availability
+        run: python -m lm7 backends
+
+      - name: Export and execute through Core ML
+        run: python -m pytest -m coreml -v
+
+  # LM7 registers sixteen backends and CI exercised four: TorchInductor,
+  # ExecuTorch on ARM64, MPS on Apple Silicon, and Core ML on Apple Silicon.
+  # Every other backend's tests skip themselves when the package is absent, so
+  # a green run said nothing about them at all -- the suite reported "46
+  # skipped" and no one could tell
   # which of those mattered.
   #
   # These five install on an ordinary CPU runner, so their tests actually run.

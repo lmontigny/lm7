@@ -99,6 +99,7 @@ markers = [
     "tpu: requires PyTorch/XLA on a Google TPU VM",
     "tenstorrent: requires the tt-xla PJRT plugin and a Tenstorrent card",
     "executorch: requires the ExecuTorch runtime and a matching PyTorch",
+    "coreml: requires the ExecuTorch Core ML backend on macOS",
     "tvm: requires Apache TVM with the Relax PyTorch frontend",
     "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
 ]

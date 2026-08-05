@@ -1,4 +1,5 @@
 from .aot_inductor import AOTInductorBackend
+from .coreml import ExecuTorchCoreMLBackend
 from .eager import EagerBackend
 from .executorch import ExecuTorchBackend
 from .inductor import InductorBackend
@@ -28,6 +29,7 @@ registry.register(OpenXLABackend())
 registry.register(StableHLOBackend())
 registry.register(ExecuTorchBackend())
 registry.register(ExecuTorchQNNBackend())
+registry.register(ExecuTorchCoreMLBackend())
 registry.register(TenstorrentBackend())
 registry.register(TVMBackend())
 registry.register(ZenTorchBackend())

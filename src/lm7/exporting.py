@@ -19,6 +19,8 @@ import torch
 from .backends import registry
 from .backends.aot_inductor import SUPPORTED_VENDORS as AOT_INDUCTOR_VENDORS
 from .backends.aot_inductor import AOTInductorBackend
+from .backends.coreml import DELEGATE as COREML_DELEGATE
+from .backends.coreml import ExecuTorchCoreMLBackend
 from .backends.executorch import DELEGATE as EXECUTORCH_DELEGATE
 from .backends.executorch import ExecuTorchBackend
 from .backends.iree_vulkan import (
@@ -84,6 +86,7 @@ EXPORT_BACKENDS = frozenset(
     {
         "export",
         "aot_inductor",
+        "coreml",
         "executorch",
         "iree_vulkan",
         "litert",
@@ -256,6 +259,15 @@ def export(
         raise BackendUnavailableError(
             "QNN artifacts currently require static shapes; export one artifact per shape."
         )
+    if backend == "coreml" and resolved_target.vendor != "apple":
+        raise BackendUnavailableError(
+            "Core ML artifacts require target='apple'; the delegate compiles and executes "
+            "only on macOS. See docs/coreml.md."
+        )
+    if backend == "coreml" and (dynamic_shapes is not None or shape_profile is not None):
+        raise BackendUnavailableError(
+            "Core ML artifacts currently require static shapes; export one artifact per shape."
+        )
     if backend == "iree_vulkan" and resolved_target.vendor not in IREE_VULKAN_VENDORS:
         raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
     if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
@@ -291,7 +303,7 @@ def export(
     elif isinstance(model, torch.nn.Module):
         if args is None:
             raise ValueError("args must be supplied when exporting an nn.Module.")
-        if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn"}:
+        if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn", "coreml"}:
             # These runtimes own device placement. Capture a host ExportedProgram
             # even when the artifact targets a GPU or NPU, so the accelerator
             # does not need to be attached to the compiler host.
@@ -314,7 +326,7 @@ def export(
             else dynamic_shapes
         )
         try:
-            if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn"}:
+            if backend in {"iree_vulkan", "litert", "onnxruntime", "qnn", "coreml"}:
                 with torch.no_grad():
                     exported_program = torch.export.export(
                         model,
@@ -368,6 +380,7 @@ def export(
         executorch_quantization = None
         executorch_quantized_ops = None
         qnn_lowered = None
+        coreml_lowered = None
         debug_dir = staging / DEBUG_DIR_NAME
         onnxruntime_settings = None
         litert_settings = None
@@ -453,6 +466,16 @@ def export(
             )
             compiled_file = COMPILED_PTE_NAME
             compiled_sha256 = _file_sha256(qnn_lowered.path)
+        if backend == "coreml":
+            coreml_backend = _coreml_backend()
+            probe = coreml_backend.probe()
+            if not probe.available:
+                raise BackendUnavailableError(probe.reason)
+            coreml_lowered = coreml_backend.compile_exported(
+                exported_program, staging / COMPILED_PTE_NAME, options=options
+            )
+            compiled_file = COMPILED_PTE_NAME
+            compiled_sha256 = _file_sha256(coreml_lowered.path)
         if backend == "aot_inductor":
             selected_backend = registry.get("aot_inductor")
             if not isinstance(selected_backend, AOTInductorBackend):
@@ -648,6 +671,23 @@ def export(
                     if backend == "qnn" and qnn_lowered is not None
                     else {}
                 ),
+                # Unlike the QNN payload above, this one is not device-bound: the
+                # .pte embeds an uncompiled Core ML model spec, and whichever Mac
+                # loads it compiles it locally with Apple's own compiler -- see
+                # docs/coreml.md.
+                **(
+                    {
+                        "executorch": _coreml_backend().probe().version,
+                        "delegate": COREML_DELEGATE,
+                        "compute_unit": coreml_lowered.compute_unit,
+                        "compute_precision": coreml_lowered.compute_precision,
+                        "delegated_calls": coreml_lowered.delegated_calls,
+                        "total_calls": coreml_lowered.total_calls,
+                        "device_bound": False,
+                    }
+                    if backend == "coreml" and coreml_lowered is not None
+                    else {}
+                ),
                 # The library embeds the exporting host's target triple (arm64
                 # vs x86-64, plus any mcpu given in options), so unlike the
                 # portable payloads above it only reloads on a matching
@@ -709,6 +749,8 @@ def export(
         compiled_callable = _executorch_backend().load_pte(destination / COMPILED_PTE_NAME)
     elif backend == "qnn":
         compiled_callable = _qnn_backend().load_pte(destination / COMPILED_PTE_NAME)
+    elif backend == "coreml":
+        compiled_callable = _coreml_backend().load_pte(destination / COMPILED_PTE_NAME)
     elif backend == "tvm":
         compiled_callable = _tvm_backend().load_library(destination / COMPILED_TVM_NAME)
     return ExportArtifact(destination, manifest, exported_program, compiled_callable)
@@ -883,6 +925,11 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
         )
         compiled_callable = _qnn_backend().load_pte(compiled_path)
+    elif manifest.backend == "coreml":
+        compiled_path = _verify_payload(
+            artifact_path, manifest.compiled_file, manifest.compiled_sha256
+        )
+        compiled_callable = _coreml_backend().load_pte(compiled_path)
     elif manifest.backend == "tvm":
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
@@ -958,6 +1005,13 @@ def _qnn_backend() -> ExecuTorchQNNBackend:
     backend = registry.get("qnn")
     if not isinstance(backend, ExecuTorchQNNBackend):
         raise BackendUnavailableError("The registered qnn backend is invalid.")
+    return backend
+
+
+def _coreml_backend() -> ExecuTorchCoreMLBackend:
+    backend = registry.get("coreml")
+    if not isinstance(backend, ExecuTorchCoreMLBackend):
+        raise BackendUnavailableError("The registered coreml backend is invalid.")
     return backend
 
 
@@ -1076,6 +1130,8 @@ def _backend_version(backend: str) -> str | None:
         return _executorch_backend().probe().version
     if backend == "qnn":
         return _qnn_backend().probe().version
+    if backend == "coreml":
+        return _coreml_backend().probe().version
     if backend == "tvm":
         return _tvm_backend().probe().version
     return None
