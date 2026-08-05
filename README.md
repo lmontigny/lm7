@@ -102,44 +102,46 @@ is corrected in one table rather than redrawn.
 | AWS | Trainium | `aws:trainium` | parses only, never executed |
 
 Any x86-64 or ARM64 CPU runs through `cpu`, Intel and AMD included. A vendor
-listed more than once has *additional* accelerators; its CPU is still supported.
-Backends in parentheses are export-only or explicit — see
+listed more than once has *additional* accelerators on top of that. Add a
+qualifier to pin an exact part — `nvidia:sm89`, `amd:gfx942`,
+`tenstorrent:blackhole` — or run `lm7 targets` to see what's actually on your
+machine. Backends in parentheses are export-only or explicit — see
 [backends](#backends).
 
-Add a qualifier to pin an architecture, model, or ordinal — `nvidia:sm89`,
-`amd:gfx942`, `cpu:arm64`, `tenstorrent:blackhole`.
-
 `intel:npu` is the one target with no PyTorch device behind it: OpenVINO owns
-the NPU, so `inductor` and `eager` decline it, `target="auto"` never picks it,
-and it has [its own guide](docs/intel-npu.md).
+it, so `target="auto"` never picks it automatically — see
+[its guide](docs/intel-npu.md).
 
-Run `lm7 targets` to see what is actually present on your machine.
+### Tested on
 
-Qualcomm HTP export is available through [ExecuTorch QNN](docs/qnn.md); the
-lower-level [Hexagon-MLIR route](docs/qualcomm-hexagon.md) remains an evaluation
-plan. [AMD MIGraphX](docs/amd-migraphx.md) is also evaluated, not adopted.
+The table above is what the vendor toolchains support; this is what has
+actually run on physical hardware. CPU is the only target with CI — everything
+below was exercised by hand, once, on one part of its kind:
+
+| Target | Hardware | Exercised |
+| --- | --- | --- |
+| `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. See [TensorRT](docs/nvidia-tensorrt-evaluation.md). |
+| `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified. See [NVIDIA Blackwell](docs/nvidia-blackwell.md). |
+| `cpu` (AMD) | AMD EPYC 7B13 (Zen 3) | `zentorch` and CPU baselines. See [AMD CPU](docs/amd-cpu.md). |
+| `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile, an OpenVINO cross-check. See [Apple Silicon](docs/apple-mps.md). |
+| `tpu` | TPU v6e (Trillium), single chip | See [Google TPU](docs/google-tpu.md). |
+| `qualcomm:sm8750` | Snapdragon 8 Elite, physical device (cloud-rented) | ExecuTorch export and QNN. See [Android device testing](docs/android-device-testing.md). |
+
+AMD ROCm GPU, Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have not
+run on real hardware yet — those adapters are unit-tested against mocks. See
+[hardware validation](docs/limitations.md#hardware-validation) for the exact
+gaps.
 
 ## Tested model coverage
 
 Smoke-test coverage, not a model zoo — LM7 doesn't allowlist models, so other
-Hugging Face checkpoints will likely *run*, just without this validation. See
-[limitations](docs/limitations.md) and [quantization](docs/quantization.md)
-for details.
-
-| Model | Tested for |
-| --- | --- |
-| `resnet18`, `mobilenet_v2` | `torch.compile` parity (CI) |
-| `hf_Bert` (BERT) | `torch.compile` parity (CI) |
-| `timm_vision_transformer` (ViT) | `torch.compile` parity (CI) |
-| Mixtral, tiny (sparse MoE) | `torch.compile` parity, CPU + NVIDIA (CI) |
-| OLMoE, tiny (sparse MoE) | `torch.compile` parity plus `aot_inductor` export, CPU + NVIDIA |
-| [SmolLM2-135M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) | Generation, INT8/FP8 quantization, OpenVINO INT8, ExecuTorch export |
-| [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) | INT8/FP8/NVFP4 quantization, on Ada (`sm89`) and Blackwell (`sm120`) |
-| [deepseek-coder-1.3b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct) | Every backend installable on one host — see [DeepSeek coverage](docs/deepseek.md) |
-| [Llama-3.1-8B-Instruct](https://huggingface.co/unsloth/Llama-3.1-8B-Instruct) | INT8 quantization, CPU and Blackwell GPU — FP8/NVFP4 measured and rejected, see [quantization](docs/quantization.md) |
-| [OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct) | Sparse MoE at 6.9B — `eager`, `inductor`, `zentorch` on AMD CPU |
-| [Mixtral-8x7B-Instruct-v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1) | Sparse MoE at 46.7B — `eager` and `inductor` on a 96 GB Blackwell, 93.4 GB resident |
-| BERT, ViT, LSTM, Conv+BatchNorm, sparse MoE, and five causal LMs | `openxla` parity on a Google TPU v6e — see [coverage](docs/google-tpu.md#model-coverage) |
+Hugging Face checkpoints will likely *run*, just without this validation.
+Validated so far: `torch.compile` parity on ResNet, MobileNet, BERT, and ViT
+(CI); sparse MoE up to Mixtral-8x7B (46.7B, 93.4 GB resident on a Blackwell
+GPU); and causal LMs from SmolLM2-135M to Llama-3.1-8B-Instruct across
+generation, quantization, and export. See [limitations](docs/limitations.md),
+[DeepSeek coverage](docs/deepseek.md), and [quantization](docs/quantization.md)
+for the full matrix.
 
 ## 1. Install
 
@@ -214,37 +216,24 @@ print(compiled.target, compiled.selected_backend)
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
 
 With `backend="auto"`, LM7 picks the highest-priority backend that supports the
-resolved target: `inductor` on CPU, NVIDIA, AMD, Intel, and Apple; `openxla` on
-TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is the
-only candidate. `eager` wins only when nothing else supports the target, or when
-a compile fails and `fallback="warn"` takes over.
+resolved target — `inductor` on CPU, NVIDIA, AMD, Intel, and Apple; `openxla`
+on TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is
+the only candidate. `eager` wins only when nothing else supports the target,
+or a compile fails and `fallback="warn"` takes over.
 
-On TPU, `options={"mat_mul_precision": "highest"}` turns off XLA's default bf16
-matmul passes, worth about four orders of magnitude of fp32 accuracy — see
-[Google TPU](docs/google-tpu.md).
-
-Tune TorchInductor through `options={"compile_mode": "max-autotune"}`. The
-`max-autotune` preset enables CUDA Graphs on GPU; use
-`max-autotune-no-cudagraphs` when the workload is dynamic or stateful. See the
-[TorchInductor options guide](docs/inductor-options.md) for every preset,
-lower-level controls, and the distinction from LM7's own `mode` argument.
-
-Rows marked **Export only** are not `lm7.compile` backends. **Export only**
-means the backend is reachable solely through `lm7.export(..., backend=...)` —
-asking `lm7.compile` for one raises. **Explicit** means it works with
-`lm7.compile` but is never chosen by `backend="auto"`; `tvm` is the only one,
-because its untuned codegen is far slower than Inductor
+Rows marked **Export only** are reachable solely through `lm7.export(...,
+backend=...)` — asking `lm7.compile` for one raises. **Explicit** means it
+works with `lm7.compile` but `backend="auto"` never picks it; `tvm` is the
+only one, because its untuned codegen is far slower than Inductor
 ([details](docs/tvm.md)).
 
-On NVIDIA, `inductor` is the default and `tensorrt` the opt-in alternative,
-deliberately lower priority because TensorRT builds engines more slowly and
-covers fewer models. On a local RTX 4070 SUPER, TensorRT beat Inductor 1.76x on
-a fixed-shape SmolLM2 FP16 forward pass, lost on two small MLPs, and took 56
-seconds for the SmolLM2 first call — see the
-[evaluation](docs/nvidia-tensorrt-evaluation.md). That holds on Blackwell too,
-at 1.83x with a 20.8 s build — see [NVIDIA Blackwell](docs/nvidia-blackwell.md).
-LM7 never invokes Triton itself; TorchInductor owns kernel generation and
-selection.
+On NVIDIA, `tensorrt` is the opt-in alternative to the default `inductor`:
+faster per-call in some measurements (1.8x on a fixed-shape SmolLM2 forward
+pass) but slower to build and narrower in model coverage — see the
+[evaluation](docs/nvidia-tensorrt-evaluation.md). Tuning knobs such as
+`max-autotune` and TPU matmul precision are covered in the
+[TorchInductor options guide](docs/inductor-options.md) and
+[Google TPU guide](docs/google-tpu.md).
 
 ### Optional dependencies
 
@@ -312,20 +301,11 @@ forward pass, and reports the selected target and backend, first-call and
 steady-call time, and the predicted next token (`--json` for structured output).
 
 Validated compact, ungated models: `HuggingFaceTB/SmolLM2-135M-Instruct`,
-`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct`, `Qwen/Qwen3.5-0.8B`
-(hybrid architecture; noticeably slower first call), and
-`deepseek-ai/deepseek-coder-1.3b-instruct`. The first four also compile on Apple
-Silicon, with slightly wider float16 tolerance on MPS than CUDA; DeepSeek was
-validated on CPU and NVIDIA only, across every backend installable on one host —
-see [DeepSeek coverage](docs/deepseek.md).
-
-`unsloth/Llama-3.1-8B-Instruct` is validated too, for INT8 only, now on CPU and
-NVIDIA alike. On CPU it is a large-memory host rather than a compact one: at
-FP32 it needs 30 GiB of weights and roughly 40 GiB of RAM to load and quantize,
-and a forward pass takes 2.2 s at sequence length 16 on eight AVX2 cores. On a
-96 GB Blackwell GPU the BF16 baseline is 16.1 GB and the same pass takes 12.5 ms.
-FP8 and NVFP4 were measured against it there and both fail the accuracy gate —
-see [quantization](docs/quantization.md).
+`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct`, `Qwen/Qwen3.5-0.8B`,
+and `deepseek-ai/deepseek-coder-1.3b-instruct` — the first four also compile on
+Apple Silicon. `unsloth/Llama-3.1-8B-Instruct` is validated too, for INT8 on
+both CPU and NVIDIA. See [DeepSeek coverage](docs/deepseek.md) and
+[quantization](docs/quantization.md) for per-model, per-backend numbers.
 
 For greedy token generation, use the static KV-cache path:
 
