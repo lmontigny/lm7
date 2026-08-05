@@ -1,5 +1,12 @@
 # TensorRT evaluation on NVIDIA Ada
 
+> [!NOTE]
+> This page is the original one-model, one-shape evaluation on Ada `sm89`. For
+> the wider sweep — four model families, FP32/FP16/BF16/FP8, batch sizes, dynamic
+> sequence length and artifact reload on Blackwell `sm120`, including four ways
+> the backend fails without raising — see
+> [tensorrt-validation.md](tensorrt-validation.md).
+
 This evaluation answers a deliberately narrow question: should LM7 prefer
 TensorRT over TorchInductor on the locally available NVIDIA GPU?
 

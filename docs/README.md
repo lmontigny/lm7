@@ -71,6 +71,9 @@ This index covers everything else.
 Measured investigations, including the ones that did not become backends.
 
 - [NVIDIA TensorRT](nvidia-tensorrt-evaluation.md) — measured against Inductor.
+- [TensorRT validation on Blackwell](tensorrt-validation.md) — four model
+  families, four precisions, batch and sequence sweeps, and four ways the backend
+  fails without raising.
 - [AMD MIGraphX](amd-migraphx.md) — harness, no backend.
 - [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR plan; the QNN export path is documented in [qnn.md](qnn.md).
 - [StableHLO and PJRT](stablehlo-pjrt-evaluation.md) — became the `stablehlo` backend.
