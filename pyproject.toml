@@ -71,8 +71,12 @@ tenstorrent = ["pjrt-plugin-tt"]
 # latest one -- see docs/executorch.md.
 executorch = ["executorch>=1.3,<2"]
 # Relax-era TVM only. LM7 does not use PyTorch's built-in `tvm` dynamo backend,
-# which still targets the removed Relay API -- see docs/tvm.md.
-tvm = ["apache-tvm>=0.25,<1"]
+# which still targets the removed Relay API -- see docs/tvm.md. The published
+# 0.25.0.post1 wheel bundles a libtvm_runtime built against apache-tvm-ffi
+# 0.1.12; pip's unpinned resolve picks the newest tvm-ffi instead (0.1.13
+# changed the Stringify ABI), so the runtime fails to dlopen with an undefined
+# symbol -- pinning here is what makes `pip install -e ".[tvm]"` work at all.
+tvm = ["apache-tvm>=0.25,<1", "apache-tvm-ffi==0.1.12"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
