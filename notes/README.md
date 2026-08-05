@@ -12,3 +12,6 @@ evaluating LM7.
   project ([ZML](https://zml.ai/)), kept for comparison while designing LM7's
   own PJRT/StableHLO path. Referenced from
   [docs/stablehlo-pjrt-evaluation.md](../docs/stablehlo-pjrt-evaluation.md).
+- [`competition.md`](competition.md) — competitive landscape survey (Modular,
+  ZML, Roofline.ai, TVM/OctoML, IREE, tinygrad, Thunder, ONNX Runtime,
+  PyTorch/XLA) against LM7's positioning.
