@@ -98,7 +98,21 @@ def install_fake_tvm(monkeypatch, *, output=None, build_error: Exception | None 
         return SimpleNamespace()
 
     class Target:
+        """Mirrors real TVM 0.25's parser closely enough to catch drift.
+
+        TVM dropped the CLI-string target form ("llvm -mcpu=x"); only a bare
+        kind name or the JSON-dict form parses. LM7 hit this for real -- see
+        docs/tvm.md -- so the fake validates it too, instead of accepting
+        anything and giving false confidence.
+        """
+
         def __init__(self, value):
+            if isinstance(value, str) and " " in value:
+                raise ValueError(
+                    f'Cannot parse target string "{value}". CLI target string form '
+                    '(e.g. "llvm -mcpu=xxx") is no longer supported. Please use JSON '
+                    'dict form (e.g. {"kind": "llvm", "mcpu": "xxx"}) instead.'
+                )
             self.value = value
 
         def __str__(self):
@@ -208,9 +222,24 @@ def test_compile_uses_the_exported_program_frontend(monkeypatch):
 def test_compile_honours_a_target_option(monkeypatch):
     calls = install_fake_tvm(monkeypatch)
 
-    TVMBackend().compile(request_for(options={"target": "llvm -mcpu=x"}), (torch.randn(8, 4),), {})
+    TVMBackend().compile(
+        request_for(options={"target": {"kind": "llvm", "mcpu": "x"}}),
+        (torch.randn(8, 4),),
+        {},
+    )
 
-    assert calls["built_target"] == "llvm -mcpu=x"
+    assert calls["built_target"] == "{'kind': 'llvm', 'mcpu': 'x'}"
+
+
+def test_compile_rejects_a_cli_style_target_string(monkeypatch):
+    """TVM 0.25 dropped "llvm -mcpu=x" in favour of the JSON-dict form; a user
+    following the old-style example should get a clear error, not a crash."""
+    install_fake_tvm(monkeypatch)
+
+    with pytest.raises(CompilationError, match="no longer supported"):
+        TVMBackend().compile(
+            request_for(options={"target": "llvm -mcpu=x"}), (torch.randn(8, 4),), {}
+        )
 
 
 def test_compile_rejects_keyword_inputs(monkeypatch):

@@ -99,6 +99,18 @@ survive evaluation here:
 Even a good result would not change the recommendation for a JIT backend:
 `inductor` reaches 2.29 ms in under two seconds of compilation.
 
+### BYOC (DNNL / Arm Compute Library)
+
+TVM's BYOC mechanism can offload matmul to a real library instead of generic
+TOPI loop code, which is the actual fix for the missing-BLAS problem above.
+It does not help here: the published `apache-tvm` wheel's Relax
+`backend.contrib` only ships `example_npu` and `nnapi`, and
+`tvm.support.libinfo()` reports no `USE_DNNL`, `USE_CBLAS`, or Arm Compute
+Library build flag at all -- those codegens are not compiled into the
+distributed wheel on any platform. Reaching them means building TVM from
+source against oneDNN or ACL, which breaks the pip-install model every other
+LM7 backend follows and was out of scope here. Not wired up.
+
 ### Apple Silicon (arm64 macOS)
 
 `apache-tvm` publishes a native `macosx_11_0_arm64` wheel, and the backend
@@ -126,6 +138,12 @@ absolute difference and pick the same top token ("Paris" for "The capital of
 France is"). This exercises `embedding` plus a full transformer block, not
 just the MLP above.
 
+Architecture-specific codegen (`options={"target": {"kind": "llvm", "mcpu":
+"apple-m3"}}`) does not close the gap either: 80.3 ms vs 82.4 ms median on the
+MLP above, indistinguishable from noise. Consistent with the BYOC finding —
+the bottleneck is the missing library dispatch for matmul, not instruction
+selection, so tuning what LLVM targets does not move it.
+
 ## Scope
 
 - **CPU (`llvm`) only.** TVM's CUDA codegen needs a CUDA toolkit it can
@@ -145,8 +163,11 @@ Tensors cross into TVM and back over **DLPack**, so the exchange is zero-copy
 and needs no NumPy — unlike the OpenVINO adapter, which round-trips through
 NumPy arrays.
 
-Set a different TVM target with `options={"target": "llvm -mcpu=..."}` if you
-want to try architecture-specific codegen.
+Set a different TVM target with `options={"target": {"kind": "llvm", "mcpu":
+"..."}}` if you want to try architecture-specific codegen. TVM 0.25 dropped
+the CLI-string target form (`"llvm -mcpu=..."`) entirely — passing it raises
+`ValueError: CLI target string form ... is no longer supported`, wrapped in
+LM7's `CompilationError`. Use the JSON-dict form shown above instead.
 
 ## Is TVM abandoned?
 
