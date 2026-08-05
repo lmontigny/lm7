@@ -23,6 +23,13 @@ on:
 permissions:
   contents: read
 
+# RISE donates this hardware, and one run occupies a four-core machine for the
+# better part of twenty minutes. Two pushes in quick succession otherwise queue
+# two full runs, which is rude on a shared fleet and tells us nothing twice.
+concurrency:
+  group: riscv-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   riscv64:
     name: RISC-V (experimental, non-blocking)
