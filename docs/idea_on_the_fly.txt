@@ -61,6 +61,7 @@ lm7.serve()  <-- see chatGPT chat details
     ├── vLLM
     ├── SGLang
     └── TensorRT-LLM
+use Modal coins
 
 
 
