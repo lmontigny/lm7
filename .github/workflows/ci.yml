@@ -147,7 +147,9 @@ jobs:
         run: python -m lm7 backends
 
       - name: Export and execute through Core ML
-        run: python -m pytest -m coreml -v
+        run: |
+          python examples/coreml_mlp.py
+          python -m pytest -m coreml -v
 
   # LM7 registers sixteen backends and CI exercised four: TorchInductor,
   # ExecuTorch on ARM64, MPS on Apple Silicon, and Core ML on Apple Silicon.
