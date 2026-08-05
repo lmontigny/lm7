@@ -4,10 +4,19 @@ What an `lm7.export(backend="aot_inductor")` artifact costs to reload in a
 process that never compiled it, what it refuses to load on, and what it turns
 out not to care about.
 
-Measured on an RTX PRO 6000 Blackwell Server Edition (`sm120`, driver
-580.126.20) and an RTX 4070 SUPER (`sm89`), both `torch 2.13.0+cu130` / CUDA
-13.0, through
-[`benchmarks/aot_artifact_lifecycle.py`](../benchmarks/aot_artifact_lifecycle.py).
+Measured through
+[`benchmarks/aot_artifact_lifecycle.py`](../benchmarks/aot_artifact_lifecycle.py)
+on three machines, all `torch 2.13.0+cu130` / CUDA 13.0:
+
+| | GPU | host | used for |
+| --- | --- | --- | --- |
+| **B1** | RTX PRO 6000 Blackwell (`sm120`), driver 580.126.20 | Lightning studio, 48 vCPU, network filesystem | the MLP |
+| **B2** | the same card, same driver | a second Lightning studio, 16 vCPU, local overlay | SmolLM2, Llama-3.2-1B |
+| **A** | RTX 4070 SUPER (`sm89`), driver 595.71 | local WSL2 box | the foreign-architecture and cross-version artifacts |
+
+Timings are never compared across those rows: B1 has three times the cores of
+B2, and A was shared with another workload throughout. Where a comparison
+matters it is between two measurements taken back to back on one machine.
 
 ## Why a separate process
 
@@ -29,42 +38,81 @@ $ python benchmarks/aot_artifact_lifecycle.py run --model smollm2 \
     --results-dir artifacts/aoti --other-python /path/to/torch-2.12/bin/python
 ```
 
-## The reload cost nobody was paying attention to
+## On a 1B model, loading the artifact costs what compiling it costs
 
-SmolLM2-135M, FP16, `sm89`, 546 MB artifact. The two rows load the same payload
-and produce the same logits; they differ only in which API asked.
+Machine **B2**, FP16, fresh interpreter, cold page cache. Time from process
+start to a finished first inference:
 
-| API | reload | to first inference | second load, same process |
-| --- | --- | --- | --- |
-| `lm7.load_artifact` | 12.11 s | 15.67 s | 6.97 s |
-| `torch._inductor.aoti_load_package` | 2.58 s | 4.91 s | 0.36 s |
+| path | SmolLM2-135M | Llama-3.2-1B |
+| --- | --- | --- |
+| `inductor` JIT, cold Inductor cache | 20.25 s | 14.69 s |
+| `inductor` JIT, warm Inductor cache | 7.65 s | 7.58 s |
+| artifact via `lm7.load_artifact` | 6.31 s | **14.42 s** |
+| artifact via `aoti_load_package` | 3.65 s | **5.69 s** |
 
-**LM7's own API is 4.7x slower to reload the same artifact**, and the gap is not
-validation overhead in any meaningful sense:
+Read the Llama column. **An artifact loaded through LM7's own API reaches its
+first token no sooner than compiling the model from scratch** — 14.42 s against
+14.69 s. The entire point of shipping a precompiled artifact is given back at
+load time. Through PyTorch's own loader the same artifact starts in 5.69 s, 2.6x
+faster than the JIT, so the artifact is doing its job and the API in front of it
+is not.
 
-| component of `load_artifact` | seconds |
-| --- | --- |
-| SHA-256 over both payloads (546 MB) | 1.85 |
-| `torch.export.load` of `exported_program.pt2` | 7.50 |
-| `aoti_load_package` of `compiled_model.pt2` | 6.88 |
+The reload itself, same conditions:
 
-`load_artifact` eagerly loads the `ExportedProgram` **that an AOTInductor
-consumer never executes**. It is carried for inspection, rebuilds, and non-AOTI
-fallback, and it costs about as much to load as the compiled payload itself —
-because it is about the same size (273.4 MB of program next to 272.6 MB of
-kernels). Half the artifact, and half the reload, is for a path this caller did
-not take.
+| model | artifact | `lm7.load_artifact` | `aoti_load_package` | ratio |
+| --- | --- | --- | --- | --- |
+| SmolLM2-135M | 0.55 GB | 4.86 s | 2.41 s | 2.0x |
+| Llama-3.2-1B | 4.95 GB | 10.71 s | 4.28 s | 2.5x |
 
-That suggests a lazy `exported_program` on `ExportArtifact` — it is a public
-dataclass field today, so it is a deliberate API change rather than something to
-slip in, and it is not made here. On the 35 MB MLP below the same overhead is
-3–8%, which is why one model would have hidden this entirely.
+The gap — 2.44 s and 6.43 s — is not validation. It is `torch.export.load` of an
+`ExportedProgram` **that an AOTInductor consumer never executes**, and it is
+expensive for a structural reason:
 
-## Reload on `sm120`
+| | payload | program |
+| --- | --- | --- |
+| SmolLM2-135M | 273 MB | 274 MB |
+| Llama-3.2-1B | 2475 MB | 2474 MB |
 
-The 8.4 M-parameter MLP (`8x1024 -> 4096 -> 1024`, FP16), median of 20 after 5
-warmup calls. One model — the Blackwell studio is interruptible-priced and was
-preempted before the larger models ran, and is off at the time of writing.
+**The source program is half of every artifact**, and reloading it costs about
+what reloading the kernels costs. It earns its place — inspection, rebuilds,
+`backend="export"` fallback, and the bundle story all need it — but this caller
+asked for the compiled payload and paid for both. SHA-256 over 546 MB is 0.36 s
+warm, so checksums are not the story.
+
+The fix is a lazy `exported_program` on `ExportArtifact`. That is a public
+dataclass field today, so it is an API decision rather than a cleanup, and it is
+not made here. On the 35 MB MLP the same overhead is 3–8%, which is exactly how
+one small model hides a regression this size.
+
+### What it costs to build, and what it buys per call
+
+Build time on **B2**, and the steady-state call it produces:
+
+| model | capture | Inductor | artifact | steady, artifact | steady, JIT |
+| --- | --- | --- | --- | --- | --- |
+| SmolLM2-135M | 2.42 s | 33.55 s | 0.55 GB | 2.323 ms | 4.065 ms |
+| Llama-3.2-1B | 1.45 s | 40.18 s | 4.95 GB | 2.750 ms | 3.183 ms |
+
+Compile time tracks the graph, not the parameter count: SmolLM2-135M has 30
+layers against Llama-3.2-1B's 16, and takes *longer* to JIT-compile (20.25 s vs
+14.69 s cold) while being nine times smaller.
+
+The packaged artifact is also faster per call than the JIT it came from — 1.75x
+on SmolLM2, 1.16x on Llama — the same effect the matrix records for TensorRT,
+whose serialized engine beat its in-process compile by 1.48x. The advantage
+shrinks as the model grows, which is what you would expect if it is per-call
+framework overhead being amortized.
+
+Numerics match the existing matrix exactly: Llama-3.2-1B reloads to a
+`max_abs_diff` of `2.441e-02` against eager, which is the figure
+[nvidia-blackwell.md](nvidia-blackwell.md#the-backend-compatibility-matrix)
+already records for the in-process `aot_inductor` row. SmolLM2 lands at
+`2.109e-01`. Both agree with eager on the greedy next token.
+
+## Reload on `sm120`, small model
+
+Machine **B1**. The 8.4 M-parameter MLP (`8x1024 -> 4096 -> 1024`, FP16), median
+of 20 after 5 warmup calls.
 
 | stage | wall | reload | to first inference | steady |
 | --- | --- | --- | --- | --- |
@@ -80,16 +128,14 @@ Build was 13.13 s — 0.83 s of `torch.export` capture, 12.29 s of Inductor. The
 artifact is 35.2 MB. Every reload matched eager exactly (`max_abs_diff` 0.0), and
 none imported `transformers` or `torchvision`.
 
-**The reloaded artifact is 1.84x faster per call than the JIT it came from** —
-0.0367 ms against 0.0677 ms — on a model far too small to hide framework
-overhead. The matrix records the same effect for TensorRT, whose serialized
-engine beat its in-process compile by 1.48x. Whatever `torch.compile` keeps
-doing per call, the packaged wrapper does not.
+The per-call win is 1.84x here (0.0367 ms against 0.0677 ms), the largest of the
+three models and consistent with it being framework overhead: the smaller the
+model, the more of the call it is.
 
-**Time to first inference barely favours the artifact here**, 2.90 s against
-3.43 s, because this MLP compiles in 2.2 s and there is almost nothing to save.
-The 135M model is where that gap becomes 4.91 s against a JIT path that never
-finished a comparable measurement on a shared card.
+**Time to first inference barely favours the artifact at this size**, 2.90 s
+against 3.43 s, because this MLP compiles in 2.2 s and there is almost nothing
+to save. That is the honest reason to measure something bigger, and why the
+Llama result above is the one that matters.
 
 ### Where the 1.78 s goes
 
@@ -107,22 +153,28 @@ Phases of the cold `lm7.load_artifact` process on `sm120`:
 **Reloading costs more than importing PyTorch.** At this size LM7's extra work is
 59 ms cold and 134 ms warm — 3.3% and 7.7% of the reload — so on a small artifact
 the cost really is inside `aoti_load_package`, unpacking the `.pt2` and
-`dlopen`ing the wrapper. The SmolLM2 table above is what the same comparison
-looks like once the `ExportedProgram` is large.
+`dlopen`ing the wrapper. Only once the `ExportedProgram` is hundreds of
+megabytes does the API in front of it start to dominate.
 
 **A second reload in the same process is 40x cheaper** (45 ms, or 9 ms through
-the torch API), so reload cost is per-process, not per-model.
+the torch API), so reload cost is per-process, not per-model. That still holds
+at scale, but much less dramatically: on Llama-3.2-1B a second
+`lm7.load_artifact` is 7.13 s against 10.71 s, because the checksums and the
+`ExportedProgram` are read again from scratch.
 
-**Cold and warm are within noise at 35 MB** (1.779 s vs 1.746 s). The pages were
-really evicted — `POSIX_FADV_DONTNEED` after a sync, and the harness records
-whether the call was available — the read is simply not the bottleneck at this
-size. At 546 MB on `sm89` the two are also close (12.11 s vs 11.85 s), which
-says the same thing about a decompress-and-link-bound reload.
+**Cold and warm are within noise at every size measured** — 1.779 s vs 1.746 s
+for the 35 MB MLP, 4.86 s vs 4.49 s for SmolLM2, 10.71 s vs 9.20 s for the 4.95
+GB Llama artifact. The pages really were evicted (`POSIX_FADV_DONTNEED` after a
+sync, and the harness records whether the call was available); reload is bound by
+decompressing and linking, not by reading. Storage speed is not where this cost
+lives.
 
 ## What an artifact refuses
 
 Each case takes a valid artifact, changes one thing, and loads it in a fresh
-process. Every row was run on both cards, with identical outcomes.
+process. The six byte-and-metadata cases ran against all four artifacts (MLP,
+SmolLM2, Llama-3.2-1B, and the foreign `sm89` build) with identical outcomes;
+the PyTorch-version case needs a second interpreter and ran on **B1** and **A**.
 
 | case | outcome | what the user sees |
 | --- | --- | --- |
@@ -218,19 +270,18 @@ worse than a gap.
 
 ## Scope
 
-- **One model on `sm120`.** The MLP is the smallest thing in the harness and the
-  least favourable case for an artifact. SmolLM2-135M and Llama-3.2-1B on
-  Blackwell are the rows that would matter and are not here: the studio was
-  preempted mid-run and is currently off. The harness runs unchanged when it
-  returns.
-- **The `sm89` card was shared with another workload.** That is fine for
-  correctness, sizes, and the reload-API ratio measured under identical
-  conditions; it is not fine for absolute milliseconds. The JIT comparison on
-  that box is omitted rather than published, because its warm-cache compile was
-  no faster than its cold one and that is not explained.
+- **Three models, one prompt, one shape, one dtype.** A 5-token prefill at batch
+  1 is close to the most launch-overhead-dominated point on the curve, which
+  flatters every per-call comparison here. Larger batches would shrink the
+  artifact-versus-JIT steady-state gap and would not touch the load-time
+  results, which is where the finding is.
+- **B2 was shared with another benchmark** for the duration. Each pair being
+  compared ran back to back under the same load, and the load-time ratios are
+  large (2.0x, 2.5x) relative to any plausible noise, but absolute seconds on
+  that machine should be read as approximate.
 - **Numerics are checked against eager on the same card** — exact for the MLP,
-  `5.86e-2` max absolute difference for SmolLM2 at FP16, agreeing on the greedy
-  next token. That last check is as weak here as everywhere else.
+  `2.441e-02` for Llama-3.2-1B and `2.109e-01` for SmolLM2 at FP16, all agreeing
+  on the greedy next token. That last check is as weak here as everywhere else.
 - **The cross-architecture result is one direction.** An `sm89` package fails on
   `sm120`; the reverse — a Blackwell package on Ada — is not measured, and there
   is no reason to expect it to fare better.
