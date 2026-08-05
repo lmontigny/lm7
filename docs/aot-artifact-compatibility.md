@@ -126,7 +126,7 @@ process. Every row was run on both cards, with identical outcomes.
 
 | case | outcome | what the user sees |
 | --- | --- | --- |
-| architecture claims another GPU | rejected | `its aot_inductor payload was built for nvidia:sm120, but this machine is nvidia:sm89 ... Re-export on this GPU, or ship a bundle` |
+| architecture claims another GPU | rejected | `its aot_inductor payload was built for nvidia:sm89, but this machine is nvidia:sm120 ... Re-export on a matching machine, or ship a bundle` |
 | `format_version` bumped | rejected | `Unsupported LM7 artifact format 2; this LM7 version supports format 1` |
 | payload byte flipped | rejected | `compiled package checksum does not match the manifest` |
 | program byte flipped | rejected | `program checksum does not match the manifest` |
@@ -148,6 +148,32 @@ architecture sm120, and this process differs: GPU architecture sm120 -> sm89.
 An AOTInductor package holds kernels compiled for one architecture and a
 wrapper linked against one CUDA runtime, so re-export the model on this machine.
 ```
+
+### The architecture guard is load-bearing
+
+The rejection above is LM7 reading a manifest, so it proves the check fires — not
+that the check is *needed*. PTX is forward-compatible, and if an AOTInductor
+package shipped PTX the driver could JIT it onto a newer card and the guard would
+be refusing work that would have succeeded.
+
+It does not. A real `sm89` package, built on an RTX 4070 SUPER, carried to the
+Blackwell card and loaded through PyTorch directly — no LM7, no manifest:
+
+```console
+$ python benchmarks/aot_artifact_lifecycle.py load --api torch \
+    --artifact foreign-sm89/mlp.aot.lm7
+W torch/export/pt2_archive/_package.py:1059] Device information mismatch for
+  AOTI_COMPUTE_CAPABILITY: 120 vs 89. This could cause some issues when loading
+  the AOTInductor compiled artifacts.
+RuntimeError: CUDA driver error: no kernel image is available for execution on
+  the device
+```
+
+The package holds cubins for one architecture and nothing to fall back to. Two
+things follow. The guard is necessary, not defensive. And **PyTorch's own check
+is a warning** — it notices the capability mismatch, says it "could cause some
+issues", and proceeds into a driver error; LM7 turns that into a refusal that
+names both architectures before anything is loaded.
 
 ## Two things the measurement changed
 
@@ -205,8 +231,6 @@ worse than a gap.
 - **Numerics are checked against eager on the same card** — exact for the MLP,
   `5.86e-2` max absolute difference for SmolLM2 at FP16, agreeing on the greedy
   next token. That last check is as weak here as everywhere else.
-- **A foreign-architecture payload is refused, never executed.** Whether the
-  guard is *necessary* on Blackwell — whether an `sm89` package would genuinely
-  fail there rather than being JIT-compiled forward from its PTX — is untested.
-  Real `sm89` artifacts exist for the harness to answer it with; the answer
-  needs the card back.
+- **The cross-architecture result is one direction.** An `sm89` package fails on
+  `sm120`; the reverse — a Blackwell package on Ada — is not measured, and there
+  is no reason to expect it to fare better.

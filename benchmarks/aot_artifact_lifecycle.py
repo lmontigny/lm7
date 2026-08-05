@@ -391,7 +391,18 @@ def run_jit(arguments: argparse.Namespace) -> dict[str, Any]:
     can be compared.
     """
     if arguments.clear_inductor_cache:
-        for directory in Path(tempfile.gettempdir()).glob("torchinductor_*"):
+        # Clear only the cache this process would use. The default lives in a
+        # shared /tmp, and a glob there deletes whatever else on the machine is
+        # mid-compile -- which on a shared GPU box means someone else's run, and
+        # is how this harness raced a concurrent benchmark into
+        # "Directory not empty". Set TORCHINDUCTOR_CACHE_DIR to stay private.
+        configured = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+        directories = (
+            [Path(configured)]
+            if configured
+            else list(Path(tempfile.gettempdir()).glob("torchinductor_*"))
+        )
+        for directory in directories:
             shutil.rmtree(directory, ignore_errors=True)
 
     started = time.perf_counter()
