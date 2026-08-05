@@ -64,25 +64,36 @@ The reload itself, same conditions:
 | SmolLM2-135M | 0.55 GB | 4.86 s | 2.41 s | 2.0x |
 | Llama-3.2-1B | 4.95 GB | 10.71 s | 4.28 s | 2.5x |
 
-The gap — 2.44 s and 6.43 s — is not validation. It is `torch.export.load` of an
-`ExportedProgram` **that an AOTInductor consumer never executes**, and it is
-expensive for a structural reason:
+Where the extra 2.44 s and 6.43 s go, each component timed in its own process:
+
+| | SmolLM2 | Llama-3.2-1B |
+| --- | --- | --- |
+| SHA-256, both files | 0.37 s | 3.18 s |
+| — of which the program half | 0.19 s | ~1.6 s |
+| `torch.export.load` of the program | 2.67 s | 3.16 s |
+
+Checksums are not free at scale: SHA-256 runs at about 1.5 GB/s here, so a
+4.95 GB artifact costs 3.18 s to verify — as much as parsing the program does.
+
+Both costs trace to one structural fact. The artifact is **half source program**:
 
 | | payload | program |
 | --- | --- | --- |
 | SmolLM2-135M | 273 MB | 274 MB |
 | Llama-3.2-1B | 2475 MB | 2474 MB |
 
-**The source program is half of every artifact**, and reloading it costs about
-what reloading the kernels costs. It earns its place — inspection, rebuilds,
-`backend="export"` fallback, and the bundle story all need it — but this caller
-asked for the compiled payload and paid for both. SHA-256 over 546 MB is 0.36 s
-warm, so checksums are not the story.
+So an AOTInductor caller hashes 2.47 GB it will not run, then spends 3.16 s
+parsing it into an `ExportedProgram` it will not call — roughly 4.8 s of the
+6.43 s gap. The remaining ~1.6 s is hashing the payload itself, which is the
+integrity check doing its job. The program earns its place in the artifact —
+inspection, rebuilds, `backend="export"` fallback and the bundle story all need
+it — but nothing here needed it today.
 
-The fix is a lazy `exported_program` on `ExportArtifact`. That is a public
-dataclass field today, so it is an API decision rather than a cleanup, and it is
-not made here. On the 35 MB MLP the same overhead is 3–8%, which is exactly how
-one small model hides a regression this size.
+The fix is a lazy `exported_program` on `ExportArtifact`, which would skip both
+its hash and its parse until something asks for it. That is a public dataclass
+field today, so it is an API decision rather than a cleanup, and it is not made
+here. On the 35 MB MLP the same overhead is 3–8%, which is exactly how one small
+model hides a regression this size.
 
 ### What it costs to build, and what it buys per call
 
