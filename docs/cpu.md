@@ -53,6 +53,59 @@ Two things this does *not* mean:
   `/proc/cpuinfo`, so on a host without `/proc` the list is empty and the core
   counts fall back to what Python can see. Treat empty as unknown.
 
+### What consulting the AMX flags would be worth
+
+Measured on an Intel Xeon Platinum 8559C (Emerald Rapids, 8 physical cores, 8
+threads) with `torch 2.13.0+cu130` and oneDNN v3.12, through
+[`benchmarks/cpu_amx.py`](../benchmarks/cpu_amx.py). AMX accelerates BF16 and
+INT8 matmuls and does nothing for FP32, so with the compute dtype pinned to FP32
+none of that hardware is reached today.
+
+Switching the same models to BF16 does reach it — oneDNN dispatches every matmul
+to `brg_matmul:avx10_1_512_amx` — and what it buys depends entirely on the shape
+of the GEMM. SmolLM2-135M, median latency:
+
+| prompt | eager FP32 | eager BF16 | inductor FP32 | inductor BF16 |
+| --- | --- | --- | --- | --- |
+| 5 tokens | 23.27 ms | 23.16 ms | 15.85 ms | 13.32 ms |
+| 64 tokens | 55.31 ms | 39.46 ms | 41.92 ms | 34.47 ms |
+| 512 tokens | 205.83 ms | 92.70 ms | 158.66 ms | **81.59 ms** |
+
+**An AMX tile is 16 rows deep, so a short prompt leaves it idle.** At 5 tokens
+BF16 is worth nothing in eager (1.00x); at 512 it is worth 2.22x. The synthetic
+MLP isolates the mechanism — same model, only the batch changes:
+
+| rows | FP32 | BF16 (AMX) | |
+| --- | --- | --- | --- |
+| 1 | 0.358 ms | 0.466 ms | **0.77x — slower** |
+| 8 | 0.916 ms | 0.413 ms | 2.22x |
+| 64 | 3.278 ms | 0.673 ms | **4.87x** |
+| 512 | 11.238 ms | 3.558 ms | 3.16x |
+
+At one row the tile units have nothing to fill them and the BF16 conversion
+costs more than they save. So "the host reports `amx_bf16`, therefore use BF16"
+would be a regression for single-sequence decode and a large win for prefill,
+which is why the flags stay reported rather than consulted until there is a
+policy that can tell those apart.
+
+The same switch on a host *without* AMX is a straight loss: on an AVX2-only
+Core i7-8086K the identical MLP at 8 rows goes from 2.229 ms at FP32 to 2.673 ms
+at BF16, with `amx_flags` empty and no matmul reaching a BRGEMM kernel. A dtype
+policy would have to be per-host, not per-model.
+
+Two things to know before repeating this:
+
+- **`torch.backends.cpu.get_cpu_capability()` cannot answer the question.** It
+  returns `AVX512` on this machine and never mentions AMX. Only oneDNN's own
+  kernel choice does, which is why the benchmark re-runs each case under
+  `ONEDNN_VERBOSE=1` and looks for a matmul reaching a BRGEMM implementation.
+  oneDNN names the whole ISA `avx10_1_512_amx`, so an *eltwise* kernel carries
+  `amx` in its name while doing no tile-unit work at all.
+- **BF16 is a numerics change, not a speed setting.** SmolLM2's logits move by
+  1.9 absolute in eager and roughly 0.4 under Inductor. That is a
+  [quantization](quantization.md)-shaped decision, with the validation that
+  implies, rather than a free switch.
+
 ## Validate CPU and GPU locally
 
 The correctness example runs identical weights and inputs through CPU
