@@ -92,7 +92,7 @@ is corrected in one table rather than redrawn.
 | Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` (+ `litert`, `tvm`, `zentorch`) |
 | NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `onnxruntime`, `eager` (+ `iree_vulkan`) |
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `eager` (+ `iree_vulkan`) |
-| Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` |
+| Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` (+ `coreml`) |
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `eager` (+ `iree_vulkan`) |
 | Intel | NPU (Core Ultra AI Boost) | `intel:npu` | `openvino` |
 | Google | TPU | `tpu` | `openxla`, `eager` |
@@ -199,6 +199,7 @@ print(compiled.target, compiled.selected_backend)
 | `litert` | LiteRT Torch + XNNPACK | persistent `.tflite` model | **AOT**, export only | cpu | export only |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | export only |
 | `qnn` | ExecuTorch + Qualcomm QNN | device-bound `.pte` for Snapdragon HTP | **AOT**, export only | qualcomm:sm8750 | export only |
+| `coreml` | ExecuTorch + Core ML | `.pte` through the Core ML delegate | **AOT**, export only | apple | export only |
 | `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | export only |
 | `tvm` | Apache TVM (Relax) | TVM VM module | JIT | cpu | explicit |
 | `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
@@ -332,14 +333,16 @@ PyTorch `.pt2` program. Pick a backend to add a compiled payload beside it:
 | `litert` | `.tflite` flatbuffer | yes, CPU | [LiteRT](docs/litert.md) |
 | `executorch` | `.pte` for Android, iOS, embedded | yes, any CPU | [ExecuTorch](docs/executorch.md) |
 | `qnn` | device-bound `.pte` for SM8750 HTP | yes, matching Android QNN runtime | [QNN](docs/qnn.md) |
+| `coreml` | `.pte` through the Core ML delegate | yes, macOS (Core ML) | [Core ML](docs/coreml.md) |
 | `stablehlo` | portable StableHLO for any PJRT plugin | yes, any | [StableHLO](docs/stablehlo-pjrt-evaluation.md) |
 
-Two payloads are not bound to the machine that built them: `stablehlo`, whose
-plugin is chosen at load time, and `executorch`, whose XNNPACK delegate covers
-ARM64 and x86-64 alike. QNN is explicitly bound to SM8750 plus matching
-ExecuTorch and QNN runtime versions. Everything else is specific to compatible
-compiler, runtime, and hardware versions — artifacts are **not** a stable cross-version
-ABI.
+Three payloads are not bound to the machine that built them: `stablehlo`, whose
+plugin is chosen at load time; `executorch`, whose XNNPACK delegate covers
+ARM64 and x86-64 alike; and `coreml`, whose `.pte` embeds an uncompiled Core ML
+spec that whichever Mac loads it compiles locally. QNN is explicitly bound to
+SM8750 plus matching ExecuTorch and QNN runtime versions. Everything else is
+specific to compatible compiler, runtime, and hardware versions — artifacts are
+**not** a stable cross-version ABI.
 
 ### From the CLI
 
@@ -424,6 +427,7 @@ them, and [ExecuTorch](docs/executorch.md) for the edge flow.
 python examples/basic_mlp.py                        # CPU
 python examples/cuda_mlp.py --target nvidia         # NVIDIA
 python examples/mac_mlp.py                          # Apple Silicon
+python examples/coreml_mlp.py                       # Apple Core ML (export + run immediately)
 python examples/tenstorrent_mlp.py                  # Tenstorrent
 python examples/tpu_mlp.py                          # Google TPU
 python examples/rocm_mlp.py                         # AMD ROCm

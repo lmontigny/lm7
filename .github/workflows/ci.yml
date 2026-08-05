@@ -147,7 +147,9 @@ jobs:
         run: python -m lm7 backends
 
       - name: Export and execute through Core ML
-        run: python -m pytest -m coreml -v
+        run: |
+          python examples/coreml_mlp.py
+          python -m pytest -m coreml -v
 
   # windows-2025 is a GitHub-hosted standard runner -- no larger-runner or GPU
   # plan needed. LM7 had no Windows coverage at all before this, despite
