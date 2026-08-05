@@ -94,6 +94,44 @@ def test_multiple_input_signatures_compile_separately():
         torch.testing.assert_close(compiled(example), expected, rtol=1e-4, atol=1e-4)
 
 
+def test_target_option_accepts_the_json_dict_form():
+    """TVM 0.25 dropped the CLI-string target form -- see docs/tvm.md -- so
+    the dict form is the only way to reach architecture-specific codegen. No
+    `mcpu` here: valid values are architecture-specific, and this test runs on
+    both x86-64 (CI) and arm64 (this project's own validation host)."""
+    source = model()
+    example = torch.randn(8, 16)
+    with torch.no_grad():
+        expected = source(example)
+
+    compiled = lm7.compile(
+        source,
+        target="cpu",
+        backend="tvm",
+        fallback="error",
+        options={"target": {"kind": "llvm"}},
+    )
+    actual = compiled(example)
+
+    assert compiled.artifact.metadata["tvm_target"] == {"kind": "llvm"}
+    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_target_option_rejects_the_old_cli_string_form():
+    """Regression guard: LM7's own docs used to show `"llvm -mcpu=..."`, which
+    real TVM 0.25 rejects. The mocked unit test cannot catch this -- its fake
+    Target does not replicate TVM's parser -- so this runs against the real
+    thing."""
+    with pytest.raises(CompilationError, match="no longer supported"):
+        lm7.compile(
+            model(),
+            target="cpu",
+            backend="tvm",
+            fallback="error",
+            options={"target": "llvm -mcpu=x"},
+        )(torch.randn(8, 16))
+
+
 def test_non_cpu_target_is_rejected():
     """Asked of the backend directly: resolve_target would raise first on a
     machine with no GPU, which would make this assert nothing."""
