@@ -112,36 +112,24 @@ machine. Backends in parentheses are export-only or explicit — see
 it, so `target="auto"` never picks it automatically — see
 [its guide](docs/intel-npu.md).
 
-### Tested on
-
-The table above is what the vendor toolchains support; this is what has
-actually run on physical hardware. CPU is the only target with CI — everything
-below was exercised by hand, once, on one part of its kind:
-
-| Target | Hardware | Exercised |
-| --- | --- | --- |
-| `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. See [TensorRT](docs/nvidia-tensorrt-evaluation.md). |
-| `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified. See [NVIDIA Blackwell](docs/nvidia-blackwell.md). |
-| `cpu` (AMD) | AMD EPYC 7B13 (Zen 3) | `zentorch` and CPU baselines. See [AMD CPU](docs/amd-cpu.md). |
-| `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile, an OpenVINO cross-check. See [Apple Silicon](docs/apple-mps.md). |
-| `tpu` | TPU v6e (Trillium), single chip | See [Google TPU](docs/google-tpu.md). |
-| `qualcomm:sm8750` | Snapdragon 8 Elite, physical device (cloud-rented) | ExecuTorch export and QNN. See [Android device testing](docs/android-device-testing.md). |
-
-AMD ROCm GPU, Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have not
-run on real hardware yet — those adapters are unit-tested against mocks. See
-[hardware validation](docs/limitations.md#hardware-validation) for the exact
-gaps.
+The table above is what the vendor toolchains support, not what has actually
+run on physical hardware — see [tested hardware](docs/tested-hardware.md) for
+the real machines behind it, and the targets that are still mock-tested only.
 
 ## Tested model coverage
 
 Smoke-test coverage, not a model zoo — LM7 doesn't allowlist models, so other
 Hugging Face checkpoints will likely *run*, just without this validation.
-Validated so far: `torch.compile` parity on ResNet, MobileNet, BERT, and ViT
-(CI); sparse MoE up to Mixtral-8x7B (46.7B, 93.4 GB resident on a Blackwell
-GPU); and causal LMs from SmolLM2-135M to Llama-3.1-8B-Instruct across
-generation, quantization, and export. See [limitations](docs/limitations.md),
-[DeepSeek coverage](docs/deepseek.md), and [quantization](docs/quantization.md)
-for the full matrix.
+
+| Model class | Examples | Tested for |
+| --- | --- | --- |
+| Vision / small nets | ResNet-18, MobileNetV2, BERT, ViT | `torch.compile` parity (CI) |
+| Sparse MoE | Mixtral (tiny → 8x7B/46.7B), OLMoE (tiny → 6.9B) | `torch.compile` parity, CPU + NVIDIA |
+| Causal LMs | SmolLM2-135M → Llama-3.1-8B-Instruct, DeepSeek-coder-1.3B | Generation, quantization, export |
+| TPU-specific | BERT, ViT, LSTM, Conv+BatchNorm, sparse MoE, 5 causal LMs | `openxla` parity on a TPU v6e |
+
+See [limitations](docs/limitations.md), [DeepSeek coverage](docs/deepseek.md),
+and [quantization](docs/quantization.md) for the full matrix.
 
 ## 1. Install
 
