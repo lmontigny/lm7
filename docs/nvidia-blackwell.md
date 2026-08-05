@@ -125,6 +125,15 @@ The small-MLP result also reproduces — `tensorrt` at 0.114 ms against `eager` 
 small to amortize anything, which is why it stays opt-in and lower priority than
 `inductor`. See the [evaluation](nvidia-tensorrt-evaluation.md).
 
+> [!IMPORTANT]
+> "Verified" above means the path ran and agreed with eager. A later sweep across
+> four model families, four precisions, three batch sizes and dynamic sequence
+> length found that it can do both while containing **no TensorRT engine at all**
+> — the partitioner declines small graphs silently. That sweep also found the JIT
+> path returning wrong numbers on BERT, and FP8 arithmetic unreachable through
+> this stack. See [tensorrt-validation.md](tensorrt-validation.md) before relying
+> on the row above.
+
 ## The backend compatibility matrix
 
 Every NVIDIA path LM7 implements, run against one model on `sm120`.
