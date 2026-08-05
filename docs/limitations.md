@@ -4,8 +4,8 @@ What LM7 does not do, stated plainly. Read this before depending on it for
 anything that matters.
 
 LM7 is an early, inference-only prototype. Model coverage and compiled-artifact
-compatibility are not stable, and the only path with continuous-integration
-coverage is CPU.
+compatibility are not stable, and CPU and Apple Silicon (MPS) are the only
+targets with continuous-integration coverage.
 
 ## Scope of the project
 
@@ -185,13 +185,13 @@ had stated.
 | Backend | Scope and caveats |
 | --- | --- |
 | `inductor` | The default and the best-covered path. CPU and Apple Silicon (MPS) are the only targets with CI. |
-| `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). |
+| `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). Packages hold kernels compiled for one GPU architecture and refuse to load on another (LM7 raises before loading; PyTorch's own check only warns, then hits a driver error) — see [artifact compatibility](aot-artifact-compatibility.md). |
 | `tensorrt` | NVIDIA only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). `lm7.export` serializes the engine so a second process need not rebuild it; the artifact is static-shape and bound to the GPU architecture, TensorRT version, and Torch-TensorRT version that built it. **Four failure modes do not raise**: an export whose graph falls below the partitioner's `min_block_size` writes a TensorRT-labelled artifact containing no engine; the JIT path returns wrong numbers on BERT; `options={"dynamic": True}` is accepted and ignored by the export path, while the JIT path silently rebuilds an engine per unseen shape; and FP8 arithmetic is unreachable. See [tensorrt-validation.md](tensorrt-validation.md). |
 | `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on both `model run` and `model export`, validated per model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
 | `onnxruntime` | CPU and NVIDIA CUDA. Returns CPU tensors even after CUDA execution, because the initial adapter uses NumPy rather than I/O binding. Tensor-only inputs and flat outputs; external-data packaging above the 2 GiB protobuf limit is future work. See the [guide](onnxruntime.md). |
 | `iree_vulkan` | Export-only and experimental: fixed shapes, tensor-only I/O, FP32 MLP execution is the validated scope. Causal LMs, dynamic sequences, KV caches, and WebGPU are future work. See the [guide](iree-vulkan.md). |
-| `litert` | Export-only, CPU/XNNPACK only. Static tensor-only inputs, returns CPU tensors. LiteRT Torch caps PyTorch below 2.13, so conversion belongs in a separate environment. Packages generic `.tflite` graphs, not LiteRT-LM conversations. See the [guide](litert.md). |
-| `executorch` | Export-only, XNNPACK delegate, so the edge story is CPU. MediaTek and Exynos are not wired up; artifacts are static-shape; optional calibrated XNNPACK INT8 PTQ is available; validation is host x86-64, not a physical phone. LM7 writes the `.pte` — deploying it into an app is ExecuTorch's tooling. See the [guide](executorch.md). |
+| `litert` | Export-only, CPU/XNNPACK only from LM7's side, though the packaged `.tflite` also ran correctly on a real Snapdragon 8 Elite's GPU delegate (Adreno, OpenCL) by hand — **~660x slower per inference than its own CPU delegate** on a 3-layer MLP too small to amortise dispatch and shader compilation; unmeasured on a real model, since dynamic shapes are rejected. See [Android device testing](android-device-testing.md). Static tensor-only inputs, returns CPU tensors. LiteRT Torch caps PyTorch below 2.13, so conversion belongs in a separate environment. Packages generic `.tflite` graphs, not LiteRT-LM conversations. See the [guide](litert.md). |
+| `executorch` | Export-only, XNNPACK delegate, so the edge story is CPU. MediaTek and Exynos are not wired up; artifacts are static-shape. Real ARM64 hardware runs in CI (`ubuntu-24.04-arm`), and export has also been checked against a real Snapdragon 8 Elite phone by hand — see [Android device testing](android-device-testing.md). **Calibrated XNNPACK INT8 PTQ completes but is not usable on a causal LM**: SmolLM2-135M quantizes and loads, but its logits move by 39.5 absolute and it shares 0/5 top tokens with eager — see [the measurement](executorch.md#int8-on-a-language-model). LM7 writes the `.pte` — deploying it into an app is ExecuTorch's tooling. See the [guide](executorch.md). |
 | `qnn` | Export-only ExecuTorch delegate for Qualcomm Hexagon HTP, `qualcomm:sm8750` only, FP16 only, static-shape, positional-inputs-only. Deployment-only: a `.pte` refuses to run through LM7's host process and needs an Android ExecuTorch runtime built with the QNN backend. Validated on a real Snapdragon 8 Elite device — see [Android device testing](android-device-testing.md). See the [guide](qnn.md). |
 | `coreml` | Export-only ExecuTorch delegate for Apple's Core ML, `target="apple"` only, static-shape, positional-inputs-only, macOS-only. Unlike `qnn`, not deployment-only: the `.pte` executes on the Mac that built it through Core ML's ANE/GPU/CPU compute units. No quantization path, no `minimum_deployment_target` control yet, and only an MLP and an embedding+linear model have been tried — not a real causal LM. See the [guide](coreml.md). |
 | `stablehlo` | Export-only. Needs PyTorch/XLA to lower, which pins PyTorch to a matching pair. |
@@ -204,11 +204,22 @@ had stated.
 
 - **CPU and Apple Silicon (MPS) are the only targets with CI.** Everything
   else has been exercised manually, or not at all.
-- **Apple Silicon (MPS) runs on real hardware in CI** — GitHub's `macos-26`
-  runner is arm64, so `tests/test_mac_integration.py` (Inductor and
-  AOTInductor through MPS) runs on an actual Apple GPU on every commit, not a
-  mock. It is the only accelerator target with that property; everything
-  below is exercised by hand at best.
+- **Apple Silicon runs on real hardware in CI, for two backends.** GitHub's
+  `macos-26` runner is arm64, so `tests/test_mac_integration.py` (Inductor and
+  AOTInductor through MPS) and the `coreml` export/execute suite both run on an
+  actual Apple GPU/ANE on every commit, not a mock. Apple is the only
+  accelerator target with that property; everything below is exercised by
+  hand at best.
+- **CPU CI now spans three OS/architecture combinations**, not just one: Linux
+  x86-64 (the original `quality` job), Linux ARM64 (`ubuntu-24.04-arm`, which
+  is also where the `executorch` export suite runs on real ARM64 hardware),
+  and native Windows (`windows-2025`, with `cl.exe` on `PATH` for
+  TorchInductor's C++ codegen — passing, as of the PR that added it).
+- **A real Android phone (Snapdragon 8 Elite, via a cloud rental) has checked
+  three export paths by hand**: `executorch`, `litert` (both its CPU and GPU
+  delegates), and `qnn`. None of this is CI — it is a one-time device check,
+  not exercised on every commit. See
+  [Android device testing](android-device-testing.md).
 - AMD ROCm, Intel XPU, OpenXLA TPU, and Tenstorrent are initial
   single-process integrations **without physical-hardware CI**.
 - OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU

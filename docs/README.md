@@ -40,6 +40,7 @@ This index covers everything else.
 | `iree_vulkan` | [iree-vulkan.md](iree-vulkan.md) |
 | `litert` | [litert.md](litert.md) |
 | `executorch` (Android, iOS, embedded) | [executorch.md](executorch.md) |
+| `coreml` (Apple ANE/GPU/CPU) | [coreml.md](coreml.md) |
 | `qnn` (Snapdragon HTP) | [qnn.md](qnn.md) |
 | `tenstorrent` | [tenstorrent.md](tenstorrent.md) |
 | `tvm` | [tvm.md](tvm.md) |
