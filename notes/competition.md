@@ -19,6 +19,7 @@ broad target list — is the axis every entry below should be checked against.
 | [IREE](https://iree.dev/) (OpenXLA) | Imports PyTorch/JAX/ONNX via MLIR | Yes — own compiler + HAL/VM runtime | CUDA, ROCm, Vulkan, Metal, CPU | Compiler substrate other frontends target — also one of LM7's own backends (`iree_vulkan`) |
 | [tinygrad](https://github.com/tinygrad/tinygrad) | Own minimal tensor library, not PyTorch | Yes — writes its own backends/drivers per vendor | NVIDIA, AMD (incl. bare-metal driver stack), Apple, Qualcomm | "No vendor toolchain needed" — opposite philosophy to LM7 |
 | [Lightning Thunder](https://github.com/Lightning-AI/lightning-thunder) | Existing PyTorch model, unchanged | No — dispatches to nvFuser/Inductor/cuDNN/TransformerEngine | Primarily NVIDIA; training-and-inference | Closest to LM7 in "don't touch the model," but single-vendor-centric and executor-level, not device-portability-level |
+| [Hugging Face Optimum](https://github.com/huggingface/optimum) (+ `optimum-intel`, `optimum-nvidia`, `optimum-neuron`) | `transformers`/`diffusers`/`timm`/`sentence-transformers` model classes | No — dispatches to OpenVINO/IPEX/Neural Compressor, TensorRT-LLM, ONNX Runtime, or AWS Neuron SDK per sub-package | Intel CPU/GPU, NVIDIA GPU, AWS Trainium/Inferentia, broad via ONNX Runtime | The real "why not just use X" comparison — same "swap the backend, not the model" bet, at production scale and HF's backing, but scoped to HF's own model libraries rather than arbitrary `nn.Module` |
 | [ONNX Runtime](https://onnxruntime.ai/) | Requires ONNX export first | No — dispatches to execution providers (TensorRT, OpenVINO, CUDA, DirectML, …) | Very broad via EPs | Multi-vendor execution-provider dispatch — also one of LM7's own backends |
 | [PyTorch/XLA](https://github.com/pytorch/xla) | Existing PyTorch model | No — hands off to OpenXLA | TPU, and CUDA/CPU via PJRT | Same "PyTorch in, vendor compiler out" idea, but single-family (XLA) rather than best-compiler-per-target |
 | NVIDIA TensorRT / AMD stack / Intel OpenVINO (native) | Vendor-specific export/APIs | Yes, per vendor | Single vendor each | The status quo LM7 replaces — not a portability layer at all |
@@ -87,6 +88,23 @@ training-heavy) rather than choosing *between* vendor targets — no CPU/Apple/
 TPU/Tenstorrent story. More adjacent tooling than a device-portability
 competitor.
 
+### Hugging Face Optimum
+The most directly comparable prior art, and the most likely "why not just use
+X" question LM7 gets. `optimum` (plus `optimum-intel`, `optimum-nvidia`,
+`optimum-neuron`) does "keep your model code, swap the execution backend" at
+real production scale, HF-backed, owning no compiler of its own — the same
+bet as LM7. The scope difference is the whole story: `optimum-intel` wires up
+OpenVINO, Intel Extension for PyTorch, and Neural Compressor; `optimum-nvidia`
+wires up TensorRT-LLM; `optimum-neuron` wires up AWS Trainium/Inferentia via
+the Neuron SDK — but all of it is scoped to loading a model through
+`transformers`, `diffusers`, `timm`, or `sentence-transformers`, not an
+arbitrary `nn.Module`. That scoping buys optimum per-model-family tuning and
+years of production usage LM7 doesn't have; LM7's bet is that "any PyTorch
+module, one target string" is worth more once a model falls outside those
+four libraries — a custom architecture, a research model, a non-HF causal LM.
+Worth being ready for this comparison specifically, since it's the one an HN
+commenter is most likely to already know and reach for.
+
 ### ONNX Runtime
 The other backend LM7 already wraps (`onnxruntime`). As a standalone
 competitor it requires an ONNX export step (LM7 skips that for eager/Inductor
@@ -106,7 +124,11 @@ narrower-scope alternative.
 
 - Is there a well-funded 2026-era startup doing "PyTorch model in, vendor
   compiler chosen automatically" with no owned compiler, closer to LM7's
-  exact bet than anything above? None found in this pass — closest analogues
+  exact bet than anything above? Optimum is the closest found so far, but
+  it's still per-vendor subclasses a user picks explicitly
+  (`ORTModelForCausalLM`, `OVModelForCausalLM`, …), not one call that
+  auto-detects the target the way `lm7.compile(model, target="auto")` does —
+  worth re-checking whether that gap closes. Otherwise, closest analogues
   either own a compiler (Modular, Roofline, TVM/IREE) or stay single-vendor
   (Thunder, PyTorch/XLA). Re-run this search periodically; this space moves
   fast.

@@ -19,6 +19,14 @@ coverage is CPU.
 - **Not a stable ABI.** Compiled artifacts are specific to compatible compiler,
   runtime, and hardware versions. Distributed inference, remote hardware, and a
   stable artifact ABI are future work.
+- **Arbitrary `nn.Module`, not a curated model zoo.** LM7 does not special-case
+  model architectures the way Hugging Face's `optimum` family
+  (`optimum-intel`, `optimum-nvidia`, `optimum-neuron`) does for its own
+  `transformers`/`diffusers`/`timm`/`sentence-transformers` classes. That
+  breadth comes without optimum's per-model-family tuning or production
+  track record — see
+  [notes/competition.md](../notes/competition.md#hugging-face-optimum) for
+  the fuller comparison.
 
 ## Compilation and artifacts
 
