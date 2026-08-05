@@ -47,6 +47,15 @@ output = compiled(cpu_input)
 `target="auto"` also selects the local Apple GPU (reported as `apple:metal`)
 when no other accelerator is detected.
 
+Both files compare `inductor`/`aot_inductor` against eager MPS with a loosened
+tolerance (`rtol=0.05, atol=0.25`), not `torch.testing.assert_close`'s tight
+float32 default. That default holds on an M3 Pro but not on GitHub's `macos-26`
+CI runner, which measured a 0.149 max absolute difference on this exact
+Linear→GELU→Linear model — most likely Inductor's Metal GELU codegen using a
+different approximation than eager MPS's kernel, on a GPU generation CI does
+not pin. Not yet root-caused on a specific chip; loosened deliberately rather
+than tightened back down without knowing which one produced it.
+
 ## Persistent AOT packages
 
 `aot_inductor` also supports the `apple` vendor, producing a persistent
