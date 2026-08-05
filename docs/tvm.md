@@ -14,10 +14,20 @@ output = compiled(example_input)
 ```
 
 > [!WARNING]
-> This backend is **explicit-only and far slower than Inductor** — 167x slower
-> than eager on the benchmark below. It exists so TVM's IR and toolchain are
-> reachable from LM7, not because it is a good way to run a model today. Read
-> [performance](#performance) before using it for anything.
+> This backend is **explicit-only and far slower than Inductor** — 62-167x
+> slower than eager, depending on host, on the benchmarks below. It exists so
+> TVM's IR and toolchain are reachable from LM7, not because it is a good way
+> to run a model today. Read [performance](#performance) before using it for
+> anything.
+
+> [!NOTE]
+> `pip install -e ".[tvm]"` used to fail on every platform with `undefined
+> symbol` from `libtvm_runtime`. The published `apache-tvm==0.25.0.post1`
+> wheel bundles a runtime built against `apache-tvm-ffi==0.1.12`, but declares
+> only `apache-tvm-ffi>=0.1.12`, so an unpinned install resolves the newest
+> `tvm-ffi` (0.1.13, which changed the `Stringify` ABI) and the runtime cannot
+> dlopen. The `tvm` extra now pins `apache-tvm-ffi==0.1.12` to match the
+> wheel, which is what makes the install command above work at all.
 
 ## What LM7 does *not* use, and why
 
@@ -88,6 +98,33 @@ survive evaluation here:
 
 Even a good result would not change the recommendation for a JIT backend:
 `inductor` reaches 2.29 ms in under two seconds of compilation.
+
+### Apple Silicon (arm64 macOS)
+
+`apache-tvm` publishes a native `macosx_11_0_arm64` wheel, and the backend
+works unmodified on it — same `torch.export` → `from_exported_program` →
+`llvm` build → Relax VM path as x86-64, once the `apache-tvm-ffi` pin above is
+in place. Verified on an Apple M3 Pro, TVM 0.25.0.post1, PyTorch 2.13:
+
+`python benchmarks/tvm_relax.py`, same MLP as above:
+
+| Backend | First call | Steady median | vs eager |
+| --- | --- | --- | --- |
+| `eager` | 573 ms | **1.40 ms** | 1.0x |
+| `inductor` | 1211 ms | **1.45 ms** | 0.96x |
+| `tvm` | 491 ms | **87.3 ms** | **0.016x** |
+
+Same shape as x86-64 — untuned Relax loses badly to both eager and Inductor —
+though the gap is narrower here (62x vs 167x slower than eager), consistent
+with Apple Silicon's CPU being a smaller relative win for `llvm` codegen than
+for whatever BLAS Inductor's path reaches on x86.
+
+It also compiles a real model correctly on this hardware: `HuggingFaceTB/
+SmolLM2-135M-Instruct`, target `cpu`, `backend="tvm"`, called positionally
+with `(input_ids, attention_mask)` — logits match eager within 5.1e-5 max
+absolute difference and pick the same top token ("Paris" for "The capital of
+France is"). This exercises `embedding` plus a full transformer block, not
+just the MLP above.
 
 ## Scope
 

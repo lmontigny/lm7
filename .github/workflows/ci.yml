@@ -89,12 +89,13 @@ jobs:
   # package is absent, so a green run said nothing about them at all -- the
   # suite reported "46 skipped" and no one could tell which of those mattered.
   #
-  # These four install on an ordinary CPU runner, so their tests actually run.
+  # These five install on an ordinary CPU runner, so their tests actually run.
   # What is deliberately not here: CUDA, ROCm, MPS, TPU, Tenstorrent and
   # TensorRT need hardware; QNN needs the Qualcomm AI Engine Direct SDK, which
-  # is behind a login; apache-tvm's published wheel fails to import with an
-  # undefined symbol in libtvm_runtime.so; zentorch expects an AMD host that a
-  # hosted runner does not guarantee.
+  # is behind a login; zentorch expects an AMD host that a hosted runner does
+  # not guarantee. apache-tvm *was* excluded too -- its published wheel failed
+  # to import with an undefined symbol in libtvm_runtime.so -- until the `tvm`
+  # extra started pinning the matching apache-tvm-ffi; see docs/tvm.md.
   backend:
     name: Backend ${{ matrix.extra }}
     runs-on: ubuntu-24.04
@@ -114,6 +115,8 @@ jobs:
           - extra: litert
             marker: litert
             torch: torch==2.12.*
+          - extra: tvm
+            marker: tvm
 
     steps:
       - uses: actions/checkout@v6
