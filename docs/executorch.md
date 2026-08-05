@@ -228,8 +228,10 @@ claim.
 - **Export only.** `lm7.compile()` will not select this backend, and asking for
   it raises. The artifact is the deliverable.
 - **XNNPACK only.** This backend does not change delegates. Qualcomm HTP uses the
-  separate [QNN backend](qnn.md); Core ML, MediaTek, Vulkan, Arm Ethos-U, and
-  Exynos remain unwired here.
+  separate [QNN backend](qnn.md); Apple's own delegate is the separate
+  [Core ML backend](coreml.md), which — unlike QNN — actually executes
+  on the host that built it, since Core ML is part of macOS itself. MediaTek,
+  Vulkan, Arm Ethos-U, and Exynos remain unwired here.
 - **INT8 PTQ only, single-sample.** There is no INT4, QAT, multi-sample
   calibration API, or backend-specific accuracy gate yet. The single sample is
   the reason a quantized language model comes out unusable. Quantization support depends on the
