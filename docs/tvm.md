@@ -16,7 +16,9 @@ output = compiled(example_input)
 TVM also has an AOT export path — see [AOT export](#aot-export) below:
 
 ```python
-artifact = lm7.export(model.eval(), args=(example_input,), target="cpu", backend="tvm", output="model.lm7")
+artifact = lm7.export(
+    model.eval(), args=(example_input,), target="cpu", backend="tvm", output="model.lm7"
+)
 reloaded = lm7.load_artifact("model.lm7")
 output = reloaded(example_input)
 ```
