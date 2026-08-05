@@ -5,7 +5,7 @@ its PyPI wheels are Linux x86-64 with no CUDA variants, XLA:CUDA is deprecated
 and warns on initialization since 2.8, and no ROCm wheels exist. That makes
 `openxla` a TPU-only backend in LM7 — see [Google TPU support](google-tpu.md).
 
-OpenXLA itself is not TPU-only. [ZML](ZML_details.md) compiles Zig to MLIR,
+OpenXLA itself is not TPU-only. [ZML](../notes/ZML_details.md) compiles Zig to MLIR,
 lowers through OpenXLA, and dispatches through **PJRT**, which is how one model
 definition reaches CPU, NVIDIA, AMD, TPU, and AWS Neuron. PJRT — not
 PyTorch/XLA — is the portable boundary, and a vendor can supply a plugin without
@@ -137,7 +137,7 @@ constants/<n>                baked constants
 `parameter`, `constant`, or `input_arg`, so a loader can rebuild the flat
 argument list with no model definition — that is what
 `benchmarks/stablehlo_pjrt.py` does in 15 lines. Weights being separate `.npy`
-files also matches the separation LM7's own [ZML notes](ZML_details.md) argue
+files also matches the separation LM7's own [ZML notes](../notes/ZML_details.md) argue
 for: the symbolic graph does not have to carry materialized weights.
 
 ## The registered backend
@@ -266,7 +266,7 @@ remains open:
 
 ## References
 
-- [ZML technical notes](ZML_details.md) — PJRT as the portable boundary
+- [ZML technical notes](../notes/ZML_details.md) — PJRT as the portable boundary
 - [Google TPU support](google-tpu.md) — why `openxla` is TPU-only in LM7
 - [JIT vs. AOT](jit-vs-aot.md) — the artifact levels this would extend
 - [PJRT examples, OpenXLA](https://openxla.org/xla/pjrt/examples)
