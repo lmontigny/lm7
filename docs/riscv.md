@@ -230,11 +230,12 @@ necessary for any latency claim.
 
 In order, and none of it is LM7 work:
 
-1. **PyTorch installs on riscv64** — an official wheel, or a documented source
-   build LM7 can point at. Everything else is blocked on this.
-2. **The version is at least 2.10**, which is where the `-march=native` fix
-   landed, and current enough for `torch.export`, which LM7 uses everywhere.
-   2.3.0a1 is neither.
+1. **A maintained riscv64 PyTorch exists** — an official wheel, or a documented
+   source build LM7 can point at. One unofficial wheel installs today, which is
+   enough to measure with and not enough to depend on.
+2. **It is at least 2.10**, which is where the `-march=native` fix landed, and
+   current enough for `torch.export`, which LM7 uses everywhere. 2.3.0a1 is
+   neither, and everything past `inductor` is blocked on this.
 3. **XNNPACK's RVV microkernels land** in a released ExecuTorch, which is what
    would make `executorch` and `litert` more than an export format on RISC-V.
 
@@ -249,10 +250,11 @@ Nor should LM7 carry the `-march` shim. It belongs to a PyTorch that has already
 been fixed, and shipping it would mean owning a compiler wrapper permanently to
 paper over a wheel that will be replaced.
 
-Keep the experimental job. It costs nothing, it is non-blocking, and it converts
-every claim in this document into something checkable — the eager-fallback
-result that the first version of this page reported as an architecture
-limitation is exactly what happens when they are not.
+Keep the experimental job. Eighteen minutes on a runner nobody else is queuing
+for, non-blocking, and it converts the claims on this page into something
+checkable. The first version of this page read an eager fallback as an
+architecture's limit and said so in its opening line; that is the failure mode
+an unchecked claim has, and running it is what caught it.
 
 Revisit when [pytorch#171659](https://github.com/pytorch/pytorch/issues/171659)
 reaches its first phase. One thing would then be left: RVV 1.0 silicon to rent,
