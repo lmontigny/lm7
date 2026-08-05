@@ -452,7 +452,8 @@ python -m ruff format --check .
 ```
 
 Hardware-specific tests skip automatically when the device or toolchain is
-absent. See [development and testing](docs/development.md).
+absent. See [development and testing](docs/development.md). Working with an
+AI coding agent? See [CLAUDE.md](CLAUDE.md) for this repo's conventions.
 
 ## License
 
