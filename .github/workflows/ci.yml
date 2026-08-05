@@ -84,13 +84,49 @@ jobs:
       - name: Export a .pte and validate it against eager on ARM64
         run: python -m pytest tests/test_executorch_integration.py -q
 
-  # LM7 registers fifteen backends and CI exercised two: TorchInductor, and
-  # ExecuTorch on ARM64. Every other backend's tests skip themselves when the
-  # package is absent, so a green run said nothing about them at all -- the
-  # suite reported "46 skipped" and no one could tell which of those mattered.
+  # GitHub's macos-26 runner is real Apple Silicon, so -- like ExecuTorch on
+  # ubuntu-24.04-arm above -- this exercises actual hardware rather than a
+  # mock: MPS is not a CPU fallback, it is PyTorch's Metal backend, and it was
+  # previously validated by hand only (docs/tested-hardware.md) with no CI at
+  # all. torch's default macOS wheel bundles MPS support, so no ROCm/CUDA-style
+  # extra install step is needed here.
+  apple-mps:
+    name: Apple Silicon MPS
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7
+        run: |
+          python -m pip install torch
+          python -m pip install -e ".[dev]"
+
+      - name: Report the device under test
+        run: |
+          python -c "import torch; print('MPS built:', torch.backends.mps.is_built()); print('MPS available:', torch.backends.mps.is_available())"
+          python -m lm7 backends
+
+      - name: Compile and test on MPS
+        run: |
+          python examples/mac_mlp.py
+          python -m pytest -m mps -v
+
+  # LM7 registers fifteen backends and CI exercised three: TorchInductor,
+  # ExecuTorch on ARM64, and MPS on Apple Silicon. Every other backend's tests
+  # skip themselves when the package is absent, so a green run said nothing
+  # about them at all -- the suite reported "46 skipped" and no one could tell
+  # which of those mattered.
   #
   # These five install on an ordinary CPU runner, so their tests actually run.
-  # What is deliberately not here: CUDA, ROCm, MPS, TPU, Tenstorrent and
+  # What is deliberately not here: CUDA, ROCm, TPU, Tenstorrent and
   # TensorRT need hardware; QNN needs the Qualcomm AI Engine Direct SDK, which
   # is behind a login; zentorch expects an AMD host that a hosted runner does
   # not guarantee. apache-tvm *was* excluded too -- its published wheel failed
