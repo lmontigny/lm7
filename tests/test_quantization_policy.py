@@ -78,6 +78,28 @@ def test_llama_8b_is_admitted_for_int8_only():
     assert NVFP4 not in admitted
 
 
+def test_llama_8b_passes_dynamic_fp8_while_failing_weight_only_fp8():
+    """The 8B is the case where quantizing *more* is more accurate, not less.
+
+    On sm90 (H100), weight-only FP8 dropped a top-1 token at 3/4 -- reproducing the
+    sm120 rejection above on a second card -- while both dynamic modes held 4/4
+    (max logit difference 0.81 per-tensor, 0.78 per-row). A per-call activation
+    scale adapts to the data; a weight-only mode has to survive whatever
+    activations arrive.
+
+    So the two tables disagree for this model on purpose, and the gate being keyed
+    on the family as well as the pair is what lets them.
+    """
+    model_id = "unsloth/Llama-3.1-8B-Instruct"
+    assert FP8 not in VALIDATED_WEIGHT_ONLY[model_id]
+    assert VALIDATED_ACTIVATION[model_id] == frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE})
+
+    hopper = parse_target("nvidia:sm90")
+    _validate_quantization(FP8_DYNAMIC_ROWWISE, hopper, "inductor", "auto", model_id)
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        _validate_quantization(FP8, hopper, "inductor", "auto", model_id)
+
+
 def test_long_form_names_normalize_to_short_names():
     """`--quantization int8-weight-only` predates `--quantize int8`; both work."""
     assert normalize_quantization("int8-weight-only") == INT8
@@ -285,9 +307,13 @@ def test_fp8_dynamic_is_admitted_for_llama_1b_and_nvfp4_dynamic_is_not():
     quantizing. nvfp4-dynamic scored 3/4 at 5.03 and ran 1.48x slower, so 4-bit
     activations on top of 4-bit weights is where this model stops holding its
     token. See docs/quantization.md.
+
+    fp8-dynamic-rowwise was added later from an sm90 (H100) run on the same model:
+    4/4 at a maximum logit difference of 1.09 and 0.94x baseline latency, beating
+    per-tensor on both halves.
     """
     admitted = VALIDATED_ACTIVATION["unsloth/Llama-3.2-1B-Instruct"]
-    assert admitted == frozenset({FP8_DYNAMIC})
+    assert admitted == frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE})
     assert NVFP4_DYNAMIC not in admitted
 
     blackwell = parse_target("nvidia:sm120")

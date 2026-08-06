@@ -36,8 +36,21 @@ Bare names are weight-only. The `-dynamic` names quantize activations too.
 | `int8` | INT8 | BF16 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
 | `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
 | `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | BF16 | NVIDIA Ampere (`sm80`) or newer | BF16 |
-| `fp8-dynamic` | FP8 | **FP8, quantized per call** | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
+| `fp8-dynamic` | FP8 | **FP8, quantized per call**, one scale per tensor | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
+| `fp8-dynamic-rowwise` | FP8 | **FP8, quantized per call**, one scale per row | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
 | `nvfp4-dynamic` | NVFP4 | **NVFP4, quantized per call** | NVIDIA **Blackwell** (`sm100`, `sm120`) | BF16 accumulate |
+
+The two FP8 dynamic rows differ only in scale granularity, and the difference is
+worth a mode of its own because it is not visible from the call site: TorchAO's
+`Float8DynamicActivationFloat8WeightConfig` resolves an omitted `granularity` to
+per-tensor rather than raising, so `fp8-dynamic` has always been the per-tensor
+one. `fp8-dynamic-rowwise` asks for `PerRow` — a scale per weight output row and
+per activation token. On `sm90` it is faster than per-tensor at every shape
+measured; see [the H100 numbers](#fp8-granularity-on-h100).
+
+Note that weight-only `fp8` already stores a per-row *weight* scale. What the
+rowwise mode changes is the **activation** scale, which is where the per-tensor
+default costs range.
 
 The two NVFP4 rows have different hardware floors, which looks inconsistent and
 is not. Weight-only NVFP4 never issues an FP4 matmul, so it runs anywhere BF16 is
@@ -335,6 +348,126 @@ is the two-values-per-byte packing.
 > `torch-fallback`. Every measurement above is `torch-fallback`, and as the kernel
 > table shows, that fallback still issues a native FP4 GEMM — what is missing is
 > the *fused* activation scaling, not FP4 arithmetic.
+
+## FP8 granularity on H100
+
+Everything above is `sm120`. This section is `sm90` — a single **NVIDIA H100 80GB
+HBM3**, driver 580.173.02, `torch 2.13.0+cu130`, `torchao 0.17.0` — and it exists
+because H100 is the card FP8 is usually sold on, and because the per-tensor and
+per-row modes had never been compared anywhere.
+
+### Per-row wins at every shape, and neither beats BF16
+
+[`benchmarks/activation_quant.py`](../benchmarks/activation_quant.py), same four
+shapes and method as the `sm120` table above. Ratios are against that shape's BF16 baseline, so **lower is
+better and below 1.00x means faster than not quantizing**:
+
+| M × K × N | `fp8` | `fp8-dynamic` | `fp8-dynamic-rowwise` |
+| --- | --- | --- | --- |
+| 128 × 4096 × 4096 | 1.26x | 1.51x | **1.27x** |
+| 256 × 4096 × 4096 | 1.19x | 1.52x | **1.32x** |
+| 1024 × 4096 × 4096 | 1.15x | 1.41x | **1.04x** |
+| 128 × 8192 × 8192 | 1.78x | 1.15x | **1.14x** |
+
+**Per-row is faster than per-tensor at all four shapes**, and the gap is largest
+where the sm120 table said the dynamic path should be winning: at M=1024,
+per-tensor costs 1.41x and per-row 1.04x. Passing `granularity=PerRow()` is the
+entire difference between those two columns.
+
+**But no mode beats the BF16 baseline at these shapes.** The best cell in the
+table is 1.04x — a 4% loss. On `sm120` the same benchmark had `fp8-dynamic` at
+0.83x and `nvfp4-dynamic` at 0.85x at this shape, both genuine wins. H100's BF16
+tensor cores are fast enough at these sizes that the cost of quantizing
+activations on every call is not repaid.
+
+That is a statement about these four shapes, and it does **not** survive contact
+with a real model: on Llama-3.2-1B below, `fp8-dynamic-rowwise` comes out at
+0.94x, faster than not quantizing. An isolated linear is not a transformer, and
+this benchmark disagreeing with the model-level one is a reason to trust the
+model-level one.
+
+Relative error against the BF16 output: `fp8` 2.30–2.79%, `fp8-dynamic`
+3.16–4.12%, `fp8-dynamic-rowwise` 3.30–3.82%. Per-row is slightly *more* accurate
+than per-tensor at three of four shapes, which is the expected direction — a
+scale per row fits the data better than one scale for the whole tensor.
+
+### The scale shape is what proves the granularity
+
+[`benchmarks/fp8_kernel_check.py`](../benchmarks/fp8_kernel_check.py),
+1024 × 4096 × 4096, reading the quantized weight and Inductor's generated code:
+
+| mode | weight scale | activation scale | emitted |
+| --- | --- | --- | --- |
+| `none` | — | — | `mm` |
+| `fp8` | `(4096, 1)` | — | `mm` + dequant |
+| **`fp8-dynamic`** | **`(1, 1)`** | per-tensor | **`_scaled_mm`, no `mm`** |
+| **`fp8-dynamic-rowwise`** | **`(4096, 1)`** | per-row | **`_scaled_mm`, no `mm`** |
+
+Both dynamic modes compute in FP8 on `sm90` — a scaled GEMM and no plain `mm`.
+What separates them is the scale tensor: `(1, 1)` against `(4096, 1)`.
+
+This check is the reason the mode exists as a mode. TorchAO does not raise when
+`granularity` is omitted, so "I called the FP8 dynamic config" and "it scaled per
+row" are independent claims, and only the scale shape settles the second.
+
+Note the `fp8` row: weight-only FP8 already carries a per-row **weight** scale.
+The rowwise mode's contribution is the per-row **activation** scale, which is the
+one the per-tensor default was flattening.
+
+### On real models, including the first 8B activation-mode measurement
+
+[`benchmarks/quantization.py`](../benchmarks/quantization.py), BF16, single
+5-token prompt, `sm90`. Accuracy is eager over four prompts; latency is compiled.
+
+**Llama-3.2-1B:**
+
+| mode | steady | vs baseline | storage | top-1 | max logit diff |
+| --- | --- | --- | --- | --- | --- |
+| `none` | 4.321 ms | — | 2.472 GB | — | — |
+| `int8` | 21.350 ms | 4.94x | 1.65x smaller | 4/4 | 0.72 |
+| `fp8` | 4.206 ms | 0.97x | 1.48x smaller | 4/4 | 0.92 |
+| `nvfp4` | 7.091 ms | 1.64x | 2.30x smaller | 3/4 | 4.59 |
+| `fp8-dynamic` | 4.417 ms | 1.02x | 1.48x smaller | 4/4 | 1.33 |
+| **`fp8-dynamic-rowwise`** | **4.076 ms** | **0.94x** | 1.48x smaller | **4/4** | 1.09 |
+| `nvfp4-dynamic` | — | — | — | — | rejected: needs `sm100` |
+
+**Llama-3.1-8B** — no activation mode had ever been measured on this model:
+
+| mode | steady | vs baseline | storage | top-1 | max logit diff |
+| --- | --- | --- | --- | --- | --- |
+| `none` | 7.677 ms | — | 16.061 GB | — | — |
+| `fp8` | 14.524 ms | 1.89x | 1.54x smaller | **3/4** | 0.56 |
+| `fp8-dynamic` | 8.686 ms | 1.13x | 1.54x smaller | 4/4 | 0.81 |
+| **`fp8-dynamic-rowwise`** | **8.293 ms** | **1.08x** | 1.54x smaller | **4/4** | 0.78 |
+
+**`fp8-dynamic-rowwise` is the fastest mode on the 1B, and the only one that
+beats not quantizing** — 0.94x against `fp8-dynamic`'s 1.02x. Per-row is faster
+*and* closer to the baseline than per-tensor on both models, which is the
+direction the mechanism predicts.
+
+**On the 8B, the dynamic modes are more accurate than the weight-only one.**
+Weight-only `fp8` drops a top-1 token at 3/4 while both dynamic modes hold 4/4.
+That reproduces on `sm90` the rejection [recorded on `sm120`](#llama-31-8b-finally-on-a-gpu),
+and it is the opposite of the intuition that quantizing *more* things costs more
+accuracy: a per-call activation scale adapts to the data, where a weight-only
+mode has to survive whatever activations arrive.
+
+**Neither dynamic mode beats BF16 on the 8B**, at 1.08x and 1.13x. So the
+win is not simply "bigger model, better FP8" — the 1B wins and the 8B does not,
+at this sequence length.
+
+All four (model, mode) pairs clear the 4/4 bar and are admitted to
+`VALIDATED_ACTIVATION`, which is what makes `--quantize fp8-dynamic-rowwise`
+usable on them. Three of the four are admitted on **accuracy while costing
+latency**; only rowwise-on-1B is faster than not quantizing at all.
+
+> [!NOTE]
+> TorchAO quotes roughly 1.46x prefill and 1.21x decode throughput for
+> Llama-3.1-8B on H100. Nothing here reproduces that, and nothing here contradicts
+> it: these are 5-token prefills at batch 1, which is the shape regime where
+> [the H100 measures launch overhead rather than the card](nvidia-h100.md#these-workloads-are-launch-bound-not-flop-bound).
+> A throughput claim at serving batch and sequence length is a different
+> measurement that this repo has not made.
 
 ## INT8 on CPU
 
@@ -754,11 +887,16 @@ unmeasured here.
   embeddings, norms, `lm_head`, and (for FP8) attention all stay in BF16. A
   single NVFP4 linear is 3.56x smaller than its BF16 original, but Llama-3.2-1B
   as a whole is only 2.30x smaller.
-- **Activation quantization is NVIDIA-only, dynamic-only, and validated for one
-  pair.** `fp8-dynamic` and `nvfp4-dynamic` quantize activations at runtime;
+- **Activation quantization is NVIDIA-only and dynamic-only.** `fp8-dynamic`,
+  `fp8-dynamic-rowwise` and `nvfp4-dynamic` quantize activations at runtime;
   static calibrated scaling, INT8 dynamic activations, and mixed pairings such as
-  FP8 activations with INT4 weights are not wired up. Only
-  `unsloth/Llama-3.2-1B-Instruct` with `fp8-dynamic` is admitted so far.
+  FP8 activations with INT4 weights are not wired up. Four pairs are admitted:
+  Llama-3.2-1B and Llama-3.1-8B, each with `fp8-dynamic` and
+  `fp8-dynamic-rowwise`. `nvfp4-dynamic` is admitted for nothing.
+- **Per-row scaling is measured on one card.** The `fp8-dynamic-rowwise` numbers
+  are all `sm90`. The mode's `sm89` floor is a capability gate, not a
+  measurement — it has never been run on Ada, and the `sm120` tables above
+  predate it entirely.
 - **No INT4 or lower, and no quantization-aware training.** Those are unexplored
   rather than rejected.
 

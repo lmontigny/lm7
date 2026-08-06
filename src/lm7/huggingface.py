@@ -181,8 +181,27 @@ WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 # its weight-only counterpart fails on a second prompt set, and 4 bits of
 # activation on top of 4 bits of weight is where this model stops holding its
 # token. See docs/quantization.md.
+#
+# Measured on a Hopper sm90 (H100 80GB) against a BF16 baseline, adding the
+# per-row mode and the 8B pair, which had no activation-mode evidence at all:
+#
+#   Llama-3.2-1B  fp8-dynamic           4/4, max logit difference 1.33, 1.02x
+#                 fp8-dynamic-rowwise   4/4, max logit difference 1.09, 0.94x
+#   Llama-3.1-8B  fp8-dynamic           4/4, max logit difference 0.81, 1.13x
+#                 fp8-dynamic-rowwise   4/4, max logit difference 0.78, 1.08x
+#
+# All four clear the 4/4 bar, and per-row is both faster and closer to the
+# baseline than per-tensor on each model -- which is the expected direction, since
+# a scale per row fits the data better than one scale for a whole tensor.
+#
+# Two things worth not glossing. Weight-only FP8 scored 3/4 on the 8B here,
+# reproducing the sm120 rejection recorded above on a second card -- so on that
+# model the *dynamic* modes are more accurate than the weight-only one, not less.
+# And only rowwise-on-1B is actually faster than not quantizing (0.94x); the other
+# three are admitted on accuracy while costing latency.
 VALIDATED_ACTIVATION: dict[str, frozenset[str]] = {
-    "unsloth/Llama-3.2-1B-Instruct": frozenset({FP8_DYNAMIC}),
+    "unsloth/Llama-3.2-1B-Instruct": frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE}),
+    "unsloth/Llama-3.1-8B-Instruct": frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE}),
 }
 
 # Export backends that accept `quantization`. The two are unrelated mechanisms:

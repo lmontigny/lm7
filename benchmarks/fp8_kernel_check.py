@@ -107,6 +107,14 @@ def _calls(code: str, symbol: str) -> int:
     return len(re.findall(rf"(?<!\w){re.escape(symbol)}\s*\(", code))
 
 
+def _verdict(mode: str, computes_in_fp8: bool) -> str:
+    if computes_in_fp8:
+        return "FP8 GEMM"
+    # The unquantized baseline also emits a plain `mm`, but calling that
+    # "dequantized" would be wrong -- there is nothing to dequantize.
+    return "BF16 GEMM" if mode == NO_QUANTIZATION else "BF16 GEMM + dequantization"
+
+
 def check_mode(mode: str, M: int, K: int, N: int) -> dict[str, Any]:
     target = parse_target("nvidia")
     torch.manual_seed(0)
@@ -133,8 +141,11 @@ def check_mode(mode: str, M: int, K: int, N: int) -> dict[str, Any]:
     record["packed_dtype"] = str(getattr(weight, "_data", weight).dtype)
     record["scale_shape"] = list(scale.shape) if scale is not None else None
     if scale is not None:
-        # The shape is the granularity, whatever the mode was called.
-        record["observed_granularity"] = (
+        # The *weight* scale's shape, which is not the same claim as the mode's
+        # granularity: weight-only FP8 also carries a per-row weight scale, and
+        # quantizes no activations at all. Only `requested_granularity` being set
+        # means activations are scaled too.
+        record["weight_scale_granularity"] = (
             "per-tensor" if tuple(scale.shape) in {(1,), (1, 1)} else "per-row"
         )
 
@@ -159,9 +170,10 @@ def check_mode(mode: str, M: int, K: int, N: int) -> dict[str, Any]:
     )
     print(
         f"  {mode:<22} scale={record['scale_shape']!s:<12}"
-        f" {record.get('observed_granularity') or '-':<10}"
+        f" w:{record.get('weight_scale_granularity') or '-':<10}"
+        f" act:{record.get('requested_granularity') or 'none':<10}"
         f" _scaled_mm={scaled}  mm={plain}"
-        f"  -> {'FP8 GEMM' if record['computes_in_fp8'] else 'dequantized to BF16'}"
+        f"  -> {_verdict(mode, record['computes_in_fp8'])}"
     )
     del model
     torch.cuda.empty_cache()
