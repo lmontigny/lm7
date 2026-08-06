@@ -38,7 +38,18 @@ WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8, FP8, NVFP4})
 # has ever come out faster than its BF16 baseline -- see docs/quantization.md.
 FP8_DYNAMIC = "fp8-dynamic"
 NVFP4_DYNAMIC = "nvfp4-dynamic"
-DYNAMIC_ACTIVATION_QUANTIZATIONS = frozenset({FP8_DYNAMIC, NVFP4_DYNAMIC})
+
+# Same arithmetic as FP8_DYNAMIC, different scale granularity. `fp8-dynamic`
+# passes no `granularity` to TorchAO, which resolves to PerTensor: one scale for
+# the whole activation tensor and one for the whole weight. This mode asks for
+# PerRow instead -- a scale per weight output row and per activation token, which
+# is the granularity TorchAO's own H100 numbers are quoted at.
+#
+# It is a separate mode rather than a change to `fp8-dynamic` for the reason the
+# aliases below record: an existing command must keep doing what it did. Which
+# one is better is a measurement, not a default -- see docs/quantization.md.
+FP8_DYNAMIC_ROWWISE = "fp8-dynamic-rowwise"
+DYNAMIC_ACTIVATION_QUANTIZATIONS = frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC})
 NO_QUANTIZATION = "none"
 
 # The pre-0.2 spellings, plus explicit long forms for the weight-only modes. The
@@ -55,7 +66,8 @@ _QUANTIZATION_LABELS = {
     INT8: "INT8",
     FP8: "FP8",
     NVFP4: "NVFP4",
-    FP8_DYNAMIC: "FP8 dynamic activation + FP8 weight",
+    FP8_DYNAMIC: "FP8 dynamic activation + FP8 weight, per-tensor scales",
+    FP8_DYNAMIC_ROWWISE: "FP8 dynamic activation + FP8 weight, per-row scales",
     NVFP4_DYNAMIC: "NVFP4 dynamic activation + NVFP4 weight",
 }
 
@@ -67,6 +79,7 @@ _QUANTIZATION_VENDORS = {
     FP8: frozenset({"nvidia"}),
     NVFP4: frozenset({"nvidia"}),
     FP8_DYNAMIC: frozenset({"nvidia"}),
+    FP8_DYNAMIC_ROWWISE: frozenset({"nvidia"}),
     NVFP4_DYNAMIC: frozenset({"nvidia"}),
 }
 
@@ -75,6 +88,7 @@ _QUANTIZATION_VENDOR_TEXT = {
     FP8: "detected NVIDIA GPUs",
     NVFP4: "detected NVIDIA GPUs",
     FP8_DYNAMIC: "detected NVIDIA GPUs",
+    FP8_DYNAMIC_ROWWISE: "detected NVIDIA GPUs",
     NVFP4_DYNAMIC: "detected NVIDIA GPUs",
 }
 
@@ -116,12 +130,14 @@ _NVFP4_DYNAMIC_MINIMUM_CAPABILITY = 100
 _MODE_MINIMUM_CAPABILITY = {
     FP8: _FP8_MINIMUM_CAPABILITY,
     FP8_DYNAMIC: _FP8_MINIMUM_CAPABILITY,
+    FP8_DYNAMIC_ROWWISE: _FP8_MINIMUM_CAPABILITY,
     NVFP4_DYNAMIC: _NVFP4_DYNAMIC_MINIMUM_CAPABILITY,
 }
 
 _MODE_CAPABILITY_TEXT = {
     FP8: "NVIDIA Ada (sm89), Hopper (sm90), or newer",
     FP8_DYNAMIC: "NVIDIA Ada (sm89), Hopper (sm90), or newer",
+    FP8_DYNAMIC_ROWWISE: "NVIDIA Ada (sm89), Hopper (sm90), or newer",
     NVFP4_DYNAMIC: "NVIDIA Blackwell (sm100, sm120) or newer, where FP4 arithmetic exists",
 }
 
@@ -165,8 +181,27 @@ WEIGHT_ONLY_MODEL_IDS = frozenset(VALIDATED_WEIGHT_ONLY)
 # its weight-only counterpart fails on a second prompt set, and 4 bits of
 # activation on top of 4 bits of weight is where this model stops holding its
 # token. See docs/quantization.md.
+#
+# Measured on a Hopper sm90 (H100 80GB) against a BF16 baseline, adding the
+# per-row mode and the 8B pair, which had no activation-mode evidence at all:
+#
+#   Llama-3.2-1B  fp8-dynamic           4/4, max logit difference 1.33, 1.02x
+#                 fp8-dynamic-rowwise   4/4, max logit difference 1.09, 0.94x
+#   Llama-3.1-8B  fp8-dynamic           4/4, max logit difference 0.81, 1.13x
+#                 fp8-dynamic-rowwise   4/4, max logit difference 0.78, 1.08x
+#
+# All four clear the 4/4 bar, and per-row is both faster and closer to the
+# baseline than per-tensor on each model -- which is the expected direction, since
+# a scale per row fits the data better than one scale for a whole tensor.
+#
+# Two things worth not glossing. Weight-only FP8 scored 3/4 on the 8B here,
+# reproducing the sm120 rejection recorded above on a second card -- so on that
+# model the *dynamic* modes are more accurate than the weight-only one, not less.
+# And only rowwise-on-1B is actually faster than not quantizing (0.94x); the other
+# three are admitted on accuracy while costing latency.
 VALIDATED_ACTIVATION: dict[str, frozenset[str]] = {
-    "unsloth/Llama-3.2-1B-Instruct": frozenset({FP8_DYNAMIC}),
+    "unsloth/Llama-3.2-1B-Instruct": frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE}),
+    "unsloth/Llama-3.1-8B-Instruct": frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE}),
 }
 
 # Export backends that accept `quantization`. The two are unrelated mechanisms:
@@ -902,7 +937,13 @@ def _quantization_config(torchao_quantization: ModuleType, quantization: str) ->
     if quantization == NVFP4:
         return _load_torchao_nvfp4().NVFP4WeightOnlyConfig()
     if quantization == FP8_DYNAMIC:
+        # No `granularity` argument. TorchAO resolves that to PerTensor, which is
+        # what this mode has always meant; FP8_DYNAMIC_ROWWISE is the per-row one.
         return torchao_quantization.Float8DynamicActivationFloat8WeightConfig()
+    if quantization == FP8_DYNAMIC_ROWWISE:
+        return torchao_quantization.Float8DynamicActivationFloat8WeightConfig(
+            granularity=torchao_quantization.PerRow(),
+        )
     if quantization == NVFP4_DYNAMIC:
         # use_triton_kernel=False deliberately. The fused Triton activation-scaling
         # path needs MSLK (github.com/pytorch/MSLK), which is not on PyPI -- the
@@ -965,6 +1006,7 @@ _QUANTIZATION_FILTERS = {
     FP8: _is_fp8_quantizable_linear,
     NVFP4: _is_nvfp4_quantizable_linear,
     FP8_DYNAMIC: _is_fp8_quantizable_linear,
+    FP8_DYNAMIC_ROWWISE: _is_fp8_quantizable_linear,
     NVFP4_DYNAMIC: _is_nvfp4_quantizable_linear,
 }
 
@@ -973,8 +1015,25 @@ _QUANTIZATION_SELECTS = {
     FP8: "linears whose module path contains '.mlp.'",
     NVFP4: "every linear except lm_head whose last two dimensions are multiples of 16",
     FP8_DYNAMIC: "linears whose module path contains '.mlp.'",
+    FP8_DYNAMIC_ROWWISE: "linears whose module path contains '.mlp.'",
     NVFP4_DYNAMIC: "every linear except lm_head whose last two dimensions are multiples of 16",
 }
+
+
+def fp8_scale_granularity(quantization: str) -> str | None:
+    """Which FP8 scale granularity a mode requests, or None if it is not FP8 dynamic.
+
+    Reported rather than inferred, for the same reason `nvfp4_dynamic_kernel()`
+    exists: "FP8 dynamic ran" and "it scaled per row" are different claims, and
+    the second is the one the H100 numbers turn on. The scale tensor's shape is
+    the ground truth -- (1, 1) per-tensor against (out_features, 1) per-row --
+    and `benchmarks/activation_quant.py` checks it rather than trusting this.
+    """
+    if quantization == FP8_DYNAMIC:
+        return "per-tensor"
+    if quantization == FP8_DYNAMIC_ROWWISE:
+        return "per-row"
+    return None
 
 
 def _compute_capability(target: TargetSpec) -> int | None:

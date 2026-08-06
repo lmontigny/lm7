@@ -297,10 +297,13 @@ than the Ada box, not the GPU. It is still paid on every process start — see
 - **Prefill only.** These are forward-pass latencies. LM7's exported causal-LM
   artifacts do not capture a KV-cache decode loop, so none of this is a
   tokens-per-second figure for generation.
-- **No FP8 result yet.** `sm90` reports `fp8: native` and LM7's FP8 path has not
-  been exercised on this card. Native is not the same as used — the
-  [Blackwell page](nvidia-blackwell.md#native-is-not-the-same-as-used) explains
-  why that distinction matters.
+- **FP8 is now exercised, and whether it pays depends on the workload.** `sm90`
+  reports `fp8: native`, and both FP8 dynamic modes verifiably compute in FP8 on
+  this card — a `_scaled_mm` and no plain `mm`. Per-row scaling beats per-tensor
+  everywhere measured, and on Llama-3.2-1B it beats not quantizing at all
+  (0.94x). On isolated linears and on Llama-3.1-8B it does not. Native, used, and
+  worth it are three different claims — see
+  [FP8 granularity on H100](quantization.md#fp8-granularity-on-h100).
 - **`inductor` p95 is noisy at low batch** — 17.58 ms against a 7.32 ms median at
   batch 1, and 15.76 ms at batch 8, resolving to 7.32 ms and 7.10 ms at batch 32
   and 64. Consistent with warmup bleed into the sample window, but that is a
@@ -312,6 +315,7 @@ than the Ada box, not the GPU. It is still paid on every process start — see
   sequence length is not. A long-context workload would reach the memory and
   compute ceilings at far smaller batch, and none of the crossover points here
   transfer to it.
-- **`fp8` and quantization were not part of any of this.** Every number on this
-  page is BF16 or FP16. The `artifacts/h100-quant/` directory on the test box is
-  empty — an INT8/FP8 run on `sm90` was set up and never executed.
+- **Every number on *this page* is BF16 or FP16.** Quantization on `sm90` is
+  measured, but it lives in [quantization.md](quantization.md#fp8-granularity-on-h100)
+  rather than here, and none of the latency tables above have a quantized
+  counterpart.
