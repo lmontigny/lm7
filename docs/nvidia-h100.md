@@ -101,6 +101,48 @@ at this scale the launch count is what the clock is measuring.
 
 Parameter count does not order latency here. Layer count comes closer.
 
+## The workloads a serving engine will not take
+
+Everything above is a causal LM, which is the one workload class where H100 users
+already have better options. This section is the other half: models an LLM
+serving engine does not accept at all, run through the same `lm7.compile` call.
+
+`benchmarks/tensorrt_matrix.py`, FP16, `eager` against `inductor`:
+
+| model | batch | `eager` | `inductor` | speedup |
+| --- | --- | --- | --- | --- |
+| MLP (plain `nn.Module`) | 1 | 0.068 ms | 0.121 ms | **0.56x** |
+| | 32 | 0.065 ms | 0.127 ms | **0.51x** |
+| ResNet-18 (vision) | 1 | 1.507 ms | 0.753 ms | 2.00x |
+| | 32 | 1.635 ms | 0.930 ms | 1.76x |
+| BERT (encoder) | 1 | 3.711 ms | 2.226 ms | 1.67x |
+| | 32 | 3.630 ms | 2.169 ms | 1.67x |
+
+All twelve cells ran unmodified and agreed with eager to FP16 precision (max
+elementwise difference 9.77e-03). Nothing needed a Hopper-specific path.
+
+Only the MLP is *arbitrary* in the strict sense — a hand-written module with no
+model library behind it, which is the case
+[Optimum](../notes/competition.md) does not cover and LM7's design bet is about.
+ResNet-18 and BERT are library models; what makes them relevant here is that
+they are not causal LMs, so vLLM and TensorRT-LLM have nothing to offer them.
+
+**Compiling loses on the small MLP, at both batch sizes.** 0.121 ms against
+0.068 ms is not measurement noise, and it reproduces the Ada result (0.322 ms
+compiled against 0.235 ms eager). Below some amount of work per call there is no
+Python or launch overhead left to remove, and Inductor's own dispatch is the
+larger cost. `fallback` will not save a user from this, because nothing failed —
+it compiled fine and came out slower. Measure before assuming compilation is
+free.
+
+**Vision and encoder workloads get real speedups**, 1.67x–2.00x, on a card where
+the alternative tooling declines to run them.
+
+**The flat-latency result holds off the causal-LM path too.** ResNet-18 goes
+1.507 → 1.635 ms from batch 1 to 32, BERT 3.711 → 3.630 ms. That confirms the
+finding above is a property of the hardware at this scale rather than anything
+about transformers or about generation.
+
 ## Compile cost
 
 | model | `eager` first call | `inductor` first call | Ada `inductor` |
