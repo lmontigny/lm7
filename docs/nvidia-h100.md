@@ -60,10 +60,18 @@ The remaining thirteen report `unavailable` with an install hint, which on this
 box is accurate rather than a fault: it is a CUDA venv, and `coreml`,
 `executorch`, `openxla`, `qnn`, `tvm`, `zentorch` and the rest were never
 installed into it. `tensorrt` is among them — Torch-TensorRT sits in a separate
-`.venv-trt` on this machine that was never exercised, so **no TensorRT result on
-`sm90` exists**. The repo's TensorRT numbers come from other cards entirely:
-Ada `sm89` in [the TensorRT evaluation](nvidia-tensorrt-evaluation.md) and
-Blackwell `sm120` in [the wider sweep](tensorrt-validation.md).
+`.venv-trt` on this machine, so it is genuinely unavailable *here*. That
+environment does work on this card: `torch 2.12.1+cu130`, `torch-tensorrt 2.12.1`
+and `tensorrt 10.16.1.11` install and import against capability `(9, 0)` with no
+source build, the same way the pinned pair worked on Blackwell.
+
+**No TensorRT *latency* result on `sm90` exists**, though. The repo's TensorRT
+performance numbers come from other cards entirely: Ada `sm89` in
+[the TensorRT evaluation](nvidia-tensorrt-evaluation.md) and Blackwell `sm120` in
+[the wider sweep](tensorrt-validation.md). The one thing that environment was
+used for here is the FP8-reachability question — see
+[installing `nvidia-modelopt`](tensorrt-validation.md#installing-nvidia-modelopt-is-necessary-and-not-sufficient),
+which answers it without a single engine build.
 
 ## What compiling buys
 
