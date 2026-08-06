@@ -3,9 +3,14 @@
 # claim had never been executed on the architecture.
 #
 # RISE provides free native RISC-V GitHub Actions runners to open source
-# projects, so the claim is now testable. This job is deliberately staged and
-# non-blocking: each step reports what it found and the job never fails the
-# pull request, because the point is to learn what breaks, not to gate on it.
+# projects, so the claim is now testable. The results are written up in
+# docs/riscv.md; this file is how they were produced and how to reproduce them.
+#
+# Dispatch only, on purpose. A run costs eighteen minutes, fourteen of which are
+# numpy compiling from source, and nothing here gates a pull request -- the
+# question it answers changes when PyTorch ships a riscv64 wheel, not when LM7
+# changes. Run it from the Actions tab when that happens, or when a claim in
+# docs/riscv.md needs rechecking.
 #
 # What it cannot answer: performance. RISE runs on Scaleway EM-RV1, and the
 # "Describe the machine" step below shows why that is fatal to any speed claim --
@@ -15,26 +20,27 @@ name: RISC-V experiment
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/riscv-experiment.yml"
-      - "docs/riscv.md"
 
 permissions:
   contents: read
 
 # RISE donates this hardware, and one run occupies a four-core machine for the
-# better part of twenty minutes. Two pushes in quick succession otherwise queue
-# two full runs, which is rude on a shared fleet and tells us nothing twice.
+# better part of twenty minutes. Two dispatches in quick succession otherwise
+# queue two full runs, which is rude on a shared fleet and tells us nothing
+# twice.
 concurrency:
   group: riscv-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   riscv64:
-    name: RISC-V (experimental, non-blocking)
+    # No continue-on-error here, and none below except where an outcome is
+    # deliberately consulted. It was here to keep a failing experiment from
+    # failing a pull request; nothing gates a pull request now, and the cost was
+    # that GitHub rewrote every conclusion to `success` and showed green over a
+    # run whose Inductor compile had died. Red should mean red.
+    name: RISC-V experiment
     runs-on: ubuntu-24.04-riscv
-    continue-on-error: true
     timeout-minutes: 60
 
     # Python block-buffers stdout when it is a pipe, so a traceback on stderr
@@ -122,7 +128,6 @@ jobs:
       # on riscv64 finds no wheel and starts a source build that will not finish.
       - name: Install LM7 without letting pip resolve torch
         if: steps.torch.outcome == 'success'
-        continue-on-error: true
         run: |
           uv pip install --python "$PYBIN" --no-deps -e .
           uv pip install --python "$PYBIN" pytest
@@ -239,7 +244,6 @@ jobs:
       # with no architecture-specific code in LM7.
       - name: Does LM7 detect this machine
         if: steps.torch.outcome == 'success'
-        continue-on-error: true
         run: |
           "$PYBIN" - <<'PY'
           import platform
@@ -254,7 +258,6 @@ jobs:
 
       - name: Run the target and planner tests
         if: steps.torch.outcome == 'success'
-        continue-on-error: true
         run: |
           "$PYBIN" -m pytest tests/test_targets.py tests/test_planner.py -q
 
@@ -265,7 +268,6 @@ jobs:
       # collapsed step list.
       - name: Control -- unpatched torch 2.3, Inductor expected to fail
         if: steps.torch.outcome == 'success'
-        continue-on-error: true
         run: |
           "$PYBIN" /tmp/probe.py unpatched eager
 
@@ -274,7 +276,6 @@ jobs:
       # obstacle -- a single stale compiler flag was.
       - name: Treatment -- -march=native corrected, Inductor expected to compile
         if: steps.torch.outcome == 'success'
-        continue-on-error: true
         env:
           CXX: /tmp/shim/g++
         run: |

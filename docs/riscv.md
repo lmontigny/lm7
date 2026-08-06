@@ -85,8 +85,10 @@ could be said for the [Hexagon plan](qualcomm-hexagon.md) when it was written.
 
 [RISE](https://riseproject.dev/) gives open source projects free native RISC-V
 GitHub Actions runners (`runs-on: ubuntu-24.04-riscv`), with no approval step.
-`.github/workflows/riscv-experiment.yml` is the job; it is non-blocking, because
-its purpose is to record what breaks rather than to gate pull requests.
+`.github/workflows/riscv-experiment.yml` is the job. It runs on manual dispatch
+only — a run costs eighteen minutes and answers a question that changes when
+PyTorch ships a riscv64 wheel, not when LM7 changes. Everything below came out
+of it, and re-running it from the Actions tab is how to check any of it.
 
 The machine, as it describes itself:
 
@@ -250,11 +252,12 @@ Nor should LM7 carry the `-march` shim. It belongs to a PyTorch that has already
 been fixed, and shipping it would mean owning a compiler wrapper permanently to
 paper over a wheel that will be replaced.
 
-Keep the experimental job. Eighteen minutes on a runner nobody else is queuing
-for, non-blocking, and it converts the claims on this page into something
-checkable. The first version of this page read an eager fallback as an
-architecture's limit and said so in its opening line; that is the failure mode
-an unchecked claim has, and running it is what caught it.
+Keep the job, on manual dispatch. It gates nothing and costs nothing until
+someone runs it, and it turns the claims on this page from prose into something
+one click can recheck. That is not hypothetical: the first version of this page
+read an eager fallback as an architecture's limit and said so in its opening
+line. Running it is what caught that, and running it again is what should
+settle the next such claim.
 
 Revisit when [pytorch#171659](https://github.com/pytorch/pytorch/issues/171659)
 reaches its first phase. One thing would then be left: RVV 1.0 silicon to rent,
