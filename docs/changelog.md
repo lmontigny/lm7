@@ -37,6 +37,7 @@ file stays a index rather than a second, drifting description.
 | [#38](https://github.com/lmontigny/lm7/pull/38) | Make OpenVINO INT8 reachable from `lm7 model run` |
 | [#39](https://github.com/lmontigny/lm7/pull/39) | Refuse weight-only quantization on pre-Ampere NVIDIA |
 | [#56](https://github.com/lmontigny/lm7/pull/56) | Fix INT8 export for models that index with integer arithmetic |
+| [#106](https://github.com/lmontigny/lm7/pull/106) | Add Hopper FP8 dynamic activation and weight quantization |
 
 ## Artifacts, CLI, and generation
 
@@ -73,6 +74,7 @@ file stays a index rather than a second, drifting description.
 | [#48](https://github.com/lmontigny/lm7/pull/48) | Correct the MoE export claim, and cover a second MoE architecture |
 | [#103](https://github.com/lmontigny/lm7/pull/103) | Measure LM7 on the GPU production inference actually runs on |
 | [#104](https://github.com/lmontigny/lm7/pull/104) | Run the workloads an LLM serving engine will not take |
+| [#105](https://github.com/lmontigny/lm7/pull/105) | Find where the H100's flat-latency regime ends, and where compiling stops paying |
 
 ## Detection and diagnostics
 
