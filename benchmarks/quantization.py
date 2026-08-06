@@ -36,6 +36,7 @@ import lm7
 from lm7.detection import resolve_target, synchronize
 from lm7.huggingface import (
     FP8_DYNAMIC,
+    FP8_DYNAMIC_ROWWISE,
     NO_QUANTIZATION,
     NVFP4_DYNAMIC,
     _apply_quantization,
@@ -68,7 +69,7 @@ PROMPTS = (
 # The dynamic modes quantize activations too, so the matmul runs in the narrow
 # format instead of dequantizing to BF16 first -- the only family here that can
 # cut arithmetic rather than only bytes moved.
-MODES = ("none", "int8", "fp8", "nvfp4", FP8_DYNAMIC, NVFP4_DYNAMIC)
+MODES = ("none", "int8", "fp8", "nvfp4", FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC)
 
 
 def _dtype(name: str) -> torch.dtype:
@@ -200,9 +201,32 @@ def main() -> None:
         mode = normalize_quantization(mode)
         model, tokenizer = _load(model_id, dtype)
         _reset_peak_memory(target)
-        quantization_ms, quantized_modules = (
-            (0.0, 0) if mode == NO_QUANTIZATION else _apply_quantization(model, target, mode)
-        )
+        try:
+            quantization_ms, quantized_modules = (
+                (0.0, 0) if mode == NO_QUANTIZATION else _apply_quantization(model, target, mode)
+            )
+        except Exception as error:
+            # A mode this hardware cannot run is a result, not a crash. torchao
+            # asserts on NVFP4 activation quantization below sm100, so the default
+            # `--mode` list ends the process on every pre-Blackwell card -- after
+            # the other five modes have been measured and before anything is
+            # written, because the JSON is serialized once at the end. Record the
+            # refusal and keep the run.
+            #
+            # `none` is the exception: the accuracy and ratio baselines come from
+            # it, so continuing past a failure there would silently report every
+            # later row against nothing.
+            if mode == NO_QUANTIZATION:
+                raise
+            results.append(
+                {
+                    "quantization": mode,
+                    "unsupported": f"{type(error).__name__}: {error}",
+                }
+            )
+            print(f"{mode:>7}  unsupported on {target.architecture}: {type(error).__name__}")
+            del model
+            continue
         storage_bytes = _model_storage_bytes(model)
 
         accuracy: dict[str, Any] = {}

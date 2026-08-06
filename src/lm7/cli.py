@@ -461,12 +461,21 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--quantize",
         dest="quantization",
-        choices=("none", "int8", "fp8", "nvfp4", "fp8-dynamic", "nvfp4-dynamic"),
+        choices=(
+            "none",
+            "int8",
+            "fp8",
+            "nvfp4",
+            "fp8-dynamic",
+            "fp8-dynamic-rowwise",
+            "nvfp4-dynamic",
+        ),
         default="none",
         help=(
             "experimental quantization (default: none). The bare names are weight-only; "
             "the '-dynamic' names also quantize activations, so the matmul runs in the "
-            "narrow format"
+            "narrow format. 'fp8-dynamic' scales per tensor and "
+            "'fp8-dynamic-rowwise' per row"
         ),
     )
     # The pre-0.2 spelling, kept working so existing scripts do not break, plus the
@@ -480,6 +489,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "fp8",
             "nvfp4",
             "fp8-dynamic",
+            "fp8-dynamic-rowwise",
             "nvfp4-dynamic",
             "int8-weight-only",
             "fp8-weight-only",

@@ -10,6 +10,7 @@ from lm7.huggingface import (
     DYNAMIC_ACTIVATION_QUANTIZATIONS,
     FP8,
     FP8_DYNAMIC,
+    FP8_DYNAMIC_ROWWISE,
     INT8,
     NVFP4,
     NVFP4_DYNAMIC,
@@ -18,6 +19,7 @@ from lm7.huggingface import (
     WEIGHT_ONLY_QUANTIZATIONS,
     _apply_quantization,
     _validate_quantization,
+    fp8_scale_granularity,
     normalize_quantization,
     nvfp4_dynamic_kernel,
 )
@@ -88,7 +90,8 @@ def test_long_form_names_normalize_to_short_names():
 def test_unknown_quantization_lists_the_short_names():
     """The list names both families, so a reader sees that activation modes exist."""
     with pytest.raises(
-        UnsupportedModelError, match="none, fp8, fp8-dynamic, int8, nvfp4, nvfp4-dynamic"
+        UnsupportedModelError,
+        match="none, fp8, fp8-dynamic, fp8-dynamic-rowwise, int8, nvfp4, nvfp4-dynamic",
     ):
         validate("HuggingFaceTB/SmolLM2-135M-Instruct", "int4")
 
@@ -158,7 +161,14 @@ def test_dynamic_modes_are_separate_from_weight_only_ones():
     assert normalize_quantization("nvfp4-weight-only") == NVFP4
     assert NVFP4 in WEIGHT_ONLY_QUANTIZATIONS
     assert NVFP4 not in DYNAMIC_ACTIVATION_QUANTIZATIONS
-    assert DYNAMIC_ACTIVATION_QUANTIZATIONS == frozenset({FP8_DYNAMIC, NVFP4_DYNAMIC})
+    assert DYNAMIC_ACTIVATION_QUANTIZATIONS == frozenset(
+        {FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC}
+    )
+    # The same rule applied again: adding per-row scaling under the existing
+    # `fp8-dynamic` name would have changed what that command computes, so it is
+    # a mode of its own and `fp8-dynamic` still means per-tensor.
+    assert FP8 in WEIGHT_ONLY_QUANTIZATIONS
+    assert FP8_DYNAMIC_ROWWISE not in WEIGHT_ONLY_QUANTIZATIONS
 
 
 def test_nvfp4_dynamic_needs_blackwell_but_weight_only_does_not():
@@ -202,6 +212,64 @@ def test_dynamic_modes_convert_the_same_layers_as_their_weight_only_pair():
 
     assert _QUANTIZATION_FILTERS[FP8_DYNAMIC] is _QUANTIZATION_FILTERS[FP8]
     assert _QUANTIZATION_FILTERS[NVFP4_DYNAMIC] is _QUANTIZATION_FILTERS[NVFP4]
+    # Per-row scaling changes the scales, not the layer selection -- so the two
+    # FP8 dynamic modes stay comparable to each other and to weight-only FP8.
+    assert _QUANTIZATION_FILTERS[FP8_DYNAMIC_ROWWISE] is _QUANTIZATION_FILTERS[FP8]
+
+
+def test_fp8_dynamic_rowwise_shares_the_ada_floor():
+    """Per-row scaling is a scale layout, not new silicon: same sm89 floor as FP8."""
+    with pytest.raises(UnsupportedModelError, match="Ada"):
+        _validate_quantization(
+            FP8_DYNAMIC_ROWWISE, parse_target("nvidia:sm80"), "inductor", "auto", None
+        )
+    _validate_quantization(
+        FP8_DYNAMIC_ROWWISE, parse_target("nvidia:sm89"), "inductor", "auto", None
+    )
+    _validate_quantization(
+        FP8_DYNAMIC_ROWWISE, parse_target("nvidia:sm90"), "inductor", "auto", None
+    )
+
+
+def test_fp8_granularity_is_reported_per_mode():
+    """ "FP8 dynamic ran" and "it scaled per row" are different claims.
+
+    The two modes differ only in scale granularity, so a benchmark that does not
+    say which one it measured is not reproducible.
+    """
+    assert fp8_scale_granularity(FP8_DYNAMIC) == "per-tensor"
+    assert fp8_scale_granularity(FP8_DYNAMIC_ROWWISE) == "per-row"
+    assert fp8_scale_granularity(FP8) is None
+    assert fp8_scale_granularity(INT8) is None
+
+
+def test_fp8_dynamic_rowwise_requests_per_row_granularity():
+    """The PerRow config reaches TorchAO, rather than silently defaulting.
+
+    TorchAO's `granularity=None` resolves to PerTensor, so an omitted argument
+    and an explicit per-tensor request are indistinguishable from the call site.
+    This pins that rowwise actually passes PerRow.
+    """
+    from lm7.huggingface import _quantization_config
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] = {}
+
+        class PerRow:
+            pass
+
+        def Float8DynamicActivationFloat8WeightConfig(self, **kwargs: object) -> str:
+            self.kwargs = kwargs
+            return "config"
+
+    recorder = _Recorder()
+    assert _quantization_config(recorder, FP8_DYNAMIC) == "config"
+    assert recorder.kwargs == {}
+
+    recorder = _Recorder()
+    assert _quantization_config(recorder, FP8_DYNAMIC_ROWWISE) == "config"
+    assert isinstance(recorder.kwargs["granularity"], _Recorder.PerRow)
 
 
 def test_nvfp4_kernel_is_reported_not_assumed():

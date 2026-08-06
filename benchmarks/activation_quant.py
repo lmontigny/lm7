@@ -34,11 +34,13 @@ import torch
 from lm7.huggingface import (
     FP8,
     FP8_DYNAMIC,
+    FP8_DYNAMIC_ROWWISE,
     INT8,
     NO_QUANTIZATION,
     NVFP4,
     NVFP4_DYNAMIC,
     _apply_quantization,
+    fp8_scale_granularity,
     nvfp4_dynamic_kernel,
 )
 from lm7.targets import parse_target
@@ -47,7 +49,27 @@ from lm7.targets import parse_target
 # satisfy both so a fallback is a missing package rather than a bad shape.
 SHAPES = ((128, 4096, 4096), (256, 4096, 4096), (1024, 4096, 4096), (128, 8192, 8192))
 
-MODES = (NO_QUANTIZATION, INT8, FP8, NVFP4, FP8_DYNAMIC, NVFP4_DYNAMIC)
+MODES = (
+    NO_QUANTIZATION,
+    INT8,
+    FP8,
+    NVFP4,
+    FP8_DYNAMIC,
+    FP8_DYNAMIC_ROWWISE,
+    NVFP4_DYNAMIC,
+)
+
+
+def _observed_scale_shape(model: torch.nn.Module) -> list[int] | None:
+    """The quantized weight's scale shape, which is what granularity actually is.
+
+    `fp8-dynamic` and `fp8-dynamic-rowwise` differ only in this, and TorchAO's
+    default resolves to per-tensor rather than raising -- so asking the mode name
+    what granularity ran proves nothing. (1, 1) is per-tensor; (N, 1) is per-row.
+    """
+    weight = model.layer.mlp.down_proj.weight
+    scale = getattr(weight, "scale", None)
+    return list(scale.shape) if scale is not None else None
 
 
 class _MLP(torch.nn.Module):
@@ -137,6 +159,8 @@ def run_shape(
                 results.append(record)
                 continue
         record["converted_modules"] = converted
+        record["scale_shape"] = _observed_scale_shape(linear)
+        record["granularity"] = fp8_scale_granularity(mode)
 
         x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
         torch._dynamo.reset()
@@ -175,6 +199,7 @@ def run_shape(
                 if record.get("relative_error") is not None
                 else ""
             )
+            + (f"  scale={tuple(record['scale_shape'])}" if record.get("scale_shape") else "")
         )
         del linear, compiled
         torch.cuda.empty_cache()
