@@ -18,10 +18,8 @@ add tests with liquidAi SLM
 add MLperf ai inference test
 validate on cpu first
 use more local gpu rtx 4070s
-nvidia H100, B100, B200 for perf validation 1 gpu
 add example like https://github.com/zml/zml/tree/master/examples/llm, Llama 3.1Qwen 3.5 LFM 2.5
 add cmd to select hf model and complie it (so not pytorch code level)
-
 for edge device if OOS
 extend pytorchAO for quantization as single param at --quantize bf16/fp4/fp8
 explore very low precision binary, int2,int4 etc for weight (and activation?)
@@ -51,7 +49,7 @@ Qualcomm Hexagon NPU via ExecuTorch's QNN delegate
 optimizer Adam, SGD?
 test on saturnCloud, AWS, lightningAI
 add prompt size>1 for decode - unclear
-clarify .compile limtation, moE graph break?!
+clarify .compile limitation, moE graph break?!
 -Handling Graph Breaks Gracefully: Does your shape cache and safe eager fallback prevent hard crashes when dynamic control flow or custom Python ops break static compilation?
 -Demonstrable Performance Speedups: Show clear benchmark graphs proving that LM7’s auto-selected backend performs at least as fast as standard native vendor pipelines (e.g., native TensorRT or OpenVINO).
 risc-v
@@ -73,4 +71,6 @@ simplify readme see z, use figure to show all the backend
 add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
 add AMD Zentorch backend
+nvidia H100, B100, B200 for perf validation 1 gpu
+
 
