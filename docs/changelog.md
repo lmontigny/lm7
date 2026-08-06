@@ -71,6 +71,8 @@ file stays a index rather than a second, drifting description.
 | [#42](https://github.com/lmontigny/lm7/pull/42) | Let a CPU benchmark pin its thread count, and record the host |
 | [#43](https://github.com/lmontigny/lm7/pull/43) | Validate Llama-3.1-8B INT8 on CPU, where the weights fit |
 | [#48](https://github.com/lmontigny/lm7/pull/48) | Correct the MoE export claim, and cover a second MoE architecture |
+| [#103](https://github.com/lmontigny/lm7/pull/103) | Measure LM7 on the GPU production inference actually runs on |
+| [#104](https://github.com/lmontigny/lm7/pull/104) | Run the workloads an LLM serving engine will not take |
 
 ## Detection and diagnostics
 
