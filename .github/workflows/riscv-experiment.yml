@@ -180,11 +180,20 @@ jobs:
         run: |
           cat > /tmp/probe.py <<'PY'
           import os
+          import sys
           import traceback
 
           import lm7
           import torch
 
+          # Each arm states its expectation up front, because one of the two is
+          # supposed to fail and a reader landing on its traceback has no way to
+          # know that. An unannotated stack trace under a green check is the
+          # exact ambiguity this job exists to remove.
+          arm, expected_backend = sys.argv[1], sys.argv[2]
+
+          print(f"=== arm: {arm} ===")
+          print("expected backend:", expected_backend)
           print("torch:", torch.__version__)
           print("CXX:", os.environ.get("CXX", "<unset>"))
 
@@ -197,27 +206,33 @@ jobs:
 
           compiled = lm7.compile(model, target="cpu")
           got = compiled(x)
-          print("backend that ran:", compiled.selected_backend)
+          actual = compiled.selected_backend
+          print("backend that ran:", actual)
           print("max abs diff vs eager:", float((got - expected).abs().max()))
 
-          if compiled.selected_backend == "inductor":
+          if actual != "inductor":
+              # LM7 fell back. Re-raise the backend's own error instead of guessing
+              # at it, then show torch.compile failing the same way with LM7 out of
+              # the picture -- otherwise a reader cannot tell whose problem this is.
+              print("=== why Inductor did not run ===")
+              try:
+                  lm7.compile(model, target="cpu", fallback="error")(x)
+              except Exception:
+                  traceback.print_exc()
+
+              print("=== bare torch.compile, no LM7 in the way ===")
+              try:
+                  torch.compile(model)(x)
+                  print("torch.compile worked")
+              except Exception:
+                  traceback.print_exc()
+
+          if actual == expected_backend:
+              print(f"RESULT: {actual}, as expected for this arm.")
               raise SystemExit(0)
 
-          # LM7 fell back. Re-raise the backend's own error instead of guessing at
-          # it, then show torch.compile failing the same way with LM7 out of the
-          # picture -- otherwise a reader cannot tell whose problem this is.
-          print("=== why Inductor did not run ===")
-          try:
-              lm7.compile(model, target="cpu", fallback="error")(x)
-          except Exception:
-              traceback.print_exc()
-
-          print("=== bare torch.compile, no LM7 in the way ===")
-          try:
-              torch.compile(model)(x)
-              print("torch.compile worked")
-          except Exception:
-              traceback.print_exc()
+          print(f"RESULT: UNEXPECTED -- expected {expected_backend}, got {actual}.")
+          raise SystemExit(1)
           PY
 
       # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own,
@@ -244,21 +259,24 @@ jobs:
           "$PYBIN" -m pytest tests/test_targets.py tests/test_planner.py -q
 
       # What a RISC-V user gets today: the shim is on neither PATH nor CXX, so
-      # Inductor drives the compiler exactly as torch 2.3 configures it.
-      - name: Compile with the flags PyTorch 2.3 picks
+      # Inductor drives the compiler exactly as torch 2.3 configures it. This
+      # arm is *supposed* to fail, and its traceback is the finding, not a fault
+      # -- hence the name, which has to survive being read on its own in a
+      # collapsed step list.
+      - name: Control -- unpatched torch 2.3, Inductor expected to fail
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         run: |
-          "$PYBIN" /tmp/probe.py
+          "$PYBIN" /tmp/probe.py unpatched eager
 
       # The same probe, one flag different. If this reports `inductor` where the
-      # step above reports `eager`, then nothing about the architecture was the
+      # arm above reports `eager`, then nothing about the architecture was the
       # obstacle -- a single stale compiler flag was.
-      - name: Compile with -march=native corrected
+      - name: Treatment -- -march=native corrected, Inductor expected to compile
         if: steps.torch.outcome == 'success'
         continue-on-error: true
         env:
           CXX: /tmp/shim/g++
         run: |
           export PATH="/tmp/shim:$PATH"
-          "$PYBIN" /tmp/probe.py
+          "$PYBIN" /tmp/probe.py patched inductor
