@@ -9,6 +9,7 @@ of its kind.
 | Target | Hardware | Exercised |
 | --- | --- | --- |
 | `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. See [TensorRT](nvidia-tensorrt-evaluation.md). |
+| `nvidia:sm90` | H100 80GB HBM3 (Hopper), single card, cloud-rented | The first datacenter part, and the first NVIDIA GPU here that is neither a gaming nor a workstation card. Detection and backend selection unmodified; Inductor measured against eager on two causal LMs across batch 1–64. See [NVIDIA H100](nvidia-h100.md). |
 | `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified, plus a 106-cell TensorRT sweep across four model families, precisions, batch sizes and dynamic shapes. See [NVIDIA Blackwell](nvidia-blackwell.md) and [TensorRT validation](tensorrt-validation.md). |
 | `cpu` (AMD) | AMD EPYC 7B13 (Zen 3) | `zentorch` and CPU baselines. See [AMD CPU](amd-cpu.md). |
 | `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile (also in CI), an OpenVINO cross-check, ExecuTorch Core ML export and execution. See [Apple Silicon](apple-mps.md), [Core ML](coreml.md). |
