@@ -239,8 +239,11 @@ Unable to import quantization op. Please install modelopt library ... to add
 support for compiling quantized models
 ```
 
-The supported FP8 route is Q/DQ nodes inserted by `nvidia-modelopt`, which is not
-installed and which LM7 does not use — LM7's `fp8` is torchao. Through torchao,
+The supported FP8 route is Q/DQ nodes inserted by `nvidia-modelopt`, which LM7
+does not use — LM7's `fp8` is torchao. It has since been installed on an H100 to
+find out what it changes; the answer is
+[below](#installing-nvidia-modelopt-is-necessary-and-not-sufficient). Through
+torchao,
 on SmolLM2 with 90 quantized layers, BF16:
 
 | mode | path | engines | fallback ops | median |
@@ -262,6 +265,35 @@ answers the second one no. That is consistent with
 [nvidia-blackwell.md](nvidia-blackwell.md#native-is-not-the-same-as-used), where
 `fp4: native` also turned out to mean "the silicon could, if something asked it
 to".
+
+#### Installing `nvidia-modelopt` is necessary and not sufficient
+
+The paragraph above left an untested escape hatch: modelopt was never installed,
+so "FP8 is not reachable" could always have meant "not reachable *yet*". It has
+now been installed — `nvidia-modelopt` 0.45.0 alongside `torch 2.12.1+cu130`,
+`torch-tensorrt 2.12.1` and `tensorrt 10.16.1.11` on an H100 (`sm90`), the card
+the Q/DQ route is aimed at.
+
+It does change Torch-TensorRT, exactly as the import warning advertises. The two
+`Unable to import quantization op` lines disappear, and the converter count goes
+from 230 to **232**. The two that appear are:
+
+```text
+tensorrt.quantize_op.default
+tensorrt.dynamic_block_quantize_op.default
+```
+
+**Neither is reachable from LM7.** There is still no `aten._scaled_mm`
+converter — with modelopt or without it — and `_scaled_mm` is precisely what
+LM7's FP8 path emits, because LM7's FP8 is torchao. modelopt registers converters
+for the Q/DQ nodes *modelopt itself* inserts, so the route only opens for a graph
+that modelopt quantized.
+
+That turns a gap into a decision. Reaching TensorRT FP8 through LM7 would mean
+adopting modelopt as a second quantization frontend beside torchao, for the
+`tensorrt` backend specifically — a design change with its own dependency and
+maintenance cost, not an install step someone forgot. The conclusion above stands
+unchanged for anyone using LM7 as it is today.
 
 ## What to do with this
 
