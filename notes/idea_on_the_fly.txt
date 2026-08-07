@@ -64,6 +64,7 @@ multi-gpu?
 multi-node
 inference benchmarks -> show perf vs w/o lm7
 intel Arc gpu
+vllm serve Qwen/Qwen2.5-1.5B-Instruct
 
 
 
