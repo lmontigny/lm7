@@ -143,13 +143,20 @@ def test_a_left_padded_batch_reproduces_model_generate(backend):
     assert result.tokens.tolist() == expected[:, prompt_tokens:].tolist()
 
 
-@pytest.mark.cuda
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
 def test_decode_compiles_once_and_never_again():
-    tokenizer, model = load(torch.bfloat16)
+    """Deliberately not gated on CUDA.
+
+    Nothing about "a token must not trigger a compile" is a GPU claim — it is a
+    claim about Dynamo, which is the same compiler on either target. CPU is also
+    the only target this project has continuous-integration coverage for, so
+    gating this on a GPU would put the path's central promise where CI can never
+    check it.
+    """
+    target = resolve_target("auto")
+    tokenizer, model = load(EXACT_DTYPE)
     input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
     runner = lm7.compile_generation(
-        model, target="nvidia", backend="inductor", max_sequence_length=512
+        model, target=target, backend="inductor", max_sequence_length=512
     )
     runner.generate(input_ids, max_new_tokens=100)
 
@@ -158,6 +165,7 @@ def test_decode_compiles_once_and_never_again():
     assert steady["frames"] == 0, "a token triggered a compile"
     assert steady["recompiles"] == 0
     assert steady["graph_breaks"] == 0
+    assert runner.cache_sequence_length == input_ids.shape[-1] + 99
 
 
 @pytest.mark.cuda
