@@ -10,6 +10,7 @@ from lm7.detection import (
     _detect_tenstorrent_targets,
     _detect_tpu_targets,
     compute_capability,
+    cuda_build_targets,
     detect_cpu_target,
     detect_targets,
     nvidia_generation,
@@ -514,3 +515,51 @@ def test_precision_support_is_empty_when_it_cannot_be_known():
     assert precision_support(nvidia(None)) == {}
     assert precision_support(TargetSpec("amd", "gpu", architecture="gfx942")) == {}
     assert precision_support(TargetSpec("cpu", "cpu", architecture="x86_64")) == {}
+
+
+def test_cuda_build_targets_is_nvidia_only():
+    """The arch list describes a CUDA build, so it says nothing about anything
+    else. Returning a value for a CPU or an AMD GPU would invite reading it as
+    a property of that device."""
+    assert cuda_build_targets(TargetSpec("cpu", "cpu", architecture="x86_64")) is None
+    assert cuda_build_targets(TargetSpec("amd", "gpu", architecture="gfx942")) is None
+
+
+def test_cuda_build_targets_separates_sm90_from_sm90a(monkeypatch):
+    """From compute capability 9.0 NVIDIA splits the target: `sm_90` is portable,
+    `sm_90a` carries the architecture-specific instructions (`wgmma`, TMA) and is
+    not forward compatible. A wheel with only `sm_90` runs correctly on an H100
+    and cannot reach them, which is exactly the case measured on a real H100 --
+    torch 2.13.0+cu130 ships no `a` variant for any architecture."""
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_arch_list",
+        lambda: ["sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120"],
+    )
+    report = cuda_build_targets(nvidia("sm90"))
+    assert report is not None
+    assert report["native_kernels"] is True
+    assert report["architecture_specific"] is False
+
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["sm_90", "sm_90a"])
+    assert cuda_build_targets(nvidia("sm90"))["architecture_specific"] is True
+
+
+def test_cuda_build_targets_flags_an_architecture_without_kernels(monkeypatch):
+    """A GPU missing from the arch list still runs -- CUDA JITs it from PTX -- so
+    this is a warm-up and feature-reach caveat, not a failure. It is worth
+    reporting precisely because nothing else surfaces it."""
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["sm_80", "sm_86"])
+    report = cuda_build_targets(nvidia("sm120"))
+    assert report["native_kernels"] is False
+    assert report["arch_list"] == ["sm_80", "sm_86"]
+
+
+def test_cuda_build_targets_without_an_architecture_reports_only_the_list(monkeypatch):
+    """An unqualified `nvidia` target has no capability until it resolves against
+    hardware, so there is nothing to compare the list against."""
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["sm_90"])
+    report = cuda_build_targets(nvidia(None))
+    assert report["arch_list"] == ["sm_90"]
+    assert report["native_kernels"] is None
+    assert report["architecture_specific"] is None
