@@ -400,6 +400,20 @@ python benchmarks/decode.py --output artifacts/h100-decode/arms-sweep.json \
   --sequence-length 512 1024 2048 4096 8192 --batch-size 1 4 8 --decode-steps 100
 ```
 
+The same benchmark takes a CPU target:
+
+```bash
+python benchmarks/decode.py --target cpu --sequence-length 128 512 --batch-size 1
+```
+
+Three things differ there, and none of them is a choice about speed. It loads
+float32 rather than bfloat16, because x86 without AVX-512 has no native bfloat16
+and a bfloat16 run would measure emulation. It runs `eager` and `inductor` only,
+because the other two arms exist to ask for CUDA Graphs. And it reports no peak
+memory, because a host allocator reading is not the same measurement as
+`max_memory_allocated` and putting one under that key would invite the
+comparison.
+
 `artifacts/` is scratch and not committed, as everywhere else in this repo. Each
 run rewrites its JSON after every configuration and carries a `complete` flag,
 because a metered studio can be reclaimed mid-sweep — one of these runs was,
@@ -433,7 +447,10 @@ equal `model.generate`'s for both an unpadded and a left-padded batch, under
   successfully, ran 3.17x faster, and generated different text without raising.
 - **JIT only.** Nothing here outlives the process; the exported artifact path is
   still prefill-only. See [limitations](limitations.md).
-- **Measured on `sm90` and `sm89`.** The tables above are an H100 80GB HBM3; the
-  path also runs on an RTX 4070 SUPER (Ada, `sm89`) and on CPU, where the
-  portable tests exercise it. Nothing here has been run on AMD, Apple, or
-  anything reached through XLA.
+- **Measured on `sm90` and `sm89`.** The tables above are an H100 80GB HBM3, and
+  the path also runs on an RTX 4070 SUPER (Ada, `sm89`). It runs on CPU too —
+  correct tokens, no recompiles, and the benchmark accepts `--target cpu` — but
+  no CPU timings are quoted here, because the only CPU it has been run on is a
+  2018 desktop part and its numbers would not transfer to the server CPUs anyone
+  would serve on. Nothing here has been run on AMD, Apple, or anything reached
+  through XLA.
