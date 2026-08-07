@@ -29,6 +29,85 @@ Full architecture: [docs/architecture.md](docs/architecture.md). Current gaps
 and unproven claims: [docs/limitations.md](docs/limitations.md) — read that
 one before asserting anything is validated.
 
+## What we run, and on what
+
+Both lists are conventions rather than rules — LM7 allowlists no models and
+gates no hardware — but a measurement that reuses them is comparable to
+everything already in `docs/`, and one that invents its own is not.
+
+### Models
+
+The canonical set lives in the `HF_MODELS` dicts of `benchmarks/*.py`. Reuse
+those keys rather than adding a near-duplicate checkpoint; a new entry should
+answer a question the ladder does not.
+
+**Dense**, in increasing order of what they can tell you:
+
+| | why it's in the set |
+| --- | --- |
+| hand-built MLP | isolates the compiler from everything a real model adds — and the case where compiling *loses* |
+| ResNet-18, MobileNetV2, ViT | vision, and `torch.compile` parity in CI |
+| BERT | an encoder, so not everything is a causal LM |
+| SmolLM2-135M | the fast causal-LM smoke test; 30 layers makes it launch-bound |
+| LFM2.5-230M, Qwen3.5-0.8B, DeepSeek-Coder-1.3B | architecture variety at low cost |
+| Llama-3.2-1B | the reference model for quantization; most modes are validated here first |
+| Llama-3.1-8B | the smallest model large enough that GEMM time dominates |
+
+**Sparse MoE** is tracked separately because it behaves differently, and
+because this repo's most-corrected claims are about it — see
+[limitations](docs/limitations.md#compilation-and-artifacts):
+
+| | notes |
+| --- | --- |
+| `mixtral-tiny`, `olmoe-tiny` | hand-built 2-layer configs, no download; exercise the routing |
+| OLMoE-1B-7B (6.92B/1B active) | the largest MoE that fits an 80 GB card |
+| Qwen3-30B-A3B (~61 GB), Mixtral-8x7B (~93 GB) | need a 96 GB card |
+
+Four MoE traps, each of which has already cost someone a wrong conclusion:
+
+- **Behaviour is a property of (model, transformers version), not of "MoE".**
+  Mixtral pre-5.x fails `torch.export`; OLMoE never did; 5.x fixed both. Check
+  the pair, don't generalize from one architecture.
+- **Tiny config dimensions must be multiples of 16.** The 5.x `grouped_mm` path
+  needs strides that are multiples of 16 bytes and raises in *eager* otherwise.
+- **On transformers 5.x the experts are not `nn.Linear`.** They are the
+  parameter tensors `grouped_mm` consumes, so a 2-layer MoE has nine linears —
+  attention plus `lm_head` — and any selector keyed on `.mlp.` (the `fp8` modes)
+  matches nothing and refuses.
+- **Llama checkpoints use the `unsloth/` mirrors**, because the Meta repos are
+  gated and a rented box has no HF token.
+
+### Hardware
+
+[docs/tested-hardware.md](docs/tested-hardware.md) is the authority on what has
+actually run; this is what to reach for and why.
+
+| | use it for |
+| --- | --- |
+| RTX 4070 SUPER (Ada `sm89`, 12 GiB) | the local dev GPU — most NVIDIA numbers in this repo start here |
+| H100 80 GB HBM3 (Hopper `sm90`) | the datacenter part, rented; where a claim aimed at deployers gets checked |
+| RTX PRO 6000 Blackwell (`sm120`, 96 GiB) | rented; FP4, and the only card that fits Mixtral-8x7B |
+| AMD EPYC 7B13 (Zen 3) | CPU baselines — **AVX2 only**, so INT8 latency does not transfer |
+| Intel Xeon 8470 (Sapphire Rapids) | the H100 box's host, and the only AMX part available |
+| Apple M3 Pro / M4 / M4 Pro | MPS and Core ML; the only accelerator with real-hardware CI |
+| TPU v6e, single chip | `openxla`; one chip says nothing about sharding |
+| Snapdragon 8 Elite | `qualcomm:sm8750`, cloud-rented physical device |
+
+- **The GPUs above `sm89` are rented Lightning Studios and metered.** Collect
+  JSON into `artifacts/` on the box and author docs locally afterwards; don't
+  write prose on a rented GPU. Per-box setup traps (the `python3.12-dev` header
+  Inductor needs, the pinned TensorRT venv, no `rsync`) are worth re-reading
+  before starting rather than rediscovering.
+- **Card capacity decides the model list.** 80 GB rules out Mixtral-8x7B at
+  BF16; check before planning a sweep around it.
+- **Never mix harnesses in one comparison.** `benchmarks/moe.py` and
+  `benchmarks/nvidia_matrix.py` build inputs differently and disagree by 2.3x on
+  the same card and model — enough to invert a conclusion. State which harness
+  produced a number.
+- **AMD ROCm GPU, Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have
+  never run on real hardware.** Those adapters are unit-tested against mocks, so
+  say "implemented" and not "validated".
+
 ## Adding or changing a backend
 
 Nearly every backend PR in this repo's history follows the same shape — do
