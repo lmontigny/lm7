@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import statistics
 import sys
+import time
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -30,6 +33,16 @@ from .huggingface import (
 )
 from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
+from .runtimes import (
+    ServeConfig,
+    engine_dir,
+    engine_identity,
+    inspect_runtimes,
+    reusable,
+    write_manifest,
+)
+from .runtimes import registry as runtime_registry
+from .runtimes.tensorrt_llm import DTYPES, QUANTIZATIONS
 from .targets import DeviceInfo, TargetSpec
 
 
@@ -103,6 +116,105 @@ def _doctor_data() -> dict[str, Any]:
         "targets": [_target_data(device) for device in detect_targets()],
         "backends": list(inspect_backends()),
     }
+
+
+def _print_runtimes(runtimes: list[dict[str, Any]]) -> None:
+    print(f"Registered runtimes ({len(runtimes)}):")
+    for runtime in runtimes:
+        state = (
+            f"available, version {runtime['version']}" if runtime["available"] else "unavailable"
+        )
+        print(f"  {runtime['name']}: {state}")
+        if not runtime["available"]:
+            print(f"    {runtime['reason']}")
+
+
+def _serve(args: argparse.Namespace) -> None:
+    """Resolve, check, and hand over. Everything after `prepare` is the runtime's.
+
+    The steps before it are the ones LM7 owns and are worth doing in this order:
+    an unavailable runtime should be reported before a target is resolved (the
+    dependency message is the actionable one), and an unsupported configuration
+    before an engine directory is touched.
+    """
+    runtime = runtime_registry.get(args.runtime)
+    info = runtime.probe()
+    if not info.available:
+        raise LM7Error(info.reason)
+
+    target = resolve_target(args.target)
+    config = ServeConfig(
+        dtype=args.dtype,
+        max_batch_size=args.max_batch_size,
+        max_input_len=args.max_input_len,
+        max_output_len=args.max_output_len,
+        kv_cache_free_gpu_memory_fraction=args.kv_cache_fraction,
+        quantization=args.quantize,
+    )
+    support = runtime.supports(target, args.model, config)
+    if not support.supported:
+        raise LM7Error(support.reason)
+
+    identity = engine_identity(info, target, args.model, config)
+    directory = engine_dir(identity, Path(args.engine_dir) if args.engine_dir else None)
+    matched, why = reusable(directory, identity)
+    # Deliberately *not* called "reusing". LM7 computes and records the engine
+    # identity, but does not yet hand TensorRT-LLM an engine path, so the runtime
+    # builds its own every time -- measured at 30.2 s and 30.7 s for the same
+    # config, with the manifest matching on the second run. Reporting that as a
+    # cache hit would be a claim the timing contradicts.
+    print(
+        f"engine manifest {directory} ({'matches' if matched else 'absent'}: {why}); "
+        "TensorRT-LLM still builds its own engine",
+        file=sys.stderr,
+    )
+
+    started = time.perf_counter()
+    prepared = runtime.prepare(target, args.model, config)
+    prepare_seconds = time.perf_counter() - started
+    write_manifest(directory, identity)
+
+    # TTFT and inter-token latency are measured here rather than inside the
+    # runtime, because they are what a deployer compares across runtimes and a
+    # number each runtime reports for itself is not comparable to the next one.
+    deltas: list[float] = []
+    first_token_seconds: float | None = None
+    started = time.perf_counter()
+    previous = started
+    for chunk in runtime.generate(prepared, args.prompt, max_new_tokens=args.max_new_tokens):
+        if not chunk.text:
+            continue
+        now = time.perf_counter()
+        if first_token_seconds is None:
+            first_token_seconds = now - started
+        else:
+            deltas.append(now - previous)
+        previous = now
+        if not args.json:
+            print(chunk.text, end="", flush=True)
+    total_seconds = time.perf_counter() - started
+
+    if args.json:
+        _emit_json(
+            {
+                "runtime": runtime.name,
+                "model": args.model,
+                "target": _target_spec_data(target),
+                "config": config.as_dict(),
+                "engine_dir": str(directory),
+                # Whether LM7's manifest matched -- not whether the runtime
+                # skipped a build. See the note where this is printed.
+                "engine_manifest_matched": matched,
+                "engine_build_skipped": False,
+                "prepare_seconds": prepare_seconds,
+                "ttft_seconds": first_token_seconds,
+                "inter_token_median_ms": ((statistics.median(deltas) * 1000.0) if deltas else None),
+                "generated_chunks": len(deltas) + (1 if first_token_seconds is not None else 0),
+                "total_seconds": total_seconds,
+            }
+        )
+    else:
+        print()
 
 
 def _target_spec_from_data(value: dict[str, Any]) -> TargetSpec:
@@ -431,6 +543,30 @@ def _build_parser() -> argparse.ArgumentParser:
     backends_parser = subparsers.add_parser("backends", help="list registered compiler backends")
     _add_json_argument(backends_parser)
 
+    runtimes_parser = subparsers.add_parser(
+        "runtimes", help="list registered serving runtimes (experimental)"
+    )
+    runtimes_parser.add_argument("--json", action="store_true")
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="stream generation through a serving runtime (experimental)"
+    )
+    serve_parser.add_argument("model", help="Hugging Face model id or local path")
+    serve_parser.add_argument("--target", default="nvidia")
+    # Required rather than defaulted: a serving runtime has its own dependency
+    # set and its own operational behaviour, so it is an explicit choice.
+    serve_parser.add_argument("--runtime", required=True, choices=("tensorrt-llm",))
+    serve_parser.add_argument("--prompt", default="The capital of France is")
+    serve_parser.add_argument("--max-new-tokens", type=int, default=64)
+    serve_parser.add_argument("--dtype", choices=DTYPES, default="bfloat16")
+    serve_parser.add_argument("--quantize", choices=QUANTIZATIONS, default="none")
+    serve_parser.add_argument("--max-batch-size", type=int, default=8)
+    serve_parser.add_argument("--max-input-len", type=int, default=1024)
+    serve_parser.add_argument("--max-output-len", type=int, default=256)
+    serve_parser.add_argument("--kv-cache-fraction", type=float, default=0.85)
+    serve_parser.add_argument("--engine-dir", help="override the engine cache root")
+    serve_parser.add_argument("--json", action="store_true")
+
     explain_parser = subparsers.add_parser("explain", help="explain backend selection for a target")
     explain_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     explain_parser.add_argument(
@@ -627,6 +763,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             backends = list(inspect_backends())
             data = {"backends": backends}
             _emit_json(data) if args.json else _print_backends(backends)
+        elif args.command == "runtimes":
+            runtimes = list(inspect_runtimes())
+            _emit_json({"runtimes": runtimes}) if args.json else _print_runtimes(runtimes)
+        elif args.command == "serve":
+            _serve(args)
         elif args.command == "explain":
             data = _explain_data(args.target, args.backend)
             _emit_json(data) if args.json else _print_explanation(data)
