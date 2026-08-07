@@ -21,7 +21,7 @@ runner = lm7.compile_generation(
     target="nvidia",
     max_batch_size=1,
     max_sequence_length=8192,
-    compile_mode="reduce-overhead",   # ask Inductor for CUDA Graphs
+    compile_mode="reduce-overhead",  # ask Inductor for CUDA Graphs
 )
 
 state = runner.prefill(input_ids)
@@ -61,10 +61,10 @@ the gates in [quantization.md](quantization.md).
 ## What the runner reports
 
 ```python
-runner.counters      # {"prefill": {...}, "decode": {...}, "steady": {...}}
-runner.cudagraphs    # per phase: requested, skips, and whether capture happened
-runner.cache_bytes   # KV bytes allocated on the device
-runner.cache_sequence_length   # what the cache itself thinks it holds
+runner.counters  # {"prefill": {...}, "decode": {...}, "steady": {...}}
+runner.cudagraphs  # per phase: requested, skips, and whether capture happened
+runner.cache_bytes  # KV bytes allocated on the device
+runner.cache_sequence_length  # what the cache itself thinks it holds
 ```
 
 `counters["steady"]` is the one that matters. It accumulates over every call that

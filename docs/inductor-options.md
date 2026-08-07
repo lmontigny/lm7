@@ -153,9 +153,7 @@ invisible; for a model that mutates something it is not.
 `options={"warmup": False}` declines it:
 
 ```python
-compiled = lm7.compile(
-    model, target="nvidia", backend="inductor", options={"warmup": False}
-)
+compiled = lm7.compile(model, target="nvidia", backend="inductor", options={"warmup": False})
 ```
 
 The trade is explicit. `torch.compile` then stays lazy, so compilation happens on
