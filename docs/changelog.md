@@ -52,6 +52,7 @@ file stays a index rather than a second, drifting description.
 | [#40](https://github.com/lmontigny/lm7/pull/40) | Refuse an artifact built for a different GPU architecture |
 | [#47](https://github.com/lmontigny/lm7/pull/47) | Add Hugging Face model compatibility preflight |
 | [#54](https://github.com/lmontigny/lm7/pull/54) | Add artifact inspection command |
+| [#112](https://github.com/lmontigny/lm7/pull/112) | Add separate compiled prefill and KV-cache decode graphs |
 
 ## On-device validation
 

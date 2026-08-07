@@ -89,6 +89,69 @@ def test_compile_mode_rejects_backend_options(monkeypatch):
     assert calls == {}
 
 
+def test_the_warmup_call_is_on_by_default_and_can_be_declined(monkeypatch):
+    """Compiling by executing is the default, and is not free for every model.
+
+    A graph that writes into a KV cache advances it once per execution, so an
+    unasked-for warmup consumes a cache slot the caller never asked for — see
+    src/lm7/generation.py. `warmup: False` is how such a caller opts out, and it
+    must not reach torch.compile as an Inductor config key.
+    """
+    calls = install_fake_compile(monkeypatch)
+    executed = []
+
+    class Counting(torch.nn.Module):
+        def forward(self, x):
+            executed.append(x)
+            return x
+
+    warm = InductorBackend().compile(
+        CompileRequest(
+            Counting().eval(), TargetSpec("cpu", "cpu"), "lazy", "automatic", "error", {}
+        ),
+        (torch.ones(1),),
+        {},
+    )
+    assert len(executed) == 1
+    assert warm.metadata["warmup"] is True
+    assert warm.metadata["cudagraph_skips"] == 0
+
+    cold = InductorBackend().compile(
+        CompileRequest(
+            Counting().eval(),
+            TargetSpec("cpu", "cpu"),
+            "lazy",
+            "automatic",
+            "error",
+            {"warmup": False},
+        ),
+        (torch.ones(1),),
+        {},
+    )
+    assert len(executed) == 1, "warmup=False still executed the model"
+    assert cold.metadata["warmup"] is False
+    # Nothing has run, so neither answer is known and neither is claimed.
+    assert cold.metadata["cudagraph_skips"] is None
+    assert cold.metadata["cudagraphs_active"] is None
+    assert calls["options"] is None
+
+
+def test_warmup_can_be_declined_alongside_a_preset(monkeypatch):
+    """`warmup` is a backend control, not a config key, so a preset still works."""
+    calls = install_fake_compile(monkeypatch)
+
+    artifact = InductorBackend().compile(
+        request({"compile_mode": "reduce-overhead", "warmup": False}),
+        (torch.ones(1),),
+        {},
+    )
+
+    assert calls["mode"] == "reduce-overhead"
+    assert calls["options"] is None
+    assert artifact.metadata["cudagraphs"] is True
+    assert artifact.metadata["cudagraphs_active"] is None
+
+
 def test_cudagraph_request_is_read_from_the_preset_not_the_name():
     """Two of the four preset names say nothing about CUDA Graphs, and one of
     those two enables them. `reduce-overhead` and `max-autotune` set

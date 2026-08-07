@@ -308,6 +308,20 @@ fixed-shape decode graph against a static KV cache for every token. Greedy-only,
 and requires a Transformers causal LM supporting static caching — see
 [compiled generation](docs/huggingface-generation.md).
 
+That command hands the loop to Transformers. To hold the two phases apart
+yourself — a compiled prefill, a compiled decode step, one cache you keep, and a
+count of everything that recompiled — use `lm7.compile_generation`:
+
+```python
+runner = lm7.compile_generation(model, target="nvidia", max_sequence_length=8192)
+
+state = runner.prefill(input_ids)
+token, state = runner.decode(state.next_token, state)
+```
+
+See [prefill and KV-cache decode](docs/kv-cache-decode.md) for the API and the
+H100 numbers.
+
 ## 5. Export an artifact
 
 Capture a model and reload it in another process:

@@ -143,10 +143,34 @@ The practical rule: keep step counters in tensors or pass them as arguments, and
 check `cudagraph_skips` and the frame count separately. A model can be capturing
 CUDA Graphs perfectly while recompiling on every call.
 
+### A stateful model may not want the warmup call either
+
+LM7's Inductor backend compiles by *calling* the compiled artifact once, so that
+a compilation failure raises `CompilationError` inside the backend where
+`fallback` can act on it. For a stateless forward that extra execution is
+invisible; for a model that mutates something it is not.
+
+`options={"warmup": False}` declines it:
+
+```python
+compiled = lm7.compile(model, target="nvidia", backend="inductor", options={"warmup": False})
+```
+
+The trade is explicit. `torch.compile` then stays lazy, so compilation happens on
+the caller's own first call and a failure surfaces there rather than as a
+`CompilationError` the planner can fall back from — and `cudagraph_skips` and
+`cudagraphs_active` come back `None` in the artifact metadata, because nothing
+has run yet and neither answer is known.
+
+`lm7.compile_generation` is the caller this exists for: its decode graph writes
+into a KV cache that advances once per execution, so an unasked-for warmup spends
+a cache slot and, at a long enough prompt, indexes past the end of the buffer.
+See [prefill and KV-cache decode](kv-cache-decode.md#compiling-a-graph-that-writes-into-a-cache).
+
 ## Individual Inductor options
 
 Instead of a preset, pass individual backend options. LM7 removes its own
-`dynamic` and `fullgraph` keys and forwards every remaining key through
+`dynamic`, `fullgraph` and `warmup` keys and forwards every remaining key through
 `torch.compile(options=...)`.
 
 ```python

@@ -92,6 +92,7 @@ class InductorBackend:
             compile_mode = options.pop("compile_mode", None)
             dynamic = options.pop("dynamic", None)
             fullgraph = options.pop("fullgraph", False)
+            warmup = bool(options.pop("warmup", True))
             if compile_mode is not None and options:
                 names = ", ".join(sorted(options))
                 raise CompilationError(
@@ -109,13 +110,24 @@ class InductorBackend:
             )
             # torch.compile is lazy: the first call is part of compilation and must
             # remain inside this error boundary so configured fallback can work.
-            warmup_args = _map_tensors(example_args, lambda tensor: tensor.to(device))
-            warmup_kwargs = _map_tensors(example_kwargs, lambda tensor: tensor.to(device))
+            #
+            # `warmup=False` gives that up, and exists for models where compiling by
+            # executing is not free. A graph that writes into a KV cache advances it
+            # once per execution, so a warmup call consumes cache slots the caller
+            # never asked for -- at a long enough prompt, past the end of the buffer
+            # and into a device-side assert. Such a caller compiles on its own first
+            # call instead, which means a compilation failure surfaces there rather
+            # than as a CompilationError here, and `fallback` cannot act on it.
+            # See src/lm7/generation.py.
             requested = cudagraphs_requested(compile_mode, options)
-            skips_before = cudagraph_skips()
-            with torch.inference_mode():
-                compiled(*warmup_args, **warmup_kwargs)
-            skipped = cudagraph_skips() - skips_before
+            skipped: int | None = None
+            if warmup:
+                warmup_args = _map_tensors(example_args, lambda tensor: tensor.to(device))
+                warmup_kwargs = _map_tensors(example_kwargs, lambda tensor: tensor.to(device))
+                skips_before = cudagraph_skips()
+                with torch.inference_mode():
+                    compiled(*warmup_args, **warmup_kwargs)
+                skipped = cudagraph_skips() - skips_before
             return Artifact(
                 self.name,
                 request.target,
@@ -123,14 +135,16 @@ class InductorBackend:
                 metadata={
                     "compiled": True,
                     "compile_mode": compile_mode,
-                    # Two separate facts, because a preset can ask for CUDA Graphs
+                    "warmup": warmup,
+                    # Three separate facts, because a preset can ask for CUDA Graphs
                     # and Inductor can still decline: `cudagraphs` is what the
                     # configuration requested, `cudagraph_skips` is how many times
-                    # capture was refused during this compile. Both zero means the
-                    # preset never asked.
+                    # capture was refused during this compile, and `cudagraphs_active`
+                    # is the conjunction. The last two are None without a warmup,
+                    # because nothing has run yet and neither answer is known.
                     "cudagraphs": requested,
                     "cudagraph_skips": skipped,
-                    "cudagraphs_active": requested and skipped == 0,
+                    "cudagraphs_active": (requested and skipped == 0) if warmup else None,
                 },
             )
         except Exception as exc:
