@@ -222,9 +222,8 @@ than an argument.
 
 100 steps is short enough that a slow leak would hide in it. A separate run of
 1,000 decode steps over 16 configurations says it does not: zero recompiles
-again, and
-`cache_sequence_length` equal to prompt + 1,000 in every one — the positions and
-the cache stayed in step for the whole run.
+again, and `cache_sequence_length` equal to prompt + 1,000 in every one — the
+positions and the cache stayed in step for the whole run.
 
 Per-token latency over 1,000 steps against the same configuration over 100:
 
@@ -284,8 +283,9 @@ that nearly every configuration disagrees for the same reason.
 
 ## Compiling a graph that writes into a cache
 
-Two things had to change before a stateful graph could go through LM7 at all, and
-both fail the same way: fluent, wrong output, with nothing raised.
+Three things had to change before a stateful graph could go through LM7 at all.
+Two of them fail the same way — fluent, wrong output with nothing raised — and
+the third refuses to run at all, but only for quantized models.
 
 ### A backend that compiles by executing consumes a cache slot
 
@@ -348,9 +348,49 @@ growing the mask is a write rather than a new graph.
 Pass a mask only for a padded batch. `None` means "every position is real", which
 is correct for equal-length prompts and is what the benchmarks measure.
 
+### Weights cannot move device inside inference mode
+
+The third one is FP8-only and does raise, which makes it the easy one — but only
+after it has taken out every quantized configuration in a sweep at once:
+
+```text
+RuntimeError: _apply(): Couldn't swap Linear.weight
+```
+
+LM7's backends move the model to the target device as part of compiling,
+compiling happens inside the first call, and this runner makes that call under
+`torch.inference_mode()`. `Module._apply` cannot swap a parameter that is a
+tensor subclass in that context — and a TorchAO-quantized linear is exactly a
+tensor subclass, so this is every FP8 model and no others.
+
+The runner therefore moves the weights itself in its constructor and asks the
+backend for `transfers="explicit"`, so nothing tries to move anything from inside
+the compiling call. That also puts the weights and the cache on the device at the
+same, predictable moment rather than at the first token.
+
 ## What recompiles
 
-<!-- RECOMPILE -->
+`prefill` compiles once per distinct prompt length, and `decode` compiles once,
+full stop. In the H100 sweep every compiled arm reported exactly one Dynamo frame
+per phase and nothing at all afterwards.
+
+Two things that do *not* trigger a recompile, and are worth knowing do not:
+
+- **Decoding further.** The cache position is a tensor whose *value* changes and
+  whose shape does not, so 1,000 steps is one graph — confirmed above.
+- **A second sequence.** `reset()` zeroes the cache in place and reuses both
+  graphs and both buffers.
+
+Two that do:
+
+- **A new prompt length**, which is a new prefill graph. `runner.compiled_prefill_lengths`
+  lists the ones already paid for.
+- **A different batch size**, which the runner refuses outright rather than
+  quietly recompiling — the cache is allocated for one batch, and see
+  [Limits](#limits).
+
+None of this is inferred. `runner.counters` reports it per phase, and the
+benchmark fails a configuration whose `steady` frames are nonzero.
 
 ## Reproducing this
 
