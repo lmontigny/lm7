@@ -14,6 +14,11 @@ from Inductor's codegen.
     python benchmarks/decode.py --output artifacts/decode.json
     python benchmarks/decode.py --sequence-length 512 8192 --batch-size 1 4 8 \
         --quantization none fp8-dynamic --decode-steps 1000
+    python benchmarks/decode.py --target cpu --sequence-length 128 512
+
+A CPU target runs the two arms that do not want CUDA Graphs, in float32 rather
+than bfloat16 -- see `DTYPES`. Peak memory is not reported there, because a host
+allocator number is not the same measurement as `max_memory_allocated`.
 
 Every configuration reports what compiled and how often. `steady` counters that
 are anything but zero mean a token triggered a compile, which is the failure this
@@ -33,7 +38,7 @@ from typing import Any
 import torch
 
 import lm7
-from lm7.detection import resolve_target, synchronize
+from lm7.detection import detect_targets, resolve_target, synchronize
 from lm7.huggingface import (
     FP8,
     FP8_DYNAMIC,
@@ -67,6 +72,40 @@ ARMS: dict[str, dict[str, Any]] = {
 
 SEQUENCE_LENGTHS = (512, 1024, 2048, 4096, 8192)
 BATCH_SIZES = (1, 4, 8)
+
+# CUDA Graphs are a CUDA feature, so the two arms that request them have nothing
+# to offer a CPU run -- `reduce-overhead` there is `inductor` under another name.
+CPU_ARMS = ("eager", "inductor")
+
+# The same policy `lm7.huggingface` applies to quantized runs, for the same
+# reason: x86 without AVX-512 has no native bfloat16, so a CPU run in bfloat16
+# measures emulation rather than the decode path.
+DTYPES = {"cpu": torch.float32}
+DEFAULT_DTYPE = torch.bfloat16
+
+
+def _is_cuda(target: Any) -> bool:
+    return target.vendor in {"nvidia", "amd"}
+
+
+def _reset_peak_memory(target: Any) -> None:
+    if _is_cuda(target):
+        torch.cuda.reset_peak_memory_stats()
+
+
+def _peak_memory(target: Any) -> int | None:
+    """Device bytes at peak, or None where the concept does not apply.
+
+    None rather than a host RSS reading. A CPU allocator number is not comparable
+    to `max_memory_allocated`, and reporting one under the same key would invite
+    exactly that comparison.
+    """
+    return int(torch.cuda.max_memory_allocated()) if _is_cuda(target) else None
+
+
+def _release(target: Any) -> None:
+    if _is_cuda(target):
+        torch.cuda.empty_cache()
 
 
 # A paragraph of ordinary English, tokenized and then tiled to whatever length is
@@ -111,8 +150,9 @@ def _prompt(
 def _load(model_id: str, quantization: str, target: Any) -> tuple[Any, Any, float, int]:
     import transformers
 
+    dtype = DTYPES.get(target.vendor, DEFAULT_DTYPE)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).eval()
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype).eval()
     quantization_ms, converted = 0.0, 0
     if quantization != NO_QUANTIZATION:
         quantization_ms, converted = _apply_quantization(model, target, quantization)
@@ -171,7 +211,7 @@ def _measure(
     record["cudagraphs"] = runner.cudagraphs
     record["cache_bytes"] = runner.cache_bytes
 
-    torch.cuda.reset_peak_memory_stats()
+    _reset_peak_memory(target)
     prefill_samples: list[float] = []
     decode_samples: list[float] = []
     steady_before = runner.counters["steady"]
@@ -192,7 +232,7 @@ def _measure(
     record["ms_per_token"] = record["decode_ms"] / decode_steps
     record["decode_tokens_per_second"] = decode_steps * batch / (record["decode_ms"] / 1000.0)
     record["prefill_tokens_per_second"] = length * batch / (record["prefill_ms"] / 1000.0)
-    record["peak_memory_bytes"] = int(torch.cuda.max_memory_allocated())
+    record["peak_memory_bytes"] = _peak_memory(target)
     # The cache's own count, not the runner's bookkeeping. They agree only while
     # every execution of a graph is one the caller asked for -- see
     # GenerationRunner._warm -- and a mismatch means every token after the first
@@ -225,8 +265,8 @@ def run_configuration(
         **ARMS[arm],
     }
     torch._dynamo.reset()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
+    _release(target)
+    _reset_peak_memory(target)
     try:
         _measure(
             model_id,
@@ -245,7 +285,7 @@ def run_configuration(
         record.update(
             {"works": False, "error_type": type(error).__name__, "error": str(error)[:400]}
         )
-    torch.cuda.empty_cache()
+    _release(target)
     return record
 
 
@@ -288,8 +328,12 @@ def _print(record: dict[str, Any]) -> None:
         f"{head} prefill={record['prefill_ms']:8.1f}ms"
         f" decode={record['ms_per_token']:6.3f}ms/tok"
         f" {record['decode_tokens_per_second']:8.1f}tok/s"
-        f" vram={record['peak_memory_bytes'] / 2**30:5.1f}GiB"
-        f" kv={record['cache_bytes'] / 2**30:4.2f}GiB"
+        + (
+            f" vram={record['peak_memory_bytes'] / 2**30:5.1f}GiB"
+            if record.get("peak_memory_bytes")
+            else ""
+        )
+        + f" kv={record['cache_bytes'] / 2**30:4.2f}GiB"
         f" recompiled={record['recompiled_during_decode']!s:<5}"
         f" captured={captured}"
     )
@@ -301,7 +345,9 @@ def main() -> None:
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--target", default="nvidia")
-    parser.add_argument("--arm", nargs="+", choices=tuple(ARMS), default=list(ARMS))
+    # No default: an unset `--arm` means "whatever this target can run", which is
+    # every arm on a GPU and the two that do not want CUDA Graphs on a CPU.
+    parser.add_argument("--arm", nargs="+", choices=tuple(ARMS), default=None)
     parser.add_argument(
         "--quantization", nargs="+", choices=QUANTIZATIONS, default=[NO_QUANTIZATION]
     )
@@ -319,9 +365,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
 
-    if not torch.cuda.is_available():
-        raise SystemExit("This benchmark needs a CUDA GPU.")
     target = resolve_target(arguments.target)
+    arms = arguments.arm or (list(CPU_ARMS) if target.vendor == "cpu" else list(ARMS))
+    unavailable = [arm for arm in arms if ARMS[arm]["compile_mode"] and target.vendor == "cpu"]
+    if unavailable:
+        raise SystemExit(
+            f"{', '.join(unavailable)} request CUDA Graphs, which {target} does not have. "
+            f"On a CPU target the arms are: {', '.join(CPU_ARMS)}."
+        )
     synchronize(target)
 
     results: list[dict[str, Any]] = []
@@ -339,8 +390,9 @@ def main() -> None:
                 "torch": torch.__version__,
                 "transformers": _version("transformers"),
                 "torchao": _version("torchao"),
-                "device": torch.cuda.get_device_name(0),
-                "capability": "sm{}{}".format(*torch.cuda.get_device_capability(0)),
+                "target": str(target),
+                "device": _device_name(target),
+                "dtype": str(DTYPES.get(target.vendor, DEFAULT_DTYPE)).removeprefix("torch."),
                 "host": platform.node(),
             },
             "model": arguments.model,
@@ -368,7 +420,7 @@ def main() -> None:
             for batch in arguments.batch_size:
                 print(f"{quantization} sequence={length} batch={batch}", flush=True)
                 group: list[dict[str, Any]] = []
-                for arm in arguments.arm:
+                for arm in arms:
                     record = run_configuration(
                         arguments.model,
                         arm=arm,
@@ -391,6 +443,14 @@ def main() -> None:
     write(final=True)
     if output is not None:
         print(f"JSON: {output}")
+
+
+def _device_name(target: Any) -> str:
+    """Whatever this target calls itself, without assuming it is a GPU."""
+    for device in detect_targets():
+        if device.target.vendor == target.vendor and device.target.kind == target.kind:
+            return device.name
+    return str(target)
 
 
 def _version(name: str) -> str | None:
