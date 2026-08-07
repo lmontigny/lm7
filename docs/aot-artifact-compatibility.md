@@ -13,6 +13,7 @@ on three machines, all `torch 2.13.0+cu130` / CUDA 13.0:
 | **B1** | RTX PRO 6000 Blackwell (`sm120`), driver 580.126.20 | Lightning studio, 48 vCPU, network filesystem | the MLP |
 | **B2** | the same card, same driver | a second Lightning studio, 16 vCPU, local overlay | SmolLM2, Llama-3.2-1B |
 | **A** | RTX 4070 SUPER (`sm89`), driver 595.71 | local WSL2 box | the foreign-architecture and cross-version artifacts |
+| **H** | H100 80GB HBM3 (`sm90`), driver 580.173.02 | Lightning studio, 24 vCPU Xeon 8470 | [the Hopper rows](#hopper-sm90-a-third-architecture) |
 
 Timings are never compared across those rows: B1 has three times the cores of
 B2, and A was shared with another workload throughout. Where a comparison
@@ -179,6 +180,71 @@ GB Llama artifact. The pages really were evicted (`POSIX_FADV_DONTNEED` after a
 sync, and the harness records whether the call was available); reload is bound by
 decompressing and linking, not by reading. Storage speed is not where this cost
 lives.
+
+## Hopper (`sm90`), a third architecture
+
+Machine **H**, `torch 2.13.0+cu130`, CUDA 13.0, Python 3.12.3. Same harness, same
+three models, every stage a separate process.
+
+| model | capture | Inductor | artifact | `lm7.load_artifact` cold | warm | `aoti_load_package` cold | ratio | to first inference |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| MLP | 1.34 s | 22.56 s | 35 MB | 3.222 s | 3.289 s | 3.216 s | 1.00x | 5.30 s |
+| SmolLM2-135M | 3.23 s | 41.70 s | 0.55 GB | 6.332 s | 6.165 s | 3.725 s | 1.70x | 9.60 s |
+| Llama-3.2-1B | 2.00 s | 55.22 s | 4.95 GB | 13.144 s | 12.272 s | 5.179 s | 2.54x | 37.30 s |
+
+Every reload agreed with the in-process reference (`max_abs_diff` 0.0 on the MLP,
+FP16-level on the two causal LMs), and none imported `transformers` or
+`torchvision`.
+
+**Artifact bytes are identical across architectures.** 0.55 GB and 4.95 GB here
+match machine B2 exactly, and the MLP's 35 MB matches B1's 35.2 MB. The payload
+is the same size whichever card built it — only the time to produce it moves.
+
+**Hopper builds and reloads roughly 1.8x slower than Blackwell.** The MLP takes
+23.9 s to build here against 13.13 s on B1 (Inductor 22.56 s against 12.29 s),
+and reloads in 3.222 s against 1.779 s. That is worth stating because
+"datacenter part" reads as "faster": on this workload the RTX PRO 6000 wins, the
+same way it does on the small launch-bound benchmarks in
+[NVIDIA H100](nvidia-h100.md).
+
+**The `lm7.load_artifact` overhead reproduces.** The 2.5x ratio B2 measured on
+Llama-3.2-1B lands at 2.54x here, and SmolLM2's 2.0x at 1.70x. That is the
+checksum-and-`torch.export.load` cost [already broken down above](#on-a-1b-model-loading-the-artifact-costs-what-compiling-it-costs),
+confirmed on a second architecture rather than a new finding.
+
+Phases of the cold `lm7.load_artifact` process:
+
+| phase | MLP | SmolLM2 | Llama-3.2-1B |
+| --- | --- | --- | --- |
+| `import torch` | 1266 ms | 1352 ms | 1669 ms |
+| `import lm7` | 28 ms | 28 ms | 45 ms |
+| CUDA context init | 129 ms | 126 ms | 170 ms |
+| reload the artifact | 3222 ms | 6332 ms | 13144 ms |
+
+> [!NOTE]
+> **Llama-3.2-1B's cold time to first inference (37.30 s) is not reproducible and
+> should not be quoted.** Warm is 13.98 s for the same artifact, while the raw
+> `aoti_load_package` path moves only 7.17 s → 6.78 s. A 4.95 GB payload read for
+> the first time off a Lightning studio's filesystem is the obvious explanation
+> and it was not isolated. The `load_ms` column above is the number to compare;
+> it is stable cold-to-warm (13.144 s against 12.272 s).
+
+### The architecture guard on a third card
+
+All six mismatch cases were checked against all three models — **18 of 18
+rejected, every one with a clear message**:
+
+```text
+its aot_inductor payload was built for nvidia:sm89, but this machine is
+nvidia:sm90
+```
+
+That is the guard refusing an `sm89`-labelled artifact on Hopper, which
+previously had only been shown as `sm89` refused on `sm120`. Three architectures
+make it a property rather than a coincidence between two cards.
+
+The seventh case, `torch-version`, needs a second interpreter via
+`--other-python` and was **not** run here; its result is the `sm120` one.
 
 ## What an artifact refuses
 
