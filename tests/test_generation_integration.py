@@ -62,40 +62,55 @@ def test_runner_reproduces_model_generate(backend):
     assert runner.cache_sequence_length == result.state.sequence_length
 
 
+def logits_along_a_fixed_path(model, input_ids, backend, dtype, forced):
+    """Decode a *given* token sequence, collecting the logits at each step.
+
+    Forced rather than greedy, and that is the whole point. If each runner
+    follows its own argmax, the moment one token differs the two are decoding
+    different sentences, and comparing their logits after that measures the
+    sentences rather than the arithmetic. Feeding both the same tokens keeps every
+    step's inputs identical, so a difference is a difference in kernels.
+    """
+    del dtype
+    torch._dynamo.reset()
+    runner = lm7.compile_generation(
+        model, target="nvidia", backend=backend, max_sequence_length=128
+    )
+    state = runner.prefill(input_ids)
+    collected = [state.logits.float().cpu()]
+    for token in forced:
+        _, state = runner.decode(torch.tensor([[token]], device=runner.device), state)
+        collected.append(state.logits.float().cpu())
+    return collected
+
+
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
-def test_bfloat16_decode_tracks_eager_in_logits():
-    """What compiled bfloat16 decoding can be held to, and what it cannot.
-
-    It cannot be held to the same tokens. An argmax turns any rounding difference
-    into a different word, and Inductor's kernels do not round like eager's — on
-    Llama-3.2-1B the two agree for twelve tokens and then part company. The logits
-    behind that argmax are the quantity that survives the format, so this checks
-    those, against the same runner with no compiler under it.
-    """
-    tokenizer, model = load(torch.bfloat16)
+@pytest.mark.parametrize(
+    ("dtype", "tolerance"),
+    (
+        # The two bounds are four orders of magnitude apart, and that gap is the
+        # measurement. On an RTX 4070 SUPER along this fixed path, compiled and
+        # eager logits differ by 1.3e-06 of the logit scale in float32 and by
+        # 2.1e-02 in bfloat16 -- noise against something an argmax can act on.
+        # This is why the token tests above demand exact equality in float32 and
+        # nothing demands it in bfloat16. See docs/kv-cache-decode.md.
+        (torch.float32, 1e-5),
+        (torch.bfloat16, 5e-2),
+    ),
+)
+def test_compiled_decode_tracks_eager_in_logits(dtype, tolerance):
+    tokenizer, model = load(dtype)
     input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
-    steps = 8
+    forced = tokenizer(" Paris is the capital city of", return_tensors="pt").input_ids[0].tolist()
 
-    def logits_per_step(backend: str) -> list[torch.Tensor]:
-        torch._dynamo.reset()
-        runner = lm7.compile_generation(
-            model, target="nvidia", backend=backend, max_sequence_length=128
-        )
-        state = runner.prefill(input_ids)
-        collected = [state.logits.float().cpu()]
-        for _ in range(steps):
-            _, state = runner.decode(state.next_token, state)
-            collected.append(state.logits.float().cpu())
-        return collected
-
-    reference = logits_per_step("eager")
-    compiled = logits_per_step("inductor")
+    reference = logits_along_a_fixed_path(model, input_ids, "eager", dtype, forced)
+    compiled = logits_along_a_fixed_path(model, input_ids, "inductor", dtype, forced)
     for step, (want, got) in enumerate(zip(reference, compiled)):
         difference = (want - got).abs().max().item()
         scale = want.abs().max().item()
-        assert difference / scale < 0.05, (
-            f"step {step}: {difference:.3f} against a scale of {scale:.3f}"
+        assert difference <= tolerance * scale, (
+            f"step {step}: {difference:.4f} against a scale of {scale:.3f}"
         )
 
 
