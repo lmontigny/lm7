@@ -282,6 +282,19 @@ class GenerationRunner:
         # when the signature names it and cannot be quietly swallowed.
         self._logits_to_keep = _LOGITS_TO_KEEP in named
 
+        # The weights move here, not on the first call, and that is load-bearing
+        # rather than tidy. LM7's backends move the model as part of compiling,
+        # and compiling happens inside the first call -- which this runner makes
+        # under `inference_mode`, where `Module.to` cannot swap a parameter that
+        # is a tensor subclass:
+        #
+        #     RuntimeError: _apply(): Couldn't swap Linear.weight
+        #
+        # which is every TorchAO-quantized linear, so every FP8 model. Moving
+        # first and telling the backend transfers are explicit means nothing tries
+        # to move anything again from inside that context.
+        model.to(self.device)
+
         # The cache is allocated here rather than on the first call because the
         # runner's whole promise is that the buffers exist before decoding starts
         # and do not move afterwards. That means the device has to be known now,
@@ -309,7 +322,7 @@ class GenerationRunner:
             _PrefillGraph(model, self._logits_to_keep).eval(),
             target=target,
             backend=backend if compile_prefill else "eager",
-            transfers="automatic",
+            transfers="explicit",
             fallback="error",
             cache=False,
             options=options if compile_prefill else None,
@@ -318,7 +331,7 @@ class GenerationRunner:
             _DecodeGraph(model, self._logits_to_keep).eval(),
             target=target,
             backend=backend,
-            transfers="automatic",
+            transfers="explicit",
             fallback="error",
             cache=False,
             options=options,
@@ -343,11 +356,11 @@ class GenerationRunner:
     def counters(self) -> dict[str, dict[str, int]]:
         """Compilation counters per phase, as deltas.
 
-        ``prefill`` and ``decode`` cover the warmups where compilation happens,
-        summed over every shape that needed one. ``steady`` accumulates every call
-        that produced an answer, and is the number this path exists to make
-        checkable: anything nonzero in ``steady["frames"]`` means a token
-        triggered a compile.
+        ``prefill`` and ``decode`` cover the first call at each shape, which is
+        where compilation happens, summed over every shape that needed one.
+        ``steady`` accumulates every call after that, and is the number this path
+        exists to make checkable: anything nonzero in ``steady["frames"]`` means a
+        token triggered a compile.
         """
         return {
             "prefill": self.prefill_compile.to_dict(),

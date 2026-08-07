@@ -83,6 +83,25 @@ class FakeCausalLM(torch.nn.Module):
         return SimpleNamespace(logits=logits)
 
 
+class QuantizedLikeModel(FakeCausalLM):
+    """A model that refuses to change device inside inference mode.
+
+    Which is what a TorchAO-quantized one does. Its parameters are tensor
+    subclasses, and ``Module._apply`` cannot swap those under ``inference_mode``:
+
+        RuntimeError: _apply(): Couldn't swap Linear.weight
+
+    LM7's backends move the model as part of compiling, and compiling happens
+    inside the first call — so a runner that made that call under inference mode
+    would break every FP8 model, and only FP8 models.
+    """
+
+    def _apply(self, *args, **kwargs):
+        if torch.is_inference_mode_enabled():
+            raise RuntimeError("_apply(): Couldn't swap Linear.weight")
+        return super()._apply(*args, **kwargs)
+
+
 class NoCacheModel(torch.nn.Module):
     def forward(self, input_ids):  # no past_key_values, no cache_position, no **kwargs
         return SimpleNamespace(logits=torch.zeros(*input_ids.shape, VOCAB))
@@ -202,6 +221,22 @@ def test_the_inductor_path_advances_the_cache_exactly_once_per_call(fake_cache, 
         tokens.append(int(token))
     assert tokens == expected
     assert runner.cache_sequence_length == state.sequence_length
+
+
+def test_the_model_moves_device_before_anything_runs(fake_cache, monkeypatch):
+    """The regression that makes FP8 reachable from this path at all.
+
+    See ``QuantizedLikeModel``. The runner moves the weights itself, in its
+    constructor, and asks the backend for explicit transfers so nothing tries to
+    move them again from inside the inference-mode call that compiles.
+    """
+    monkeypatch.setattr(torch, "compile", lambda model, **kwargs: model)
+    runner = lm7.compile_generation(
+        QuantizedLikeModel(), target="cpu", backend="inductor", max_sequence_length=16
+    )
+    assert runner._decode_graph.transfers == "explicit"
+    result = runner.generate(torch.tensor([[3, 1, 4]]), max_new_tokens=4)
+    assert result.tokens.shape == (1, 4)
 
 
 def test_graphs_are_compiled_without_a_backend_warmup(fake_cache, monkeypatch):

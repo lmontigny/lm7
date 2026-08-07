@@ -38,11 +38,21 @@ def reference_tokens(model, input_ids, max_new_tokens: int) -> list[int]:
     return generated[0, input_ids.shape[-1] :].tolist()
 
 
+# float32 deliberately, on GPU as well as CPU. Greedy decoding is token-exact
+# only when the arithmetic is: measured on this model in bfloat16 on an RTX 4070
+# SUPER, Transformers' *own* dynamic and static caches produce different text
+# from each other by the fifth token, so "matches model.generate" is not a well
+# defined assertion there. It is in float32, where every arm agrees exactly —
+# runner and `model.generate`, eager and Inductor and CUDA Graphs.
+# `test_bfloat16_decode_tracks_eager_in_logits` covers the narrow format with the
+# quantity that survives it. See docs/kv-cache-decode.md.
+EXACT_DTYPE = torch.float32
+
+
 @pytest.mark.parametrize("backend", ("eager", "inductor"))
 def test_runner_reproduces_model_generate(backend):
     target = resolve_target("auto")
-    dtype = torch.float32 if target.vendor == "cpu" else torch.bfloat16
-    tokenizer, model = load(dtype)
+    tokenizer, model = load(EXACT_DTYPE)
     input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
     expected = reference_tokens(model, input_ids, 12)
 
@@ -50,6 +60,43 @@ def test_runner_reproduces_model_generate(backend):
     result = runner.generate(input_ids, max_new_tokens=12)
     assert result.tokens[0].tolist() == expected
     assert runner.cache_sequence_length == result.state.sequence_length
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_bfloat16_decode_tracks_eager_in_logits():
+    """What compiled bfloat16 decoding can be held to, and what it cannot.
+
+    It cannot be held to the same tokens. An argmax turns any rounding difference
+    into a different word, and Inductor's kernels do not round like eager's — on
+    Llama-3.2-1B the two agree for twelve tokens and then part company. The logits
+    behind that argmax are the quantity that survives the format, so this checks
+    those, against the same runner with no compiler under it.
+    """
+    tokenizer, model = load(torch.bfloat16)
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    steps = 8
+
+    def logits_per_step(backend: str) -> list[torch.Tensor]:
+        torch._dynamo.reset()
+        runner = lm7.compile_generation(
+            model, target="nvidia", backend=backend, max_sequence_length=128
+        )
+        state = runner.prefill(input_ids)
+        collected = [state.logits.float().cpu()]
+        for _ in range(steps):
+            _, state = runner.decode(state.next_token, state)
+            collected.append(state.logits.float().cpu())
+        return collected
+
+    reference = logits_per_step("eager")
+    compiled = logits_per_step("inductor")
+    for step, (want, got) in enumerate(zip(reference, compiled)):
+        difference = (want - got).abs().max().item()
+        scale = want.abs().max().item()
+        assert difference / scale < 0.05, (
+            f"step {step}: {difference:.3f} against a scale of {scale:.3f}"
+        )
 
 
 @pytest.mark.parametrize("backend", ("eager", "inductor"))
@@ -61,8 +108,7 @@ def test_a_left_padded_batch_reproduces_model_generate(backend):
     fluent text. Only the cache-length mask the runner builds matches.
     """
     target = resolve_target("auto")
-    dtype = torch.float32 if target.vendor == "cpu" else torch.bfloat16
-    tokenizer, model = load(dtype)
+    tokenizer, model = load(EXACT_DTYPE)
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
