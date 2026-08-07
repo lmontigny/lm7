@@ -143,6 +143,77 @@ the same shape as the MLP compile result already on the H100 page.
 and CPU scalars, bumping a skip counter rather than raising. All three cells here
 captured with zero skips, so the 3.95x is graphs and not something else.
 
+## Sparse MoE
+
+The `moe` plan covers two hand-built two-layer configs, which cost no download,
+and `allenai/OLMoE-1B-7B-0924-Instruct` (6.92B total, 1B active), the largest
+sparse MoE that fits an 80 GB card. `qwen3-30b-a3b` and `mixtral-8x7b` are
+reachable by name for a bigger one — Mixtral-8x7B peaks at 93.4 GB in BF16, so
+it is deliberately outside the plan.
+
+| model | `eager` | `inductor` | `+cudagraphs` | peak VRAM |
+| --- | --- | --- | --- | --- |
+| mixtral-tiny | 2.748 ms | 0.957 ms (2.87x) | **0.438 ms** (6.27x) | 0.03 GB |
+| olmoe-tiny | 3.048 ms | 0.993 ms (3.07x) | **0.362 ms** (8.42x) | 0.03 GB |
+| OLMoE-1B-7B | 18.847 ms | 4.861 ms (3.88x) | 4.290 ms (4.39x) | 13.87 GB |
+
+**Sparse routing does not prevent CUDA Graph capture.** All three captured with
+zero skips, including the 6.92B model. That is worth pinning rather than
+assuming: the router is exactly the sort of data-dependent control flow capture
+declines, and on transformers 4.57.3 `aten.nonzero` in that router broke Dynamo
+[eight or nine times per model](limitations.md#what-torchcompile-actually-does-to-a-sparse-moe).
+The `grouped_mm` rewrite in 5.x removed both problems at once.
+
+**The CUDA Graph gain shrinks as work per launch grows**, and it does not track
+parameter count. The tiny configs gain 6–8x, SmolLM2-135M gains 3.95x at 30
+layers, and OLMoE-1B-7B gains 1.13x over plain `inductor` at 16 layers and 50x
+the parameters. Graph replay removes launch overhead, so what predicts the win is
+how many launches there are and how little each one does.
+
+### FP8 on a sparse MoE is refused, correctly
+
+Every FP8 cell fails, on both architectures and at both scales, with:
+
+```text
+fp8 matched no quantizable layers in this model, so quantization would silently
+do nothing. It selects linears whose module path contains '.mlp.', and this
+model has none. Use quantization='none'. Try int8, which selects every linear
+except lm_head.
+```
+
+The cause is the same `grouped_mm` rewrite. On transformers 5.x the per-expert
+`nn.Linear` modules are gone, replaced by the parameter tensors `grouped_mm`
+consumes, so a two-layer MoE has **nine** linears — attention plus `lm_head` —
+and none of them under `.mlp.`. There is nothing for the FP8 selector to match.
+
+The plan keeps one such cell per tiny architecture, because a refusal that stays
+a refusal is a regression test: silently converting nothing and reporting an FP8
+latency would be far worse than failing.
+
+> [!NOTE]
+> The suggested `int8` fallback selects every linear except `lm_head`, which on
+> an MoE is attention only — the experts hold most of the parameters and are not
+> linears. Expect a much smaller footprint saving than on a dense model. That
+> follows from the module structure above and has **not** been measured.
+
+### Do not compare these numbers to `benchmarks/moe.py`
+
+`moe.py` and this suite build their inputs differently, and the gap is large
+enough to invert a conclusion. On the same H100, same model, same session:
+
+| harness | eager | inductor | speedup | peak VRAM |
+| --- | --- | --- | --- | --- |
+| `nvidia_matrix.py` | 18.847 ms | 4.861 ms | **3.88x** | 13.9 GB |
+| `moe.py` | 26.520 ms | 15.379 ms | **1.72x** | 27.7 GB |
+
+Taking the suite's 3.88x against the published Blackwell 1.60x would have read as
+Hopper crushing Blackwell on MoE. Measured through the *same* harness, Blackwell
+is ahead — 17.88 ms eager and 11.20 ms compiled against Hopper's 26.520 and
+15.379 — and the speedup ratios are close, 1.60x against 1.72x.
+
+`moe.py` also reports `graphs=1, breaks=0` for the 6.92B model here, reproducing
+on `sm90` the zero-graph-break result previously measured only on `sm120`.
+
 ## What this suite does not do
 
 - **No multi-GPU.** One device, matching LM7's scope.

@@ -53,8 +53,33 @@ HF_MODELS = {
     "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
     "llama31-8b": "unsloth/Llama-3.1-8B-Instruct",
+    # Sparse MoE. OLMoE is 6.92B total / 1B active and fits anywhere; the other
+    # two are here so a large card can reach them, and they are deliberately not
+    # in the `moe` plan -- Mixtral-8x7B peaks at 93.4 GB in BF16, which is more
+    # than an 80 GB H100 has. See docs/limitations.md for the measurements.
+    "olmoe-1b-7b": "allenai/OLMoE-1B-7B-0924-Instruct",
+    "qwen3-30b-a3b": "Qwen/Qwen3-30B-A3B",
+    "mixtral-8x7b": "mistralai/Mixtral-8x7B-Instruct-v0.1",
 }
-MODELS = ("mlp", "resnet18", *HF_MODELS)
+
+# Hand-built two-layer MoE configs, mirroring benchmarks/moe.py and
+# examples/sparse_moe.py. They cost no download and exercise the routing, which
+# is the part that behaves differently from a dense model. Dimensions are
+# multiples of 16 because the transformers 5.x `grouped_mm` path requires
+# strides that are multiples of 16 bytes and raises in eager otherwise.
+_TINY_MOE = {
+    "vocab_size": 256,
+    "hidden_size": 64,
+    "intermediate_size": 64,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,
+    "max_position_embeddings": 64,
+}
+TINY_MOE_MODELS = ("mixtral-tiny", "olmoe-tiny")
+
+MODELS = ("mlp", "resnet18", *HF_MODELS, *TINY_MOE_MODELS)
+MOE_MODELS = (*TINY_MOE_MODELS, "olmoe-1b-7b", "qwen3-30b-a3b", "mixtral-8x7b")
 
 # compile_mode per path; None means the backend takes no Inductor preset.
 PATHS: dict[str, dict[str, Any]] = {
@@ -77,7 +102,7 @@ PATHS: dict[str, dict[str, Any]] = {
     "inductor-fp8-dynamic": {"backend": "inductor", "quantize": "fp8-dynamic"},
 }
 
-CAUSAL_LM_MODELS = ("smollm2", "llama32-1b", "llama31-8b")
+CAUSAL_LM_MODELS = ("smollm2", "llama32-1b", "llama31-8b", *MOE_MODELS)
 
 PROMPT = "The capital of France is"
 
@@ -129,6 +154,9 @@ def build(name: str, dtype: torch.dtype) -> tuple[torch.nn.Module, tuple[torch.T
             (torch.randn(8, 3, 224, 224, dtype=dtype),),
         )
 
+    if name in TINY_MOE_MODELS:
+        return _build_tiny_moe(name, dtype)
+
     from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 
     model_id = HF_MODELS[name]
@@ -144,6 +172,32 @@ def build(name: str, dtype: torch.dtype) -> tuple[torch.nn.Module, tuple[torch.T
         _TensorOut(model, kind).eval(),
         (encoded["input_ids"], encoded["attention_mask"]),
     )
+
+
+def _build_tiny_moe(
+    name: str, dtype: torch.dtype
+) -> tuple[torch.nn.Module, tuple[torch.Tensor, ...]]:
+    """A two-layer sparse MoE with random weights and no tokenizer.
+
+    Random weights are fine because every metric here is either mechanical
+    (latency, VRAM, CUDA Graph capture) or a parity check against eager on the
+    same weights. They are *not* fine for accuracy, which is why no accuracy
+    number is reported for these two.
+    """
+    if name == "olmoe-tiny":
+        from transformers import OlmoeConfig, OlmoeForCausalLM
+
+        built = OlmoeForCausalLM(OlmoeConfig(num_experts=8, num_experts_per_tok=2, **_TINY_MOE))
+    else:
+        from transformers import MixtralConfig, MixtralForCausalLM
+
+        built = MixtralForCausalLM(
+            MixtralConfig(num_local_experts=4, num_experts_per_tok=2, **_TINY_MOE)
+        )
+    built = built.eval().to(dtype=dtype)
+    built.config.use_cache = False
+    input_ids = torch.randint(0, _TINY_MOE["vocab_size"], (1, 16))
+    return _TensorOut(built, "causal-lm"), (input_ids, torch.ones_like(input_ids))
 
 
 def _versions(backend: str) -> dict[str, str | None]:
@@ -402,6 +456,26 @@ def plan(name: str) -> list[list[str]]:
         ]
     if name == "large":
         return [["--model", "llama31-8b", "--path", path] for path in portable]
+    if name == "moe":
+        # OLMoE-1B-7B is the largest MoE that fits an 80 GB card; Mixtral-8x7B
+        # (93.4 GB in BF16) and Qwen3-30B-A3B are reachable by name on a bigger
+        # one.
+        #
+        # One FP8 cell per architecture, on the tiny configs only, because the
+        # answer is a refusal and costs nothing to record: transformers 5.x
+        # replaced per-expert `nn.Linear` modules with the parameter tensors
+        # `grouped_mm` consumes, so a two-layer MoE has nine linears -- attention
+        # plus `lm_head` -- and none under `.mlp.`. LM7 raises rather than
+        # converting nothing, and pinning that refusal is worth one cheap cell.
+        # Repeating it on a 6.92B download would buy the same answer.
+        return [
+            ["--model", model, "--path", path, "--dtype", "bfloat16"]
+            for model in (*TINY_MOE_MODELS, "olmoe-1b-7b")
+            for path in ("eager", "inductor", "inductor-cudagraphs")
+        ] + [
+            ["--model", model, "--path", "inductor-fp8", "--dtype", "bfloat16"]
+            for model in TINY_MOE_MODELS
+        ]
     if name == "tensorrt":
         return [
             ["--model", model, "--path", path]
