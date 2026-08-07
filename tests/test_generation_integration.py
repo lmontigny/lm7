@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import os
+
+import pytest
+import torch
+
+import lm7
+from lm7.detection import resolve_target
+
+MODEL_ID = "HuggingFaceTB/SmolLM2-135M-Instruct"
+PROMPT = "The capital of France is"
+RUN_HF_TESTS = os.environ.get("LM7_RUN_HF_TESTS") == "1"
+
+pytestmark = [
+    pytest.mark.hf,
+    pytest.mark.skipif(not RUN_HF_TESTS, reason="set LM7_RUN_HF_TESTS=1"),
+]
+
+
+def load(dtype: torch.dtype):
+    transformers = pytest.importorskip("transformers")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_ID)
+    model = transformers.AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=dtype).eval()
+    return tokenizer, model
+
+
+def reference_tokens(model, input_ids, max_new_tokens: int) -> list[int]:
+    """What ``model.generate`` produces, which is the only bar that matters here.
+
+    A decode path that is fast and wrong is worse than no decode path, and the
+    ways this one can be wrong — a cache written at the position the caller meant
+    versus the position the cache itself is at, a graph executed once more than
+    the caller asked for — all produce fluent text rather than an error.
+    """
+    with torch.inference_mode():
+        generated = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False)
+    return generated[0, input_ids.shape[-1] :].tolist()
+
+
+@pytest.mark.parametrize("backend", ("eager", "inductor"))
+def test_runner_reproduces_model_generate(backend):
+    target = resolve_target("auto")
+    dtype = torch.float32 if target.vendor == "cpu" else torch.bfloat16
+    tokenizer, model = load(dtype)
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    expected = reference_tokens(model, input_ids, 12)
+
+    runner = lm7.compile_generation(model, target=target, backend=backend, max_sequence_length=128)
+    result = runner.generate(input_ids, max_new_tokens=12)
+    assert result.tokens[0].tolist() == expected
+    assert runner.cache_sequence_length == result.state.sequence_length
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_decode_compiles_once_and_never_again():
+    tokenizer, model = load(torch.bfloat16)
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    runner = lm7.compile_generation(
+        model, target="nvidia", backend="inductor", max_sequence_length=512
+    )
+    runner.generate(input_ids, max_new_tokens=100)
+
+    assert runner.counters["decode"]["frames"] >= 1
+    steady = runner.counters["steady"]
+    assert steady["frames"] == 0, "a token triggered a compile"
+    assert steady["recompiles"] == 0
+    assert steady["graph_breaks"] == 0
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_reduce_overhead_captures_the_decode_step():
+    """Requesting CUDA Graphs and getting them are different things.
+
+    The decode graph mutates KV-cache buffers in place, which is the pattern
+    Inductor normally declines to capture — see benchmarks/cudagraphs.py. It works
+    here because the cache is materialized on the device before tracing, which is
+    what lets Transformers mark its buffers as static addresses.
+    """
+    tokenizer, model = load(torch.bfloat16)
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    runner = lm7.compile_generation(
+        model,
+        target="nvidia",
+        backend="inductor",
+        compile_mode="reduce-overhead",
+        max_sequence_length=512,
+    )
+    result = runner.generate(input_ids, max_new_tokens=32)
+
+    decode = runner.cudagraphs["decode"]
+    assert decode["cudagraphs"] is True
+    assert decode["cudagraphs_active"] is True, f"capture was refused: {decode}"
+    assert result.tokens.shape == (1, 32)
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_cuda_graph_replay_does_not_alias_the_returned_logits():
+    """Each step's logits must survive the next replay.
+
+    A captured graph writes its output into one static buffer, so a state holding
+    the raw tensor starts describing a later token as soon as one is decoded.
+    """
+    tokenizer, model = load(torch.bfloat16)
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    runner = lm7.compile_generation(
+        model,
+        target="nvidia",
+        backend="inductor",
+        compile_mode="reduce-overhead",
+        max_sequence_length=512,
+    )
+    state = runner.prefill(input_ids)
+    _, state = runner.decode(state.next_token, state)
+    returned = state.logits
+    snapshot = returned.clone()
+    for _ in range(4):
+        _, state = runner.decode(state.next_token, state)
+    assert torch.equal(returned, snapshot), "a later replay overwrote an earlier step's logits"
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
+def test_cache_stays_on_the_gpu():
+    tokenizer, model = load(torch.bfloat16)
+    runner = lm7.compile_generation(
+        model, target="nvidia", backend="inductor", max_sequence_length=256
+    )
+    layer = runner.past_key_values.layers[0]
+    assert layer.keys.device.type == "cuda"
+    assert runner.cache_bytes > 0
+    input_ids = tokenizer(PROMPT, return_tensors="pt").input_ids
+    before = layer.keys.data_ptr()
+    runner.generate(input_ids, max_new_tokens=8)
+    assert layer.keys.data_ptr() == before, "the cache buffer was reallocated mid-run"
