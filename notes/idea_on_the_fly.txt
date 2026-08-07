@@ -62,6 +62,7 @@ lm7.serve()  <-- see chatGPT chat details
 use Modal coins
 multi-gpu?
 multi-node
+inference benchmarks -> show perf vs w/o lm7
 
 
 
