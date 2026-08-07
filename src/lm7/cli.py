@@ -16,7 +16,7 @@ from .backends.base import CompileRequest
 from .bundles import create_bundle, load_bundle
 from .cache import cache_dir
 from .compatibility import ModelCompatibilityResult, inspect_hf_model
-from .detection import detect_targets, resolve_target
+from .detection import cuda_build_targets, detect_targets, resolve_target
 from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
 from .hexagon import HexagonToolchainDiagnostics, diagnose_hexagon_toolchain
@@ -46,6 +46,11 @@ def _target_data(device: DeviceInfo) -> dict[str, Any]:
         "name": device.name,
         "total_memory_bytes": device.total_memory_bytes,
         "capabilities": dict(device.capabilities),
+        **(
+            {"cuda_build": build_targets}
+            if (build_targets := cuda_build_targets(target)) is not None
+            else {}
+        ),
     }
 
 

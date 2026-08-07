@@ -303,6 +303,47 @@ def precision_support(target: TargetSpec) -> dict[str, str]:
     }
 
 
+def cuda_build_targets(target: TargetSpec) -> dict[str, Any] | None:
+    """Which CUDA architectures the installed PyTorch was *built* for.
+
+    `precision_support` describes the silicon. This describes the wheel, and the
+    two disagree more often than is comfortable: a format the hardware computes
+    natively is still unreachable if the PyTorch build shipped no kernels for
+    this architecture, in which case CUDA JITs from PTX at first use -- slower to
+    start, and only for features PTX can express.
+
+    From compute capability 9.0 onward NVIDIA splits the target in two. `sm_90`
+    is the portable, forward-compatible one; `sm_90a` adds the
+    architecture-specific instructions (Hopper's `wgmma` and TMA among them) and
+    is *not* forward compatible, so a kernel needing them must be compiled for
+    the `a` variant explicitly. A build carrying only `sm_90` runs correctly on
+    an H100 and cannot reach those instructions at all. Reporting the arch list
+    is the difference between "my GPU supports this" and "my install can use it".
+
+    Returns None for anything that is not a resolved NVIDIA target, or when
+    torch reports no arch list (a CPU-only build).
+    """
+    if target.vendor != "nvidia":
+        return None
+    capability = compute_capability(target)
+    try:
+        architectures = list(torch.cuda.get_arch_list())
+    except Exception:  # noqa: BLE001 - a torch without CUDA answers nothing useful
+        return None
+    if not architectures:
+        return None
+    native = f"sm_{capability}" if capability is not None else None
+    return {
+        "arch_list": architectures,
+        # Whether this exact architecture has compiled kernels in the wheel. False
+        # means it runs by JIT-ing PTX from an older target, which is legal and
+        # slower to warm up.
+        "native_kernels": native in architectures if native else None,
+        # The `a` variant, which is what architecture-specific instructions need.
+        "architecture_specific": (f"{native}a" in architectures) if native else None,
+    }
+
+
 def tpu_accelerator_type() -> str | None:
     """Report the TPU generation and slice, for example ``v6e-1``.
 
