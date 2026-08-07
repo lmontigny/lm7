@@ -59,6 +59,9 @@ class FakeCausalLM(torch.nn.Module):
         self.config = SimpleNamespace(
             hidden_size=8, num_attention_heads=2, num_key_value_heads=1, head_dim=4
         )
+        # Every mask this model was handed, so a test can check the shape the
+        # runner widened it to rather than only the tokens that came out.
+        self.masks: list[torch.Tensor | None] = []
 
     def forward(
         self,
@@ -69,7 +72,8 @@ class FakeCausalLM(torch.nn.Module):
         use_cache=True,
         **kwargs,
     ):
-        del attention_mask, use_cache, kwargs
+        del use_cache, kwargs
+        self.masks.append(None if attention_mask is None else attention_mask.clone())
         past_key_values.write(input_ids)
         stored = past_key_values.layers[0].keys[:, 0, :, 0].sum(dim=-1).long()
         position = int(cache_position[-1])
@@ -244,6 +248,54 @@ def test_a_second_sequence_reuses_the_cache_and_repeats_itself(fake_cache):
     first = runner.generate(prompt, max_new_tokens=5)
     second = runner.generate(prompt, max_new_tokens=5)
     assert torch.equal(first.tokens, second.tokens)
+
+
+def test_an_unpadded_batch_sends_no_mask(fake_cache):
+    runner = build()
+    state = runner.prefill(torch.tensor([[3, 1, 4]]))
+    assert state.attention_mask is None
+    assert runner.model.masks == [None]
+
+
+def test_a_padded_batch_gets_a_cache_length_mask_that_grows(fake_cache):
+    """The prompt's mask is widened once, then extended a slot per token.
+
+    Transformers builds the decode step's mask against the whole static cache, so
+    a prompt-length mask describes the wrong thing as soon as a token is decoded —
+    and describes it fluently rather than raising. Cache length is also a fixed
+    shape, so growing it is a write and not a new graph.
+    """
+    runner = build(max_batch_size=2, max_sequence_length=16)
+    prompt = torch.tensor([[0, 0, 3, 1], [2, 7, 5, 9]])
+    mask = torch.tensor([[0, 0, 1, 1], [1, 1, 1, 1]])
+
+    state = runner.prefill(prompt, mask)
+    assert state.attention_mask is not None
+    assert tuple(state.attention_mask.shape) == (2, 16)
+    assert state.attention_mask.sum(-1).tolist() == [2, 4]
+
+    for _ in range(3):
+        _, state = runner.decode(state.next_token, state)
+    # Three decoded positions became attendable; the left padding never did.
+    assert state.attention_mask.sum(-1).tolist() == [5, 7]
+    assert state.attention_mask[:, :4].tolist() == mask.tolist()
+    assert all(tuple(seen.shape) == (2, 16) for seen in runner.model.masks)
+
+
+def test_a_second_sequence_rebuilds_the_mask(fake_cache):
+    runner = build(max_batch_size=2, max_sequence_length=16)
+    state = runner.prefill(torch.zeros(2, 4, dtype=torch.long), torch.tensor([[0, 0, 1, 1]] * 2))
+    for _ in range(3):
+        _, state = runner.decode(state.next_token, state)
+    assert state.attention_mask.sum(-1).tolist() == [5, 5]
+    state = runner.prefill(torch.zeros(2, 4, dtype=torch.long), torch.ones(2, 4, dtype=torch.long))
+    assert state.attention_mask.sum(-1).tolist() == [4, 4]
+
+
+def test_a_mask_of_the_wrong_shape_is_refused(fake_cache):
+    runner = build(max_batch_size=2, max_sequence_length=16)
+    with pytest.raises(ValueError, match="prompt's own"):
+        runner.prefill(torch.zeros(2, 4, dtype=torch.long), torch.ones(2, 16, dtype=torch.long))
 
 
 def test_reset_empties_the_cache(fake_cache):

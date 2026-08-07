@@ -157,6 +157,10 @@ class GenerationState:
     sequence_length: int
     next_token: torch.Tensor
     logits: torch.Tensor
+    # None when the batch is unpadded, which is the common case and the one the
+    # benchmarks measure. Otherwise a (batch, max_sequence_length) mask, mutated
+    # in place per step exactly as the cache is.
+    attention_mask: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +330,7 @@ class GenerationRunner:
         # but the kernels is on it; `fill_` enqueues instead.
         self._decode_position = torch.zeros(1, dtype=torch.long, device=self.device)
 
+        self._attention_mask: torch.Tensor | None = None
         self.prefill_compile = ZERO_COUNTERS
         self.decode_compile = ZERO_COUNTERS
         self.steady = ZERO_COUNTERS
@@ -412,27 +417,37 @@ class GenerationRunner:
     def prefill(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> GenerationState:
-        """Run the prompt through the model, filling the cache from position zero."""
+        """Run the prompt through the model, filling the cache from position zero.
+
+        ``attention_mask`` is the prompt's own ``(batch, prompt)`` mask, as a
+        tokenizer produces it for a left-padded batch. Pass it here and nowhere
+        else: the runner widens it to cache length and extends it by one slot per
+        decoded token, which is what the decode step actually needs. See
+        ``_cache_length_mask``.
+        """
         input_ids = self._check_prompt(input_ids)
         length = int(input_ids.shape[-1])
         cache_position = torch.arange(length, device=self.device)
+        self._attention_mask = self._cache_length_mask(attention_mask, input_ids.shape)
         # A prompt pass is compiled per length. That is the cost this split accepts
         # in exchange for a decode graph compiled once, and it is recorded rather
         # than hidden: a workload with many prompt lengths pays it repeatedly.
         compiling = length not in self.compiled_prefill_lengths
         self.reset()
         logits = self._call(
-            self._prefill_graph, input_ids, cache_position, attention_mask, "prefill", compiling
+            self._prefill_graph,
+            input_ids,
+            cache_position,
+            self._attention_mask,
+            "prefill",
+            compiling,
         )
         if compiling:
             self.compiled_prefill_lengths.append(length)
         return self._state(logits, length)
 
     def decode(
-        self,
-        token: torch.Tensor,
-        state: GenerationState,
-        attention_mask: torch.Tensor | None = None,
+        self, token: torch.Tensor, state: GenerationState
     ) -> tuple[torch.Tensor, GenerationState]:
         """Advance one token, reusing the compiled decode graph and the cache."""
         if state.sequence_length >= self.max_sequence_length:
@@ -445,14 +460,19 @@ class GenerationRunner:
         # This tensor is the *attention* position -- it decides the causal mask and
         # the rotary embedding. It is not where the key and value land: Transformers'
         # static layer writes at its own `cumulative_length` and advances it by the
-        # number of tokens it was given, so the two agree only as long as every call
-        # to the graph is a call the caller asked for. That is what `_warm` protects.
+        # number of tokens it was given, so the two agree only as long as every
+        # execution of the graph is one the caller asked for. That is what the
+        # `warmup: False` compile option protects.
         self._decode_position.fill_(state.sequence_length)
+        if self._attention_mask is not None:
+            # The slot this token is about to occupy becomes attendable. Written in
+            # place, so the mask keeps its shape and the graph keeps its guards.
+            self._attention_mask[:, state.sequence_length] = 1
         logits = self._call(
             self._decode_graph,
             token,
             self._decode_position,
-            attention_mask,
+            self._attention_mask,
             "decode",
             not self._decode_compiled,
         )
@@ -484,7 +504,7 @@ class GenerationRunner:
         steps = max_new_tokens - 1
         started = time.perf_counter()
         for _ in range(steps):
-            token, state = self.decode(state.next_token, state, attention_mask)
+            token, state = self.decode(state.next_token, state)
             tokens.append(token)
         synchronize(self.target)
         decode_ms = (time.perf_counter() - started) * 1000.0
@@ -539,7 +559,45 @@ class GenerationRunner:
             sequence_length=sequence_length,
             next_token=logits[:, -1].argmax(dim=-1, keepdim=True),
             logits=logits,
+            attention_mask=self._attention_mask,
         )
+
+    def _cache_length_mask(
+        self, attention_mask: torch.Tensor | None, prompt_shape: torch.Size
+    ) -> torch.Tensor | None:
+        """Widen a prompt-length mask to a cache-length one, or return None.
+
+        Transformers builds the decode step's mask against the *whole* static
+        cache, so a mask that covers only the prompt describes the wrong thing the
+        moment a token is decoded. It describes it fluently, too: measured on
+        SmolLM2-135M with a left-padded batch of two, 24 greedy tokens, against
+        ``model.generate`` as the reference —
+
+            no mask                the padded row diverges immediately
+            prompt-length mask     both rows diverge, into repeated newlines
+            cache-length mask      both rows match exactly
+
+        — and none of the three raises. A cache-length mask is also fixed shape,
+        so extending it by a slot per token is a write rather than a new graph.
+
+        None means "every position is real", which is correct for an unpadded
+        batch and is what the benchmarks measure.
+        """
+        if attention_mask is None:
+            return None
+        if tuple(attention_mask.shape) != tuple(prompt_shape):
+            raise ValueError(
+                f"attention_mask must be the prompt's own {tuple(prompt_shape)} mask; got "
+                f"{tuple(attention_mask.shape)}. The runner widens it to cache length itself."
+            )
+        mask = torch.zeros(
+            self.max_batch_size,
+            self.max_sequence_length,
+            dtype=attention_mask.dtype,
+            device=self.device,
+        )
+        mask[:, : prompt_shape[-1]] = attention_mask.to(self.device)
+        return mask
 
     def _check_prompt(self, input_ids: torch.Tensor) -> torch.Tensor:
         if input_ids.ndim != 2:

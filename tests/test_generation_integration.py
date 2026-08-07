@@ -52,6 +52,36 @@ def test_runner_reproduces_model_generate(backend):
     assert runner.cache_sequence_length == result.state.sequence_length
 
 
+@pytest.mark.parametrize("backend", ("eager", "inductor"))
+def test_a_left_padded_batch_reproduces_model_generate(backend):
+    """The padded row is where a decode path quietly goes wrong.
+
+    With no mask it attends to the padding; with the prompt's own mask it attends
+    to the whole cache including slots nothing has written. Both keep generating
+    fluent text. Only the cache-length mask the runner builds matches.
+    """
+    target = resolve_target("auto")
+    dtype = torch.float32 if target.vendor == "cpu" else torch.bfloat16
+    tokenizer, model = load(dtype)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    batch = tokenizer(
+        [PROMPT, "In 1969 humans first walked on the"], return_tensors="pt", padding=True
+    )
+    prompt_tokens = batch["input_ids"].shape[-1]
+    with torch.inference_mode():
+        expected = model.generate(**batch, max_new_tokens=24, do_sample=False)
+
+    runner = lm7.compile_generation(
+        model, target=target, backend=backend, max_batch_size=2, max_sequence_length=128
+    )
+    result = runner.generate(
+        batch["input_ids"], max_new_tokens=24, attention_mask=batch["attention_mask"]
+    )
+    assert result.tokens.tolist() == expected[:, prompt_tokens:].tolist()
+
+
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
 def test_decode_compiles_once_and_never_again():

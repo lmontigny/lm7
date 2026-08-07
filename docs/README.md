@@ -67,7 +67,10 @@ This index covers everything else.
 - [DeepSeek coverage](deepseek.md) — one model measured across every locally
   installable backend.
 - [Compiled Hugging Face generation](huggingface-generation.md) — the static
-  KV-cache decode path.
+  KV-cache decode path, as `lm7 model generate` drives it through Transformers.
+- [Prefill and KV-cache decode](kv-cache-decode.md) — `lm7.compile_generation`:
+  two separately compiled graphs, one device-resident cache, and per-phase
+  compile counters. Measured on an H100.
 
 ## Evaluations
 

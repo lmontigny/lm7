@@ -39,7 +39,9 @@ targets with continuous-integration coverage.
   sequence length variable within recorded bounds; the batch dimension stays
   fixed, and a KV-cache decode loop is not captured. LM7 captures a logits-only
   graph, because `CausalLMOutputWithPast` cannot be deserialized by
-  `torch.export.load`.
+  `torch.export.load`. A compiled decode loop does exist — see
+  [prefill and KV-cache decode](kv-cache-decode.md) — but it is JIT only and dies
+  with the process, like every other `lm7.compile` result.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
 - **Sparse Mixture-of-Experts models always compile; whether they *export*

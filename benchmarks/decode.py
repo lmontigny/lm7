@@ -69,26 +69,54 @@ SEQUENCE_LENGTHS = (512, 1024, 2048, 4096, 8192)
 BATCH_SIZES = (1, 4, 8)
 
 
-def _prompt(batch: int, length: int, vocab: int, device: torch.device) -> torch.Tensor:
+# A paragraph of ordinary English, tokenized and then tiled to whatever length is
+# asked for. Latency does not care what the tokens say, but token *agreement*
+# between arms does: see `_prompt`.
+PROMPT_TEXT = (
+    "The capital of France is Paris, a city on the Seine whose history runs from a "
+    "Gaulish settlement through a Roman garrison to the seat of a modern republic. "
+    "Serving a language model is two problems rather than one. Reading a prompt is "
+    "a single wide pass over many tokens at once, bounded by arithmetic. Writing an "
+    "answer is a long sequence of narrow passes, one token at a time, bounded by "
+    "how fast weights can be read out of memory. "
+)
+
+
+def _prompt(
+    batch: int, length: int, vocab: int, device: torch.device, source: str, tokenizer: Any
+) -> torch.Tensor:
     """A prompt of exactly `length` tokens, identical across arms.
 
-    Random ids rather than real text on purpose: the point is the shape, every arm
-    sees the same tensor from the same seed, and no tokenizer can be asked for a
-    prompt that happens to be 8192 tokens long.
+    Two sources, because they answer different questions. `random` ids need no
+    tokenizer and no text long enough to reach 8192 tokens, and for *latency* they
+    are as good as anything: the shapes are what cost time.
+
+    They are not good enough to compare tokens with. On input it was never trained
+    on, the model's next-token distribution is nearly flat, so the greedy argmax
+    sits on a near-tie and BF16 rounding differences between an eager and an
+    Inductor prefill are enough to flip it. `text` tiles real prose instead, which
+    keeps the distribution peaked and makes "did every arm produce the same
+    tokens" a question about the compiler rather than about tie-breaking.
     """
+    if source == "text":
+        tokens = tokenizer(PROMPT_TEXT, return_tensors="pt").input_ids[0]
+        repeats = -(-length // int(tokens.numel()))
+        ids = tokens.repeat(repeats)[:length].unsqueeze(0).expand(batch, -1).contiguous()
+        return ids.to(device)
     generator = torch.Generator(device="cpu").manual_seed(length * 1000 + batch)
     ids = torch.randint(0, vocab, (batch, length), generator=generator, dtype=torch.long)
     return ids.to(device)
 
 
-def _load(model_id: str, quantization: str, target: Any) -> tuple[Any, float, int]:
+def _load(model_id: str, quantization: str, target: Any) -> tuple[Any, Any, float, int]:
     import transformers
 
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
     model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).eval()
     quantization_ms, converted = 0.0, 0
     if quantization != NO_QUANTIZATION:
         quantization_ms, converted = _apply_quantization(model, target, quantization)
-    return model, quantization_ms, converted
+    return model, tokenizer, quantization_ms, converted
 
 
 def _measure(
@@ -102,6 +130,7 @@ def _measure(
     decode_steps: int,
     warmup_steps: int,
     repeats: int,
+    prompt_source: str,
     target: Any,
 ) -> None:
     """One configuration, start to finish, in a frame that then goes away.
@@ -111,7 +140,7 @@ def _measure(
     can only return the last one's weights to the allocator once this frame has
     exited.
     """
-    model, quantization_ms, converted = _load(model_id, quantization, target)
+    model, tokenizer, quantization_ms, converted = _load(model_id, quantization, target)
     record["quantization_ms"] = quantization_ms
     record["quantized_modules"] = converted
     # The cache has to hold the prompt and everything decoded from it, and nothing
@@ -125,12 +154,16 @@ def _measure(
         **ARMS[arm],
     )
     vocab = int(model.config.get_text_config(decoder=True).vocab_size)
-    prompt = _prompt(batch, length, vocab, runner.device)
+    prompt = _prompt(batch, length, vocab, runner.device, prompt_source, tokenizer)
 
-    # The runner compiles when it is built and when it first sees a prompt length,
-    # but CUDA Graph capture happens on the first replay after that -- so a short
-    # unmeasured run comes first.
-    runner.generate(prompt, max_new_tokens=warmup_steps + 1)
+    # The runner compiles when it first sees each shape, and CUDA Graph capture
+    # happens on a replay after that -- so a short run comes first and is not part
+    # of the steady numbers. It is still worth timing: this is the cold start a
+    # serving process pays before its first token, and it is the cost the counters
+    # below say is paid once.
+    cold = runner.generate(prompt, max_new_tokens=warmup_steps + 1)
+    record["cold_prefill_ms"] = cold.prefill_ms
+    record["cold_decode_ms"] = cold.decode_ms
     record["compile"] = {
         "prefill": runner.counters["prefill"],
         "decode": runner.counters["decode"],
@@ -180,6 +213,7 @@ def run_configuration(
     decode_steps: int,
     warmup_steps: int,
     repeats: int,
+    prompt_source: str,
     target: Any,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
@@ -204,6 +238,7 @@ def run_configuration(
             decode_steps=decode_steps,
             warmup_steps=warmup_steps,
             repeats=repeats,
+            prompt_source=prompt_source,
             target=target,
         )
     except Exception as error:  # noqa: BLE001 - a configuration that will not run is a result
@@ -275,6 +310,12 @@ def main() -> None:
     parser.add_argument("--decode-steps", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument(
+        "--prompt-source",
+        choices=("text", "random"),
+        default="text",
+        help="tiled English prose, or random token ids (see _prompt)",
+    )
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
 
@@ -285,10 +326,47 @@ def main() -> None:
 
     results: list[dict[str, Any]] = []
     started = time.perf_counter()
+    output = arguments.output.expanduser().resolve() if arguments.output else None
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+    def report() -> dict[str, Any]:
+        return {
+            # 2 adds the cold-start timings: how long the first prompt and the
+            # first token take, which is what the steady numbers are net of.
+            "schema_version": 2,
+            "environment": {
+                "torch": torch.__version__,
+                "transformers": _version("transformers"),
+                "torchao": _version("torchao"),
+                "device": torch.cuda.get_device_name(0),
+                "capability": "sm{}{}".format(*torch.cuda.get_device_capability(0)),
+                "host": platform.node(),
+            },
+            "model": arguments.model,
+            "prompt_source": arguments.prompt_source,
+            "decode_steps": arguments.decode_steps,
+            "repeats": arguments.repeats,
+            "complete": False,
+            "elapsed_s": time.perf_counter() - started,
+            "results": results,
+        }
+
+    def write(final: bool = False) -> None:
+        # Rewritten after every configuration rather than once at the end. A full
+        # sweep is an hour of metered GPU on a host that can be reclaimed under it,
+        # and a run that loses everything to a restart it was 90% through is not a
+        # measurement. `complete` says whether the file is the whole sweep.
+        if output is None:
+            return
+        current = report()
+        current["complete"] = final
+        output.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     for quantization in arguments.quantization:
         for length in arguments.sequence_length:
             for batch in arguments.batch_size:
-                print(f"{quantization} sequence={length} batch={batch}")
+                print(f"{quantization} sequence={length} batch={batch}", flush=True)
                 group: list[dict[str, Any]] = []
                 for arm in arguments.arm:
                     record = run_configuration(
@@ -300,33 +378,18 @@ def main() -> None:
                         decode_steps=arguments.decode_steps,
                         warmup_steps=arguments.warmup_steps,
                         repeats=arguments.repeats,
+                        prompt_source=arguments.prompt_source,
                         target=target,
                     )
                     group.append(record)
                     _print(record)
+                    results.append(record)
+                    write()
                 _compare_arms(group)
-                results.extend(group)
+                write()
 
-    report = {
-        "schema_version": 1,
-        "environment": {
-            "torch": torch.__version__,
-            "transformers": _version("transformers"),
-            "torchao": _version("torchao"),
-            "device": torch.cuda.get_device_name(0),
-            "capability": "sm{}{}".format(*torch.cuda.get_device_capability(0)),
-            "host": platform.node(),
-        },
-        "model": arguments.model,
-        "decode_steps": arguments.decode_steps,
-        "repeats": arguments.repeats,
-        "elapsed_s": time.perf_counter() - started,
-        "results": results,
-    }
-    if arguments.output is not None:
-        output = arguments.output.expanduser().resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write(final=True)
+    if output is not None:
         print(f"JSON: {output}")
 
 
