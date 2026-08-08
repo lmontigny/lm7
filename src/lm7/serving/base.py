@@ -58,6 +58,11 @@ class ServeRequest:
     host: str = "127.0.0.1"
     port: int = 8000
     dtype: str = "auto"
+    # Which LM7 compile backend the built-in runtime drives its decode graph
+    # with. Only that runtime honours it: a third-party engine compiles
+    # internally and is handed a checkpoint, not a compiled module, so a
+    # runtime that cannot act on this refuses rather than ignoring it.
+    compile_backend: str = "auto"
     max_model_len: int = 2048
     max_num_seqs: int = 1
     max_batched_tokens: int | None = None

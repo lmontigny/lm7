@@ -10,7 +10,7 @@ from lm7.errors import BackendUnavailableError
 from lm7.serving.base import Capabilities, ServeRequest, ServerHandle, unmet_capabilities
 from lm7.serving.planner import plan_serving
 from lm7.serving.registry import RuntimeRegistry
-from lm7.serving.runtimes.eager import EagerServingRuntime
+from lm7.serving.runtimes.builtin import BuiltinServingRuntime
 from lm7.targets import TargetSpec
 
 CPU = TargetSpec("cpu", "cpu")
@@ -133,7 +133,7 @@ def test_cli_runtimes_lists_capabilities(capsys: pytest.CaptureFixture[str]) -> 
 
 
 @pytest.mark.skipif(
-    not EagerServingRuntime().probe().available,
+    not BuiltinServingRuntime().probe().available,
     reason="needs the serve extra: without it every runtime declines and nothing is selected",
 )
 def test_cli_serve_explain_reports_the_plan(capsys: pytest.CaptureFixture[str]) -> None:
@@ -179,7 +179,7 @@ def test_cli_serve_explain_still_prints_candidates_when_nothing_fits(
 
 
 @pytest.mark.skipif(
-    not EagerServingRuntime().probe().available,
+    not BuiltinServingRuntime().probe().available,
     reason="needs the serve extra: the runtime otherwise declines on dependencies first",
 )
 def test_cli_serve_explain_names_the_capability_that_was_missing(

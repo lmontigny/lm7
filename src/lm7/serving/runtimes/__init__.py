@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .eager import EagerServingRuntime
+from .builtin import BuiltinServingRuntime
 from .vllm import VLLMServingRuntime
 
-__all__ = ["EagerServingRuntime", "VLLMServingRuntime"]
+__all__ = ["BuiltinServingRuntime", "VLLMServingRuntime"]

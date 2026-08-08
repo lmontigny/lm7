@@ -21,7 +21,7 @@ _MISSING_DEPENDENCIES = (
 )
 
 
-class EagerServingRuntime:
+class BuiltinServingRuntime:
     """LM7's own single-stream server. A reference, not a serving system.
 
     Every capability that makes a serving engine fast is absent here on purpose:
@@ -155,7 +155,14 @@ class _ReferenceServer:
         self.runner = compile_generation(
             model,
             self.target,
-            backend="eager",
+            backend=self.request.compile_backend,
+            # The decode graph compiles once, at a fixed shape, and is reused for
+            # every token of every request -- which is the whole win. The prefill
+            # graph compiles *per prompt length*, so compiling it in a server
+            # means a fresh compile the first time each new prompt length
+            # arrives. A benchmark with one prompt length never sees that; a
+            # server sees it constantly, so the prompt pass stays eager.
+            compile_prefill=False,
             max_batch_size=1,
             max_sequence_length=self.request.max_model_len,
         )
