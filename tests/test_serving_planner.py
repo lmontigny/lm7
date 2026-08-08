@@ -10,6 +10,7 @@ from lm7.errors import BackendUnavailableError
 from lm7.serving.base import Capabilities, ServeRequest, ServerHandle, unmet_capabilities
 from lm7.serving.planner import plan_serving
 from lm7.serving.registry import RuntimeRegistry
+from lm7.serving.runtimes.eager import EagerServingRuntime
 from lm7.targets import TargetSpec
 
 CPU = TargetSpec("cpu", "cpu")
@@ -131,6 +132,10 @@ def test_cli_runtimes_lists_capabilities(capsys: pytest.CaptureFixture[str]) -> 
     assert eager["capabilities"]["paged_kv_cache"] is False
 
 
+@pytest.mark.skipif(
+    not EagerServingRuntime().probe().available,
+    reason="needs the serve extra: without it every runtime declines and nothing is selected",
+)
 def test_cli_serve_explain_reports_the_plan(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["serve", "hf://owner/model", "--target", "cpu", "--explain", "--json"])
     data = json.loads(capsys.readouterr().out)
@@ -139,11 +144,8 @@ def test_cli_serve_explain_reports_the_plan(capsys: pytest.CaptureFixture[str]) 
     assert data["resolved_config"]["model"] == "owner/model"
 
 
-def test_cli_serve_explain_still_prints_candidates_when_nothing_fits(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The failing plan is the one whose candidate table matters most."""
-    exit_code = main(
+def _explain_with_batching(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
+    main(
         [
             "serve",
             "hf://owner/model",
@@ -155,9 +157,37 @@ def test_cli_serve_explain_still_prints_candidates_when_nothing_fits(
             "--json",
         ]
     )
-    data = json.loads(capsys.readouterr().out)
-    assert exit_code == 1
+    return dict(json.loads(capsys.readouterr().out))
+
+
+def test_cli_serve_explain_still_prints_candidates_when_nothing_fits(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The failing plan is the one whose candidate table matters most.
+
+    Asserts only what holds in both environments: with the serve extra the
+    reference runtime declines on capability, without it on its dependencies,
+    and either way the table has to survive and the exit code has to say so.
+    """
+    data = _explain_with_batching(capsys)
     assert data["selected_runtime"] is None
-    assert len(data["candidates"]) >= 2
-    eager = next(c for c in data["candidates"] if c["runtime"] == "eager")
+    candidates = data["candidates"]
+    assert isinstance(candidates, list)
+    assert len(candidates) >= 2
+    assert all(candidate["supported"] is False for candidate in candidates)
+    assert data["error"]
+
+
+@pytest.mark.skipif(
+    not EagerServingRuntime().probe().available,
+    reason="needs the serve extra: the runtime otherwise declines on dependencies first",
+)
+def test_cli_serve_explain_names_the_capability_that_was_missing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refused constraint has to be named, or the flag looks merely ignored."""
+    data = _explain_with_batching(capsys)
+    candidates = data["candidates"]
+    assert isinstance(candidates, list)
+    eager = next(c for c in candidates if c["runtime"] == "eager")
     assert "continuous_batching" in eager["reason"]
