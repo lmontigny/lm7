@@ -14,9 +14,13 @@ from .registry import RuntimeRegistry
 from .runtimes.eager import EagerServingRuntime
 from .runtimes.vllm import VLLMServingRuntime
 
-registry = RuntimeRegistry()
-registry.register(EagerServingRuntime())
-registry.register(VLLMServingRuntime())
+# Named `runtime_registry` rather than `registry` so it does not shadow the
+# `lm7.serving.registry` submodule. `lm7.backends` gets away with that shadowing
+# because the assignment follows the import, but it leaves the name resolving to
+# the module for any reader -- and for mypy.
+runtime_registry = RuntimeRegistry()
+runtime_registry.register(EagerServingRuntime())
+runtime_registry.register(VLLMServingRuntime())
 
 __all__ = [
     "Capabilities",
@@ -34,6 +38,6 @@ __all__ = [
     "kv_bytes_per_token",
     "plan_memory",
     "plan_serving",
-    "registry",
+    "runtime_registry",
     "unmet_capabilities",
 ]

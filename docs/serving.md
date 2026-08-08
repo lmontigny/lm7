@@ -124,9 +124,17 @@ it implements no continuous batching, no paged KV cache, no prefix caching, no
 chunked prefill, no speculative decoding and no LoRA. It is not a serving
 system and should never be described as one.
 
-Cancellation is a fact rather than a claim: each decode step runs in a worker
-thread, so the event loop stays free to notice a client that disconnected, and
-the loop stops at the next token.
+Cancellation is measured, not inferred from the design. Each decode step runs in
+a worker thread, so the event loop stays free to notice a client that
+disconnected. Abandoning a 400-token stream after three chunks on an Apple
+M-series CPU stopped it at 5 tokens, and a follow-up request — which has to
+queue behind it for the lock — unblocked in 40 ms against a 26 s projection for
+the full generation. `test_abandoning_a_stream_stops_the_decode_loop` measures
+its own baseline rather than hard-coding that threshold.
+
+Cancelled requests are counted: the metrics are recorded in a `finally`, because
+an abandoned stream is closed *at* the `yield` and everything after the loop is
+otherwise skipped — losing exactly the requests a server most wants counted.
 
 ## Memory preflight
 

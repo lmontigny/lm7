@@ -32,7 +32,7 @@ from .huggingface import (
 )
 from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
-from .serving import registry as serving_registry
+from .serving import runtime_registry as serving_registry
 from .serving.planner import plan_serving
 from .targets import DeviceInfo, TargetSpec
 

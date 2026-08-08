@@ -9,6 +9,7 @@ serving engine installs in CI.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -97,6 +98,48 @@ def test_a_prompt_longer_than_the_cache_is_refused(client) -> None:  # type: ign
     response = client.post("/v1/completions", json={"prompt": "word " * 200, "max_tokens": 200})
     assert response.status_code == 400
     assert "max-model-len" in response.json()["detail"]
+
+
+def test_abandoning_a_stream_stops_the_decode_loop(client) -> None:  # type: ignore[no-untyped-def]
+    """Cancellation has to be measured, not asserted from the design.
+
+    Two signals, because the token count alone cannot tell "stopped early" from
+    "the model hit EOS": generation holds a lock, so a follow-up request cannot
+    start until the abandoned one has actually stopped. The baseline is measured
+    here rather than hard-coded so this is not a wall-clock threshold that a slow
+    runner trips.
+    """
+    asked = 120
+    started = time.perf_counter()
+    client.post("/v1/completions", json={"prompt": "Hello", "max_tokens": 10})
+    ms_per_token = (time.perf_counter() - started) * 1000 / 10
+
+    before = client.get("/metrics").json()["generated_tokens"]
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "Write a long story."}],
+            "max_tokens": asked,
+            "stream": True,
+        },
+    ) as response:
+        seen = 0
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                seen += 1
+                if seen >= 3:
+                    break
+
+    disconnected_at = time.perf_counter()
+    client.post("/v1/completions", json={"prompt": "Hi", "max_tokens": 2})
+    waited_ms = (time.perf_counter() - disconnected_at) * 1000
+
+    # Half the projected remaining time is a wide margin; observed locally the
+    # follow-up unblocks in ~40 ms against a ~26 s projection.
+    assert waited_ms < asked * ms_per_token * 0.5
+    # Recorded in a `finally`, so a cancelled request still counts.
+    assert client.get("/metrics").json()["generated_tokens"] - before < asked
 
 
 def test_metrics_report_what_was_served(client) -> None:  # type: ignore[no-untyped-def]

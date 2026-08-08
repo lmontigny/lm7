@@ -12,7 +12,7 @@ from .cache import clear_cache
 from .detection import detect_targets, resolve_target
 from .module import CompiledModule
 from .planner import plan
-from .serving import registry as serving_registry
+from .serving import runtime_registry as serving_registry
 from .serving.base import ServeRequest, ServerHandle
 from .serving.planner import plan_serving
 from .targets import TargetSpec

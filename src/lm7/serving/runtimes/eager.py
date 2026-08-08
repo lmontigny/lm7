@@ -211,25 +211,33 @@ class _ReferenceServer:
             ttft_ms = (time.perf_counter() - started) * 1000
             token = state.next_token
             token_ids = [int(token.item())]
-            text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+            # `decode` is typed as returning str or list[str] depending on
+            # whether it was handed one sequence or many; this hands it one.
+            text = str(self.tokenizer.decode(token_ids, skip_special_tokens=True))
             yield text, False
 
             decode_started = time.perf_counter()
             eos = self.tokenizer.eos_token_id
-            for _ in range(max_tokens - 1):
-                if await is_disconnected():
-                    break
-                token, state = await asyncio.to_thread(self.runner.decode, token, state)
-                token_id = int(token.item())
-                if token_id == eos:
-                    break
-                token_ids.append(token_id)
-                updated = self.tokenizer.decode(token_ids, skip_special_tokens=True)
-                delta, text = updated[len(text) :], updated
-                if delta:
-                    yield delta, False
-            decode_ms = (time.perf_counter() - decode_started) * 1000
-            self.metrics.record(prompt_tokens, len(token_ids), ttft_ms, decode_ms)
+            try:
+                for _ in range(max_tokens - 1):
+                    if await is_disconnected():
+                        break
+                    token, state = await asyncio.to_thread(self.runner.decode, token, state)
+                    token_id = int(token.item())
+                    if token_id == eos:
+                        break
+                    token_ids.append(token_id)
+                    updated = str(self.tokenizer.decode(token_ids, skip_special_tokens=True))
+                    delta, text = updated[len(text) :], updated
+                    if delta:
+                        yield delta, False
+            finally:
+                # In a `finally` because an abandoned stream is closed *at* the
+                # yield: the generator is thrown a GeneratorExit and everything
+                # after the loop is skipped. Recording outside it loses exactly
+                # the requests a server most wants counted -- the cancelled ones.
+                decode_ms = (time.perf_counter() - decode_started) * 1000
+                self.metrics.record(prompt_tokens, len(token_ids), ttft_ms, decode_ms)
         yield "", True
 
     def build_app(self) -> Any:
