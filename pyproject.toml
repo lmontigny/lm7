@@ -124,9 +124,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unreachable = true
 
-# vLLM is never installed alongside LM7's own test environment (it pins its own
-# PyTorch, which is why there is no `vllm` extra -- see docs/serving.md), so its
-# imports are unresolvable here by design rather than by omission.
+# Optional serving dependencies. The `quality` job installs `.[dev]` only, so
+# none of these resolve there -- by design, since the serving runtimes probe for
+# them at runtime rather than requiring them. vLLM additionally has no extra at
+# all, because it pins its own PyTorch; see docs/serving.md.
 [[tool.mypy.overrides]]
-module = ["vllm.*"]
+module = ["vllm.*", "fastapi.*", "uvicorn.*", "transformers.*"]
 ignore_missing_imports = true
