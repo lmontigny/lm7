@@ -4,13 +4,15 @@ import argparse
 import json
 import platform
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
 
+from .api import _serve_request, version
 from .api import backends as inspect_backends
-from .api import version
+from .api import runtimes as inspect_runtimes
 from .backends import registry
 from .backends.base import CompileRequest
 from .bundles import create_bundle, load_bundle
@@ -30,6 +32,8 @@ from .huggingface import (
 )
 from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
+from .serving import registry as serving_registry
+from .serving.planner import plan_serving
 from .targets import DeviceInfo, TargetSpec
 
 
@@ -90,6 +94,62 @@ def _explain_data(target: str, backend: str) -> dict[str, Any]:
             for candidate in selected_plan.candidates
         ],
     }
+
+
+def _serve_request_from_args(args: argparse.Namespace) -> tuple[Any, str]:
+    return _serve_request(
+        args.model_uri,
+        args.target,
+        runtime=args.runtime,
+        host=args.host,
+        port=args.port,
+        dtype=args.dtype,
+        max_model_len=args.max_model_len,
+        max_num_seqs=args.max_num_seqs,
+        max_batched_tokens=args.max_batched_tokens,
+        tensor_parallel_size=args.tensor_parallel_size,
+        kv_cache_fraction=args.kv_cache_fraction,
+        prefix_caching=args.prefix_caching,
+        lora_adapters=tuple(args.lora_module or ()),
+        speculative_model=args.speculative_model,
+    )
+
+
+def _serve_plan_data(args: argparse.Namespace) -> dict[str, Any]:
+    """Rank the runtimes without requiring that one of them wins.
+
+    ``--explain`` has to survive the case where nothing can serve the request,
+    because that is exactly when the reader needs the per-runtime reasons. So
+    the candidate table is built first and the selection failure is reported as
+    a field rather than raised.
+    """
+    request = _serve_request_from_args(args)[0]
+    candidates = [
+        {
+            "runtime": runtime.name,
+            "supported": (support := runtime.supports(request)).supported,
+            "priority": support.priority,
+            "reason": support.reason,
+        }
+        for runtime in serving_registry.all()
+    ]
+    data: dict[str, Any] = {
+        "requested_target": args.target,
+        "requested_runtime": args.runtime,
+        "resolved_target": _target_spec_data(request.target),
+        "selected_runtime": None,
+        "model": request.model,
+        "candidates": candidates,
+        "resolved_config": {},
+    }
+    try:
+        selected, selected_plan = plan_serving(request, args.runtime, serving_registry)
+    except LM7Error as exc:
+        data["error"] = str(exc)
+        return data
+    data["selected_runtime"] = selected_plan.selected
+    data["resolved_config"] = dict(selected.describe(request))
+    return data
 
 
 def _doctor_data() -> dict[str, Any]:
@@ -192,6 +252,44 @@ def _print_explanation(data: dict[str, Any]) -> None:
             f"  {candidate['backend']}: {status} "
             f"(priority {candidate['priority']}) - {candidate['reason']}"
         )
+
+
+def _print_runtimes(runtimes: Sequence[dict[str, Any]]) -> None:
+    print(f"Registered serving runtimes ({len(runtimes)}):")
+    for runtime in runtimes:
+        status = "available" if runtime["available"] else "unavailable"
+        version_suffix = f", version {runtime['version']}" if runtime["version"] else ""
+        print(f"  {runtime['name']}: {status}{version_suffix}")
+        if runtime["reason"]:
+            print(f"    {runtime['reason']}")
+        have = [name for name, value in runtime["capabilities"].items() if value]
+        missing = [name for name, value in runtime["capabilities"].items() if not value]
+        print(f"    implements: {', '.join(have) if have else 'nothing'}")
+        if missing:
+            print(f"    does not implement: {', '.join(missing)}")
+
+
+def _print_serve_plan(data: dict[str, Any]) -> None:
+    resolved = data["resolved_target"]["target"]
+    selected = data["selected_runtime"] or "nothing"
+    print(f"Selected {selected} for {resolved} serving {data['model']}")
+    print()
+    print("Candidates:")
+    for candidate in data["candidates"]:
+        status = "supported" if candidate["supported"] else "unavailable"
+        print(
+            f"  {candidate['runtime']}: {status} "
+            f"(priority {candidate['priority']}) - {candidate['reason']}"
+        )
+    if data.get("error"):
+        print()
+        print(f"No runtime was selected: {data['error']}")
+        return
+    print()
+    print("Resolved configuration:")
+    for key, value in data["resolved_config"].items():
+        rendered = " ".join(str(item) for item in value) if isinstance(value, list) else value
+        print(f"  {key}: {rendered}")
 
 
 def _print_doctor(data: dict[str, Any]) -> None:
@@ -431,6 +529,85 @@ def _build_parser() -> argparse.ArgumentParser:
     backends_parser = subparsers.add_parser("backends", help="list registered compiler backends")
     _add_json_argument(backends_parser)
 
+    runtimes_parser = subparsers.add_parser(
+        "runtimes", help="list registered serving runtimes and what they implement"
+    )
+    _add_json_argument(runtimes_parser)
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="serve a causal LM over an OpenAI-compatible HTTP API"
+    )
+    serve_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    serve_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    serve_parser.add_argument(
+        "--runtime",
+        default="auto",
+        help="serving runtime selector: auto, vllm, or eager (default: auto)",
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1", help="bind address")
+    serve_parser.add_argument("--port", type=int, default=8000, help="bind port")
+    serve_parser.add_argument(
+        "--dtype",
+        default="auto",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        help="model dtype (default: auto)",
+    )
+    serve_parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=2048,
+        help="KV cache length in tokens; prompt plus generation must fit (default: 2048)",
+    )
+    serve_parser.add_argument(
+        "--max-num-seqs",
+        type=int,
+        default=1,
+        help="concurrent sequences; above 1 requires a runtime with continuous batching",
+    )
+    serve_parser.add_argument(
+        "--max-batched-tokens",
+        type=int,
+        default=None,
+        help="chunked prefill budget; requires a runtime that implements it",
+    )
+    serve_parser.add_argument(
+        "--tensor-parallel-size", type=int, default=1, help="tensor-parallel GPUs (default: 1)"
+    )
+    serve_parser.add_argument(
+        "--kv-cache-fraction",
+        type=float,
+        default=None,
+        help="fraction of device memory the runtime may use for weights and KV cache",
+    )
+    serve_parser.add_argument(
+        "--prefix-caching",
+        action="store_true",
+        help="reuse KV for shared prompt prefixes; requires a runtime that implements it",
+    )
+    serve_parser.add_argument(
+        "--lora-module",
+        action="append",
+        default=None,
+        metavar="NAME=PATH",
+        help="serve a LoRA adapter; repeatable, requires a runtime that implements it",
+    )
+    serve_parser.add_argument(
+        "--speculative-model",
+        default=None,
+        help="draft model for speculative decoding; requires a runtime that implements it",
+    )
+    serve_parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="rank the runtimes and print the resolved configuration without serving",
+    )
+    serve_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="alias for --explain; resolves and validates the configuration, serves nothing",
+    )
+    _add_json_argument(serve_parser)
+
     explain_parser = subparsers.add_parser("explain", help="explain backend selection for a target")
     explain_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     explain_parser.add_argument(
@@ -612,6 +789,28 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_serve(args: argparse.Namespace) -> int:
+    request, runtime_name = _serve_request_from_args(args)
+    selected, selected_plan = plan_serving(request, runtime_name, serving_registry)
+    # Flushed explicitly: redirected to a file this is block-buffered, so the
+    # line carrying the URL would not appear until the process exits -- which,
+    # for a server, is exactly too late to be useful.
+    print(
+        f"lm7: serving {request.model} on {request.target} with {selected_plan.selected}",
+        flush=True,
+    )
+    handle = selected.launch(request)
+    print(f"lm7: listening on {handle.base_url} (OpenAI-compatible; Ctrl-C to stop)", flush=True)
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nlm7: stopping")
+    finally:
+        handle.stop()
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -630,6 +829,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "explain":
             data = _explain_data(args.target, args.backend)
             _emit_json(data) if args.json else _print_explanation(data)
+        elif args.command == "runtimes":
+            runtimes = list(inspect_runtimes())
+            data = {"runtimes": runtimes}
+            _emit_json(data) if args.json else _print_runtimes(runtimes)
+        elif args.command == "serve":
+            if args.explain or args.dry_run:
+                data = _serve_plan_data(args)
+                _emit_json(data) if args.json else _print_serve_plan(data)
+                # A plan that selected nothing is a failure a script has to be
+                # able to notice, the same way `artifact inspect` reports an
+                # invalid artifact through the exit code rather than the text.
+                if data["selected_runtime"] is None:
+                    return 1
+            else:
+                return _run_serve(args)
         elif args.command == "model" and args.model_command == "compatibility":
             compatibility = inspect_hf_model(
                 args.model_uri,

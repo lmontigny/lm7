@@ -77,6 +77,13 @@ executorch = ["executorch>=1.3,<2"]
 # changed the Stringify ABI), so the runtime fails to dlopen with an undefined
 # symbol -- pinning here is what makes `pip install -e ".[tvm]"` work at all.
 tvm = ["apache-tvm>=0.25,<1", "apache-tvm-ffi==0.1.12"]
+# The HTTP surface for `lm7 serve`'s built-in reference runtime. There is
+# deliberately no `vllm` extra: vLLM pins a specific PyTorch, and this project
+# already has extras that disagree about torch (litert wants <2.13), so a vLLM
+# pin here would decide the torch version for everyone who installs LM7. The
+# vllm runtime probes for an installation the user made themselves -- see
+# docs/serving.md.
+serve = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lm7"]
@@ -102,6 +109,8 @@ markers = [
     "coreml: requires the ExecuTorch Core ML backend on macOS",
     "tvm: requires Apache TVM with the Relax PyTorch frontend",
     "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
+    "serve: requires the serving extra and downloads a small Hugging Face model",
+    "vllm: requires a vLLM installation and a GPU it supports",
 ]
 
 [tool.ruff]
@@ -114,3 +123,10 @@ disallow_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unreachable = true
+
+# vLLM is never installed alongside LM7's own test environment (it pins its own
+# PyTorch, which is why there is no `vllm` extra -- see docs/serving.md), so its
+# imports are unresolvable here by design rather than by omission.
+[[tool.mypy.overrides]]
+module = ["vllm.*"]
+ignore_missing_imports = true

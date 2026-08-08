@@ -210,6 +210,29 @@ had stated.
 | `tvm` | CPU-only, JIT-only, positional-inputs-only, and **far slower than Inductor** — registered for reachability, not speed. Autotuning, CUDA, and artifacts are not wired up. See the [guide](tvm.md). |
 | `zentorch` | AMD's ZenDNN extension: CPU-only, JIT-only, explicit-only, x86-64 Linux wheels only, and ABI-tied to a matching PyTorch. Measured on one Zen 3 EPYC at FP32 it beat Inductor on one workload, tied on another, and lost on a third; BF16, INT8, and newer EPYC generations are unmeasured. No quantization path and no artifact. See the [guide](zentorch.md). |
 
+## Serving
+
+`lm7 serve` is a control plane above a third-party engine, not a serving engine.
+See [serving.md](serving.md).
+
+- **`.lm7` and AOTInductor artifacts are not servable.** No third-party serving
+  runtime consumes them: vLLM and SGLang take Hugging Face checkpoints and
+  TensorRT-LLM takes its own engine directory. `lm7 serve` therefore accepts a
+  model URI and not an artifact path, and the export and serving paths do not
+  meet.
+- **The vLLM runtime has never run.** Its argument translation is unit-tested
+  and its launch path is not: no GPU was available when it landed, and vLLM does
+  not install on Apple Silicon. Implemented, not validated.
+- **The built-in `eager` runtime is not a serving system.** One request at a
+  time, behind a lock, on the single static KV cache `compile_generation`
+  allocates. It implements streaming, cancellation and metrics; it implements no
+  continuous batching, paged KV cache, prefix caching, chunked prefill,
+  speculative decoding or LoRA, and it refuses a request that asks for one
+  rather than ignoring the flag.
+- **No serving measurement exists.** There are no TTFT, TPOT, or throughput
+  numbers for any runtime on any hardware, and no serving benchmark harness.
+- **SGLang and TensorRT-LLM are not implemented**, only planned.
+
 ## Hardware validation
 
 - **CPU and Apple Silicon (MPS) are the only targets with CI.** Everything
