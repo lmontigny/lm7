@@ -1,4 +1,14 @@
-from .api import backends, clear_cache, compile, detect_targets, explain, version
+from .api import (
+    backends,
+    clear_cache,
+    compile,
+    detect_targets,
+    explain,
+    explain_serving,
+    runtimes,
+    serve,
+    version,
+)
 from .benchmarking import BenchmarkResult, benchmark
 from .bundles import ArtifactBundle, BundleManifest, create_bundle, load_bundle
 from .exporting import (
@@ -23,6 +33,7 @@ from .hexagon import (
     diagnose_hexagon_toolchain,
 )
 from .inspection import ArtifactInspection, PayloadInspection, inspect_artifact
+from .serving.base import Capabilities, ServeRequest, ServerHandle
 from .targets import DeviceInfo, TargetSpec, parse_target
 
 __all__ = [
@@ -31,6 +42,7 @@ __all__ = [
     "ArtifactManifest",
     "BenchmarkResult",
     "BundleManifest",
+    "Capabilities",
     "DeviceInfo",
     "DynamicDimension",
     "ExportArtifact",
@@ -41,6 +53,8 @@ __all__ = [
     "HexagonDiagnosticCheck",
     "HexagonToolchainDiagnostics",
     "PayloadInspection",
+    "ServeRequest",
+    "ServerHandle",
     "ShapeProfile",
     "TargetSpec",
     "backends",
@@ -52,12 +66,15 @@ __all__ = [
     "detect_targets",
     "diagnose_hexagon_toolchain",
     "explain",
+    "explain_serving",
     "export",
     "graph_counters",
     "inspect_artifact",
     "load_artifact",
     "load_bundle",
     "parse_target",
+    "runtimes",
+    "serve",
     "version",
 ]
 

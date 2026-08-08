@@ -12,6 +12,9 @@ evaluating LM7.
   project ([ZML](https://zml.ai/)), kept for comparison while designing LM7's
   own PJRT/StableHLO path. Referenced from
   [docs/stablehlo-pjrt-evaluation.md](../docs/stablehlo-pjrt-evaluation.md).
+- [`serving-plan.md`](serving-plan.md) — design plan for `lm7 serve`: a control
+  plane above vLLM/SGLang/TensorRT-LLM rather than a serving engine of LM7's
+  own. Not yet implemented.
 - [`competition.md`](competition.md) — competitive landscape survey (Modular,
   ZML, Roofline.ai, TVM/OctoML, IREE, tinygrad, Thunder, ONNX Runtime,
   PyTorch/XLA) against LM7's positioning.

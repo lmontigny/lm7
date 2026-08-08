@@ -166,6 +166,7 @@ Per-hardware setup: [CPU](docs/cpu.md) · [AMD CPU](docs/amd-cpu.md) ·
 lm7 doctor                    # environment and install check
 lm7 targets                   # detected hardware targets
 lm7 backends                  # registered compiler backends
+lm7 runtimes                  # registered serving runtimes, and what each implements
 lm7 explain --target auto     # which backend LM7 would pick, and why
 ```
 
@@ -394,6 +395,29 @@ deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
 lm7 bundle create model.bundle.lm7 build/cpu.lm7 build/nvidia.lm7
 lm7 bundle inspect model.bundle.lm7      # add --json for structured output
 ```
+
+## 6. Serve a model
+
+`lm7 serve` starts an OpenAI-compatible endpoint. LM7 does not implement a
+serving engine — it picks a runtime, checks the request against what that
+runtime actually implements, and hands over.
+
+```bash
+pip install -e ".[serve,hf]"
+lm7 runtimes                                                    # what is installed
+lm7 serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --explain     # who would serve it, and why
+lm7 serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu  # /v1/chat/completions on :8000
+```
+
+A constraint the chosen runtime cannot honour is refused, not dropped — asking
+for `--max-num-seqs 8` from a runtime with no continuous batching is an error
+rather than a silently ignored flag.
+
+The built-in `eager` runtime serves one request at a time and is a reference,
+not a serving system; the `vllm` runtime runs vLLM in-process through vLLM's own
+server and is **implemented but not yet validated on a GPU**. See
+[serving](docs/serving.md) for the full scope and
+[limitations](docs/limitations.md#serving) for what is missing.
 
 ## Quantization
 

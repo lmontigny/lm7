@@ -1,6 +1,6 @@
 # LM7 documentation
 
-Start with the [README](../README.md) for install and the five common tasks.
+Start with the [README](../README.md) for install and the six common tasks.
 This index covers everything else.
 
 ## Start here
@@ -12,6 +12,7 @@ This index covers everything else.
 | [Architecture](architecture.md) | Targets, backends, the planner, and artifact design. |
 | [JIT vs. AOT](jit-vs-aot.md) | When compilation happens, the two export levels, bundles, and signature rules. |
 | [What LM7 replaces](what-this-replaces.md) | The per-vendor code you would otherwise write yourself. |
+| [Serving](serving.md) | `lm7 serve`: an OpenAI-compatible endpoint above vLLM, and what LM7 does not implement itself. |
 | [Development and testing](development.md) | Environment checks, GPU integration tests, compiler IR output. |
 | [Merged work](changelog.md) | One line per merged pull request, grouped by area. |
 | [Android device testing](android-device-testing.md) | Running an exported artifact on a real phone and checking it against the host. |

@@ -53,6 +53,7 @@ file stays a index rather than a second, drifting description.
 | [#47](https://github.com/lmontigny/lm7/pull/47) | Add Hugging Face model compatibility preflight |
 | [#54](https://github.com/lmontigny/lm7/pull/54) | Add artifact inspection command |
 | [#112](https://github.com/lmontigny/lm7/pull/112) | Add separate compiled prefill and KV-cache decode graphs |
+| [#114](https://github.com/lmontigny/lm7/pull/114) | Add `lm7 serve`: a control plane above a serving runtime |
 
 ## On-device validation
 
