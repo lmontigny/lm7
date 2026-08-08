@@ -52,7 +52,7 @@ two halves read the same way, but not sharing the `Backend` protocol itself.
 ```python
 @dataclass(frozen=True)
 class ServeRequest:
-    model: str                  # hf://owner/model, a local checkpoint dir
+    model: str  # hf://owner/model, a local checkpoint dir
     target: TargetSpec
     host: str = "127.0.0.1"
     port: int = 8000
@@ -60,14 +60,15 @@ class ServeRequest:
     quantization: str = "none"  # reuse huggingface.normalize_quantization
     max_model_len: int | None = None
     max_num_seqs: int | None = None
-    max_batched_tokens: int | None = None   # chunked prefill
+    max_batched_tokens: int | None = None  # chunked prefill
     tensor_parallel_size: int = 1
     kv_cache_fraction: float | None = None
     prefix_caching: bool | None = None
     lora_adapters: tuple[LoRASpec, ...] = ()
     speculative: SpeculativeSpec | None = None
     fallback: str = "warn"
-    extra: Mapping[str, Any] = field(default_factory=dict)   # --runtime-arg k=v
+    extra: Mapping[str, Any] = field(default_factory=dict)  # --runtime-arg k=v
+
 
 @dataclass(frozen=True)
 class Capabilities:
@@ -81,18 +82,21 @@ class Capabilities:
     cancellation: bool = False
     metrics: bool = False
 
+
 @dataclass(frozen=True)
-class RuntimeInfo:            # the BackendInfo analogue
+class RuntimeInfo:  # the BackendInfo analogue
     name: str
     version: str | None
     available: bool
     reason: str
 
+
 class ServingRuntime(Protocol):
     name: str
+
     def probe(self) -> RuntimeInfo: ...
     def capabilities(self) -> Capabilities: ...
-    def supports(self, request: ServeRequest) -> Support: ...   # reuse backends.base.Support
+    def supports(self, request: ServeRequest) -> Support: ...  # reuse backends.base.Support
     def launch(self, request: ServeRequest) -> ServerHandle: ...
 ```
 
@@ -149,10 +153,10 @@ ships its OpenAI server as **importable functions**, not just a CLI:
 ```python
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,  # (engine_args: AsyncEngineArgs) -> AsyncIterator[EngineClient]
-    build_app,        # (args: Namespace) -> FastAPI
-    init_app_state,   # (engine_client, state, args) -> None
+    build_app,  # (args: Namespace) -> FastAPI
+    init_app_state,  # (engine_client, state, args) -> None
     build_and_serve,  # (engine_client, listen_address, sock, args) -> asyncio.Task
-    run_server,       # (args, **uvicorn_kwargs)
+    run_server,  # (args, **uvicorn_kwargs)
 )
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 ```

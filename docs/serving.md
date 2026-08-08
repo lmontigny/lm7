@@ -30,7 +30,7 @@ lm7 serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu --max-model-len 
 import lm7
 
 with lm7.serve("hf://HuggingFaceTB/SmolLM2-135M-Instruct", target="cpu", port=0) as server:
-    print(server.base_url)   # http://127.0.0.1:54321
+    print(server.base_url)  # http://127.0.0.1:54321
 ```
 
 Endpoints: `/health`, `/metrics`, `/v1/models`, `/v1/completions`,
