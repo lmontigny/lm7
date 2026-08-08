@@ -91,6 +91,7 @@ markers = [
     "mps: requires an Apple Silicon GPU with Metal (MPS)",
     "hf: requires Hugging Face model downloads and a CUDA GPU",
     "tensorrt: requires Torch-TensorRT and a CUDA-capable NVIDIA GPU",
+    "tensorrt_llm: requires TensorRT-LLM in its own venv and an Ampere-or-newer GPU",
     "openvino: requires the OpenVINO runtime",
     "onnxruntime: requires ONNX exporter packages and ONNX Runtime",
     "iree_vulkan: requires IREE compiler/runtime packages; execution also requires Vulkan",

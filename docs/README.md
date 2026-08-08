@@ -26,6 +26,7 @@ This index covers everything else.
 | NVIDIA Hopper (`sm90`, H100) | [nvidia-h100.md](nvidia-h100.md) |
 | NVIDIA Blackwell (`sm100`, `sm120`) | [nvidia-blackwell.md](nvidia-blackwell.md) |
 | NVIDIA validation suite (any card) | [nvidia-validation.md](nvidia-validation.md) |
+| NVIDIA serving runtime (experimental) | [tensorrt-llm.md](tensorrt-llm.md) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
 | Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
