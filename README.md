@@ -29,9 +29,10 @@ the model.
 
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
-> compiled-artifact compatibility are not stable, and CPU is the only target
-> with CI coverage. See [limitations](docs/limitations.md) before depending on
-> it.
+> compiled-artifact compatibility are not stable, and `cpu` and `apple` are the
+> only targets with CI coverage — GitHub-hosted runners provide no GPU, so
+> NVIDIA, AMD, Intel, TPU and mobile targets are validated by hand when at all.
+> See [limitations](docs/limitations.md) before depending on it.
 
 ## Why
 
