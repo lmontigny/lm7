@@ -95,6 +95,7 @@ file stays a index rather than a second, drifting description.
 | [#25](https://github.com/lmontigny/lm7/pull/25) | Add mypy type checking to CI |
 | [#26](https://github.com/lmontigny/lm7/pull/26) | Add sparse MoE (Mixtral) model to TorchBench CI |
 | [#52](https://github.com/lmontigny/lm7/pull/52) | Run the ExecuTorch export on ARM64 in CI |
+| [#117](https://github.com/lmontigny/lm7/pull/117) | Stop downgrading torch under ExecuTorch, which broke the Core ML CI job |
 
 ## Evaluations that did not become backends
 
