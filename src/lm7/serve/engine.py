@@ -312,6 +312,20 @@ class LM7ServeEngine:
         # is a property of the target, backend and dtype, so finding out costs
         # nothing and finding out late costs a multi-gigabyte checkpoint.
         quantization = normalize_quantization(config.quantize)
+        if quantization != "none" and not config.model.startswith("hf://"):
+            # The per-model gate is keyed by Hub id, and a directory does not
+            # carry one -- transformers 5.x's `save_pretrained` writes no
+            # `_name_or_path`, so there is nothing to recover it from. Refusing
+            # here rather than passing the path through means the message names
+            # the real problem instead of printing a filesystem path where the
+            # error text promises a model id. Passing None would be worse: that
+            # skips the gate entirely, quantizing models nobody has checked.
+            raise UnsupportedModelError(
+                f"--quantize {quantization} is not available for a local directory. LM7 gates "
+                "quantization per model and identifies a model by its Hugging Face id, which a "
+                "directory does not carry. Serve the hf:// form of a validated model to "
+                "quantize it, or drop --quantize to serve this directory unquantized."
+            )
         _validate_quantization(quantization, target, config.backend, config.dtype, model_id)
         transformers = _load_transformers()
         try:
