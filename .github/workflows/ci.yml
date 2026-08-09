@@ -69,10 +69,11 @@ jobs:
       - name: Install LM7 with ExecuTorch
         run: |
           # ExecuTorch's prebuilt runtime extension is linked against a specific
-          # libtorch, so PyTorch is pinned to match rather than taking the
-          # latest -- see docs/executorch.md. On aarch64 the default PyPI wheel
-          # is already the CPU build.
-          python -m pip install "torch==2.12.*"
+          # libtorch, and the wheel's own requirement is what encodes that --
+          # see docs/executorch.md. Don't pin torch separately here: the pin
+          # goes stale every ExecuTorch release, and pip either overrides it
+          # (harmless but a wasted wheel download) or honours it and breaks the
+          # ABI link, which is how the Core ML job below started failing.
           python -m pip install -e ".[dev,executorch]"
 
       - name: Report the architecture under test
@@ -140,8 +141,12 @@ jobs:
 
       - name: Install LM7 with ExecuTorch
         run: |
+          # The executorch wheel declares the torch floor its prebuilt runtime
+          # extension is ABI-linked against (1.4.0 wants >=2.13.0a0), so let it
+          # resolve torch. Installing a pinned torch *after* the extra silently
+          # breaks that link -- a downgrade to 2.12 is what made this job fail
+          # with an undefined _pthreadpool_create_v2 at .pte load time.
           python -m pip install -e ".[dev,executorch]"
-          python -m pip install "torch==2.12.*" --index-url https://download.pytorch.org/whl/cpu
 
       - name: Report backend availability
         run: python -m lm7 backends
