@@ -40,7 +40,7 @@ from .schemas import (
     ModelList,
     Usage,
 )
-from .ui import PAGE
+from .ui import render
 from .validation import unsupported_fields
 
 FinishReason = Literal["stop", "length"]
@@ -235,7 +235,7 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
         and `/metrics` and posts to `/v1/chat/completions` like any other
         caller, with no privileged path into the engine.
         """
-        return PAGE
+        return render()
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

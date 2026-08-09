@@ -8,6 +8,7 @@ Transformers. The parser lives with its siblings; only the handler is here.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from ..detection import resolve_target
@@ -19,9 +20,9 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
     """What this invocation would do, without loading a model or binding a port.
 
     Backs ``--dry-run``, which exists because loading a model is the expensive
-    part of finding out that a target was misspelled -- and because the vLLM
-    handover cannot be exercised on any machine this project has, so printing
-    the argv it would run is the only check available for it.
+    part of finding out that a target was misspelled. For ``--backend vllm`` it
+    also answers the two questions that decide whether the handover will work at
+    all: which ``vllm`` LM7 found, and what it will change in the environment.
     """
     target = resolve_target(config.target)
     plan: dict[str, Any] = {
@@ -33,11 +34,22 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         "port": config.port,
     }
     if config.backend == "vllm":
-        from .vllm import vllm_argv, vllm_available
+        from .vllm import vllm_argv, vllm_environment, vllm_executable
 
+        executable = vllm_executable()
         plan["runtime"] = "vllm"
-        plan["vllm_installed"] = vllm_available()
+        plan["vllm_installed"] = executable is not None
+        # Named because "not installed" is usually "installed in a different
+        # environment" -- vllm-metal builds its own venv on purpose.
+        plan["vllm_executable"] = executable
         plan["argv"] = vllm_argv(config)
+        plan["ui_port"] = config.ui_port
+        overrides = {
+            name: value
+            for name, value in vllm_environment(config).items()
+            if os.environ.get(name) != value
+        }
+        plan["environment"] = overrides
     else:
         plan["runtime"] = "lm7"
         plan["dtype"] = config.dtype
@@ -71,8 +83,25 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
         # Nothing of LM7 is in the request path past this line -- see serve/vllm.py.
         from .vllm import serve_with_vllm
 
+        if config.ui_port is not None:
+            # A static page on its own port, so LM7 hands out one HTML file and
+            # the browser then talks to vLLM directly. vLLM answers
+            # `access-control-allow-origin: *` by default, so this needs no flag
+            # -- but a server started with a narrowed --allowed-origins would
+            # have to include this one.
+            from .ui import serve_page
+
+            api = f"http://{config.host}:{config.port}"
+            serve_page(config.ui_port, api, host=config.host)
+            print(f"lm7: chat page on http://{config.host}:{config.ui_port} (talking to {api})")
         print(f"lm7: handing {plan['model']} to vLLM on {config.host}:{config.port}")
         return serve_with_vllm(config)
+
+    if config.ui_port is not None:
+        raise UnsupportedModelError(
+            "--ui-port is for --backend vllm, which owns its port and serves no browser "
+            f"page. This server serves the chat page itself at http://{config.host}:{config.port}/."
+        )
 
     _require_serve_extra()
     from .engine import LM7ServeEngine
@@ -127,9 +156,13 @@ def _format_plan(plan: dict[str, Any]) -> str:
     lines.append(f"{'address':<16}http://{plan['host']}:{plan['port']}")
     lines.append(f"{'max_model_len':<16}{plan['max_model_len']}")
     if plan["runtime"] == "vllm":
-        state = "installed" if plan["vllm_installed"] else "NOT INSTALLED"
+        state = plan["vllm_executable"] or "NOT FOUND"
         lines.append(f"{'vllm':<16}{state}")
         lines.append(f"{'command':<16}{' '.join(plan['argv'])}")
+        for name, value in plan["environment"].items():
+            lines.append(f"{'env':<16}{name}={value}")
+        if plan["ui_port"] is not None:
+            lines.append(f"{'chat page':<16}http://{plan['host']}:{plan['ui_port']}")
     else:
         lines.append(f"{'quantize':<16}{plan['quantize']}")
         lines.append(f"{'cors_origins':<16}{', '.join(plan['cors_origins']) or 'none'}")

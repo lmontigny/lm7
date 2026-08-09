@@ -18,6 +18,10 @@ into the engine.
 
 from __future__ import annotations
 
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
 # The conversation lives in the page, not the server: LM7's engine is one static
 # KV cache with no notion of a session, so every request resends the transcript
 # exactly as an OpenAI client would. Clearing the chat is therefore genuinely
@@ -128,6 +132,12 @@ form button[type=submit] { padding: 9px 16px; }
 </footer>
 
 <script>
+// Empty means "the server that sent this page", which is the case when LM7
+// serves it at `/`. A base URL is substituted in when the page is served
+// beside a different server -- `--ui-port` next to `--backend vllm`, where
+// vLLM owns the API port and ships no page of its own.
+const API = "__LM7_API_BASE__";
+
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
@@ -143,24 +153,51 @@ let messages = [];
 let maxModelLen = 2048;
 let busy = false;
 let latest = null;
+let modelId = "";
 
 function setStatus(text, kind) {
   status.className = "status " + (kind || "idle");
   statusText.textContent = text;
 }
 
-async function refreshHeader() {
+async function json(path) {
+  // Returns null rather than throwing, because half of these endpoints are
+  // LM7's own and the page also runs against a plain vLLM server that has
+  // /v1/models but answers /metrics in Prometheus text and /health with an
+  // empty body.
   try {
-    const [health, metrics] = await Promise.all([
-      fetch("/health").then((r) => r.json()),
-      fetch("/metrics").then((r) => r.json()),
-    ]);
+    const response = await fetch(API + path);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    return null;
+  }
+}
+
+async function refreshHeader() {
+  const models = await json("/v1/models");
+  if (!models) {
+    meta.textContent = "server unreachable";
+    if (!busy) setStatus("server unreachable", "warn");
+    return;
+  }
+  // The one endpoint every OpenAI-compatible server has. Everything after this
+  // is LM7's own and is treated as absent when it is.
+  modelId = (models.data && models.data[0] && models.data[0].id) || "";
+  const metrics = await json("/metrics");
+  if (!metrics || metrics.max_model_len === undefined) {
+    latest = null;
+    meta.innerHTML = `<code>${escapeHtml(modelId)}</code> &middot; ${escapeHtml(API || "local")}`;
+    if (!busy) setStatus("", "idle");
+    return;
+  }
+  {
     latest = metrics;
     maxModelLen = metrics.max_model_len;
     const mib = (metrics.kv_cache_bytes / 1048576).toFixed(0);
     meta.innerHTML =
-      `<code>${escapeHtml(health.model)}</code> &middot; ${escapeHtml(health.target)}` +
-      ` &middot; backend ${escapeHtml(health.backend)}` +
+      `<code>${escapeHtml(metrics.model)}</code> &middot; ${escapeHtml(metrics.target)}` +
+      ` &middot; backend ${escapeHtml(metrics.backend)}` +
       ` &middot; ${maxModelLen} ctx &middot; kv ${mib} MiB`;
     if (!busy) {
       // A token that triggers a compile is the one regression the split into
@@ -176,9 +213,6 @@ async function refreshHeader() {
         setStatus("cold — the first message compiles the graphs and will be slow", "idle");
       }
     }
-  } catch (err) {
-    meta.textContent = "server unreachable";
-    if (!busy) setStatus("server unreachable", "warn");
   }
 }
 
@@ -277,7 +311,14 @@ async function summarize(before) {
   // Token counts come from the server, which counts tokens; the page would be
   // counting SSE deltas, which are text fragments and not the same thing.
   await refreshHeader();
-  if (!latest || !before) return;
+  if (!latest || !before) {
+    // A server without LM7's /metrics -- vLLM, say -- can still be timed from
+    // this side, and that is all this line claims.
+    if (firstTokenMs !== null) {
+      setStatus(`${Math.round(firstTokenMs)} ms to first token`, "idle");
+    }
+    return;
+  }
   const tokens = latest.generated_tokens - before.generated_tokens;
   const parts = [`${tokens} tokens`];
   if (firstTokenMs !== null) parts.push(`${Math.round(firstTokenMs)} ms to first token`);
@@ -293,13 +334,17 @@ let firstTokenMs = null;
 let decodeSeconds = 0;
 
 async function stream(target) {
-  const response = await fetch("/v1/chat/completions", {
+  const response = await fetch(API + "/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       messages,
       stream: true,
       temperature: 0.7,
+      // Optional for LM7, which holds one model, but required by vLLM -- and
+      // this page is pointed at either. Taken from /v1/models so it is whatever
+      // that server actually calls its model.
+      model: modelId,
       // No max_tokens on purpose: the server fills whatever the static cache has
       // left after this prompt. The transcript is resent every turn and so grows
       // without bound, which means any number the page picked here would be
@@ -368,4 +413,53 @@ refreshHeader();
 </html>
 """
 
-__all__ = ["PAGE"]
+_API_PLACEHOLDER = "__LM7_API_BASE__"
+
+
+def render(api_base: str = "") -> str:
+    """The chat page, pointed at ``api_base`` or at whoever serves it.
+
+    ``api_base`` is empty for LM7's own server, which serves the page from the
+    same origin as the API. It is a full origin like ``http://127.0.0.1:8200``
+    when the page sits beside a server that owns the API port and has no page --
+    vLLM. The browser then talks to that server directly; nothing proxies.
+    """
+    return PAGE.replace(_API_PLACEHOLDER, api_base.rstrip("/"))
+
+
+__all__ = ["PAGE", "render", "serve_page"]
+
+
+def serve_page(port: int, api_base: str, host: str = "127.0.0.1") -> Any:
+    """Serve the chat page, and nothing else, on ``port``.
+
+    ``http.server`` from the standard library rather than the ``serve`` extra's
+    FastAPI, because this hands out one string and needs no routing, no
+    validation and no dependency -- and because the case it exists for is
+    ``--backend vllm``, where LM7 has handed the model to another process and
+    should not be starting a web framework behind it.
+
+    Returned already started on a daemon thread. It answers ``/`` and 404s
+    everything else: the API lives at ``api_base``, on a different server.
+    """
+    body = render(api_base).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        # Overridden to silence it. The default logs every request to stderr,
+        # interleaved with the vLLM output this page sits next to.
+        def log_message(self, *args: Any) -> None:
+            return
+
+        def do_GET(self) -> None:
+            if self.path not in ("/", "/index.html"):
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer((host, port), Handler)
+    threading.Thread(target=server.serve_forever, name="lm7-ui", daemon=True).start()
+    return server

@@ -112,6 +112,9 @@ class ServeConfig:
     compile_prefill: bool = True
     host: str = "127.0.0.1"
     port: int = 8000
+    # Only meaningful with `--backend vllm`: LM7's own server already
+    # serves the chat page at `/`, while vLLM owns its port and ships none.
+    ui_port: int | None = None
     quantize: str = "none"
     cors_origins: tuple[str, ...] = ("*",)
     api_key: str | None = None
@@ -127,6 +130,7 @@ class ServeConfig:
             "compile_prefill": self.compile_prefill,
             "host": self.host,
             "port": self.port,
+            "ui_port": self.ui_port,
             "quantize": self.quantize,
             "cors_origins": list(self.cors_origins),
             # Whether one is set, never which one: this dict backs --dry-run and

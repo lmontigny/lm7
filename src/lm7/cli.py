@@ -591,6 +591,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     serve_parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=None,
+        help=(
+            "serve the chat page on this port. Only for --backend vllm, which hands "
+            "the API port to vLLM and vLLM ships no browser page; LM7's own server "
+            "already serves the page at /"
+        ),
+    )
+    serve_parser.add_argument(
         "--cors-origins",
         default="*",
         help=(
@@ -779,6 +789,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     compile_prefill=args.compile_prefill,
                     host=args.host,
                     port=args.port,
+                    ui_port=args.ui_port,
                     quantize=args.quantize,
                     cors_origins=_cors_origins(args.cors_origins),
                     api_key=args.api_key,

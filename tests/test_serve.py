@@ -459,8 +459,11 @@ def test_an_explicit_dtype_reaches_vllm() -> None:
 
 
 def test_a_target_vllm_has_no_backend_for_is_refused_rather_than_launched() -> None:
-    with pytest.raises(UnsupportedModelError, match="vLLM has no backend"):
-        vllm_platform(parse_target("apple"))
+    """vLLM falls back to whatever platform plugin loads, so an unmapped target
+    would otherwise start a server on the wrong device and never say so."""
+    for unsupported in ("tenstorrent", "intel:npu", "qualcomm:sm8750"):
+        with pytest.raises(UnsupportedModelError, match="vLLM has no backend"):
+            vllm_platform(parse_target(unsupported))
 
 
 def test_a_target_vllm_supports_is_translated_to_its_platform_name() -> None:
@@ -473,15 +476,71 @@ def test_a_target_vllm_supports_is_translated_to_its_platform_name() -> None:
     assert vllm_platform(parse_target("amd")) == "rocm"
     assert vllm_platform(parse_target("cpu")) == "cpu"
     assert vllm_platform(parse_target("tpu")) == "tpu"
+    # Apple Silicon via the vllm-metal platform plugin — see docs/serving.md.
+    assert vllm_platform(parse_target("apple")) == "metal"
 
 
 def test_a_missing_vllm_names_the_install_command_rather_than_failing_opaquely(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(vllm_module, "vllm_available", lambda: False)
+    monkeypatch.setattr(vllm_module, "vllm_executable", lambda: None)
     config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
     with pytest.raises(UnsupportedModelError, match="pip install vllm"):
         vllm_module.serve_with_vllm(config)
+
+
+def test_vllm_is_looked_for_where_it_is_actually_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importable in LM7's interpreter is not the test that matters.
+
+    The handover is a subprocess, and on Apple Silicon vLLM normally lives in
+    vllm-metal's own venv -- deliberately isolated, because vLLM pins a torch
+    version. An import check alone reports "not installed" on a machine where
+    `vllm serve` runs perfectly well.
+    """
+    monkeypatch.setattr(vllm_module.importlib.util, "find_spec", lambda _: None)
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(vllm_module.Path, "exists", lambda _: False)
+    assert vllm_module.vllm_executable() is None
+    assert vllm_module.vllm_available() is False
+
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: "/somewhere/bin/vllm")
+    assert vllm_module.vllm_executable() == "/somewhere/bin/vllm"
+
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(vllm_module.Path, "exists", lambda _: True)
+    # Compared as a path rather than a suffix string: Windows renders the same
+    # location with backslashes, and this suite runs there too.
+    expected = Path(vllm_module._VLLM_METAL_VENV).expanduser()
+    assert Path(vllm_module.vllm_executable()) == expected
+
+
+def test_a_loopback_server_pins_vllm_to_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vLLM's gloo init picks the LAN address and hangs on macOS otherwise.
+
+    No error, no timeout — startup simply stops after "PyTorch device set to:
+    mps". Measured here as a >10-minute hang becoming a 130-second startup.
+    """
+    monkeypatch.delenv("VLLM_HOST_IP", raising=False)
+    loopback = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(loopback)["VLLM_HOST_IP"] == "127.0.0.1"
+
+
+def test_a_server_bound_to_all_interfaces_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real address is required off-loopback, and LM7 cannot guess it."""
+    monkeypatch.delenv("VLLM_HOST_IP", raising=False)
+    exposed = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm", host="0.0.0.0")
+    assert "VLLM_HOST_IP" not in vllm_module.vllm_environment(exposed)
+
+
+def test_an_explicit_vllm_host_ip_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A multi-node deployment has already said what the address is."""
+    monkeypatch.setenv("VLLM_HOST_IP", "10.0.0.7")
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(config)["VLLM_HOST_IP"] == "10.0.0.7"
 
 
 # -- the plan -------------------------------------------------------------
@@ -499,6 +558,10 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     assert plan["runtime"] == "vllm"
     assert plan["argv"][:2] == ["vllm", "serve"]
     assert isinstance(plan["vllm_installed"], bool)
+    # "Not installed" is usually "installed in a different environment", so the
+    # plan names which vllm was found rather than only whether one was.
+    assert "vllm_executable" in plan
+    assert plan["environment"].get("VLLM_HOST_IP") == "127.0.0.1"
 
 
 # -- where the model comes from -------------------------------------------
@@ -628,6 +691,73 @@ def test_the_plan_reports_quantization_and_origins() -> None:
     )
     assert plan["quantize"] == "int8"
     assert plan["cors_origins"] == ["http://localhost:3000"]
+
+
+# -- the chat page against another server ---------------------------------
+
+
+def test_the_page_defaults_to_the_server_that_sent_it() -> None:
+    """LM7 serves the page and the API from one origin, so paths stay relative."""
+    from lm7.serve.ui import render
+
+    assert 'const API = "";' in render()
+
+
+def test_the_page_can_be_pointed_at_another_server() -> None:
+    """`--ui-port` beside `--backend vllm`: vLLM owns the API port and has no page."""
+    from lm7.serve.ui import render
+
+    page = render("http://127.0.0.1:8200/")
+    assert 'const API = "http://127.0.0.1:8200";' in page
+    assert "__LM7_API_BASE__" not in page
+
+
+def test_a_page_pointed_elsewhere_is_still_self_contained() -> None:
+    """The API base is the one outward reference, and it is a local server."""
+    from lm7.serve.ui import render
+
+    page = render("http://127.0.0.1:8200")
+    assert page.count("http://") == 1
+    for marker in ("https://", "//cdn", "integrity=", "@import"):
+        assert marker not in page
+
+
+def test_the_page_server_serves_only_the_page() -> None:
+    import urllib.error
+    import urllib.request
+
+    from lm7.serve.ui import serve_page
+
+    server = serve_page(0, "http://127.0.0.1:8200")
+    port = server.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+            body = response.read().decode()
+        assert response.status == 200
+        assert "<title>lm7 serve</title>" in body
+        assert 'const API = "http://127.0.0.1:8200";' in body
+        # It hands out one file; the API is somewhere else entirely.
+        with pytest.raises(urllib.error.HTTPError, match="404"):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_ui_port_is_refused_where_the_page_is_already_served() -> None:
+    """LM7's own server has the page at `/`; a second copy would be a puzzle."""
+    from lm7.serve.cli import serve_model
+
+    config = ServeConfig(model="hf://owner/model", target="cpu", ui_port=8201)
+    with pytest.raises(UnsupportedModelError, match="serves the chat page itself"):
+        serve_model(config)
+
+
+def test_the_plan_names_the_chat_page_port() -> None:
+    plan = serve_plan(
+        ServeConfig(model="hf://owner/model", target="cpu", backend="vllm", ui_port=8201)
+    )
+    assert plan["ui_port"] == 8201
 
 
 def test_quantizing_a_local_directory_is_refused_by_id_not_by_path(tmp_path: Path) -> None:
