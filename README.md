@@ -487,6 +487,7 @@ python examples/hf_causal_lm.py --target nvidia     # A Hugging Face causal LM
 python examples/sparse_moe.py                       # A sparse Mixture-of-Experts model
 python examples/aot_mlp.py                          # AOTInductor export, reload, and verify
 python benchmarks/local.py --target cpu nvidia --backend eager inductor
+python benchmarks/generation_paths.py --target apple  # what compiling generation is worth
 ```
 
 One example per non-default backend, each exporting or compiling explicitly:
