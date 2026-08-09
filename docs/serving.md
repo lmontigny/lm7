@@ -137,7 +137,10 @@ to report and the requested value is the only truthful one.
 ## The static cache is the hard limit
 
 `--max-model-len` allocates the KV cache at startup, on the target device, and it
-never grows. `prompt + max_tokens` must fit inside it:
+never grows. `--max-sequence-length` is the same setting under
+`compile_generation`'s name for it — one static cache, two spellings, so neither
+can silently lose to the other. It defaults to **4096** tokens.
+`prompt + max_tokens` must fit inside it:
 
 ```
 $ curl -s localhost:8000/v1/chat/completions -d '{"messages":[...],"max_tokens":600}'
@@ -148,8 +151,66 @@ $ curl -s localhost:8000/v1/chat/completions -d '{"messages":[...],"max_tokens":
 
 Checked **before** the response type is chosen, so an oversized request is a 400
 with a reason rather than a 200 whose SSE stream dies after one chunk. Note the
-cost of raising it: the cache is `2 × layers × kv_heads × head_dim × dtype_bytes
-× max_model_len` bytes, allocated whether or not it is used.
+cost of the default: the cache is `2 × layers × kv_heads × head_dim ×
+dtype_bytes × max_model_len` bytes, allocated whether or not it is used, so
+4096 tokens costs twice what 2048 does on a machine that may never send a prompt
+that long. Lower it on a small device; the startup line prints what it took.
+
+## Reaching it from a browser UI
+
+A local UI — OpenWebUI, a Next.js app on `:3000`, anything running in a browser
+— is a *different origin* from `127.0.0.1:8000`, so the browser will not hand
+your page the response body unless the server says the origin is allowed. That
+is what `--cors-origins` sets:
+
+```bash
+lm7 model serve hf://owner/model --cors-origins "http://localhost:3000"
+```
+
+It defaults to `*`, because the server binds loopback, holds no credentials and
+is single-user — the ordinary case is a UI on another local port, and a default
+that broke it would just be turned off by everyone. Narrow it whenever the
+server is reachable from anywhere but this machine, and `--cors-origins ""`
+turns CORS off entirely rather than falling back to the wildcard.
+
+`--api-key` adds a bearer check, for a server on a shared machine or behind a
+tunnel:
+
+```bash
+lm7 model serve hf://owner/model --api-key s3cret
+curl -H "Authorization: Bearer s3cret" localhost:8000/v1/models
+```
+
+Two deliberate holes in it, both so the thing works at all:
+
+- **`/health` answers without a key**, so a container probe or a shell loop can
+  wait for the model to finish loading without being trusted to generate.
+- **A preflight `OPTIONS` is never authenticated**, because browsers do not send
+  `Authorization` on one. Requiring a key there would fail every cross-origin
+  request before the real one was sent.
+
+A 401 still carries its CORS headers. Without that a browser reports the refusal
+as a CORS failure, which sends whoever is debugging it to the wrong file.
+
+This is a bearer check on a loopback server, not an authorization system: one
+key, no rotation, no per-client identity, and the token is compared in constant
+time but travels in plaintext unless something in front of it terminates TLS.
+
+## Quantizing what gets served
+
+`--quantize` quantizes the weights before the decode loop is compiled, so what
+is compiled is what is served:
+
+```bash
+lm7 model serve hf://owner/model --target nvidia --quantize int8
+```
+
+`none`, `int8`, `fp8` and `nvfp4`, gated by exactly the rules in
+[quantization](quantization.md) — the mode is checked against the target,
+backend and dtype **before** the checkpoint is downloaded, and a filter that
+matches no layer in the model is a refusal rather than a silent no-op that would
+report a quantization that never happened. `--backend eager` plus `--quantize`
+is refused for the same reason.
 
 ## First request compiles
 
@@ -222,6 +283,16 @@ driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
 - `/health` at 10–30 ms during a live generation
 - 400 on an oversized prompt, on `n=4`; 200 on the `n=1`/zero-penalty defaults
   every OpenAI SDK sends; 422 on an empty `messages` array
+
+The **deployment flags** were exercised against that same local checkpoint on
+`cpu:arm64`: `/health` answering without a key while `/v1/models` returned 401
+without one, 401 with a wrong one and 200 with the right one; a 401 still
+carrying `access-control-allow-origin`; a preflight `OPTIONS` succeeding with no
+`Authorization` header and echoing back `authorization, content-type`; a
+disallowed origin getting no CORS header at all; and a generation completing
+through the key. **`--quantize` has not been run through the server** — its
+gates and its application are the same functions `lm7 model run` uses and are
+tested there, but no served request has been answered by a quantized model.
 
 The **local-directory form** was run the same way, on `cpu:arm64`: the same
 checkpoint written out with `save_pretrained` and served as `./local-smollm2`,

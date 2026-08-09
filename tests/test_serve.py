@@ -14,6 +14,7 @@ without asserting anything about PyTorch.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ import pytest
 import torch
 
 import lm7.serve.vllm as vllm_module
+from lm7.cli import _build_parser, _cors_origins
 from lm7.errors import UnsupportedModelError
 from lm7.serve.cli import serve_plan
 from lm7.serve.engine import (
@@ -519,3 +521,58 @@ def test_vllm_is_handed_the_local_directory(tmp_path: Path) -> None:
     directory = _saved_model_dir(tmp_path)
     argv = vllm_argv(ServeConfig(model=str(directory), target="cpu", backend="vllm"))
     assert argv[:3] == ["vllm", "serve", str(directory.resolve())]
+
+
+# -- deployment flags ------------------------------------------------------
+
+
+def test_the_two_cache_flags_are_one_setting() -> None:
+    # Two spellings sharing a dest, so a user who reaches for vLLM's name and a
+    # user who reaches for compile_generation's name configure the same cache.
+    parser = _build_parser()
+    long_form = parser.parse_args(["model", "serve", "hf://owner/model", "--max-model-len", "77"])
+    alias = parser.parse_args(["model", "serve", "hf://owner/model", "--max-sequence-length", "77"])
+    assert long_form.max_model_len == alias.max_model_len == 77
+
+
+def test_the_cache_default_is_reported_by_the_parser_not_only_the_dataclass() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["model", "serve", "hf://owner/model"])
+    assert args.max_model_len == ServeConfig(model="x").max_model_len == 4096
+
+
+def test_cors_origins_are_split_and_stripped() -> None:
+    assert _cors_origins("*") == ("*",)
+    assert _cors_origins("http://localhost:3000, http://localhost:8080") == (
+        "http://localhost:3000",
+        "http://localhost:8080",
+    )
+    # A trailing comma is a typo, not a request for an empty origin.
+    assert _cors_origins("http://localhost:3000,") == ("http://localhost:3000",)
+
+
+def test_disabling_cors_is_expressible() -> None:
+    # "" has to mean "no origins", not "fall back to the wildcard default", or
+    # there is no way to turn the default off.
+    assert _cors_origins("") == ()
+
+
+def test_the_plan_never_prints_the_api_key() -> None:
+    config = ServeConfig(model="hf://owner/model", target="cpu", api_key="s3cret")
+    plan = serve_plan(config)
+    assert plan["api_key"] is True
+    assert "s3cret" not in json.dumps(plan)
+    assert "s3cret" not in json.dumps(config.to_dict())
+
+
+def test_the_plan_reports_quantization_and_origins() -> None:
+    plan = serve_plan(
+        ServeConfig(
+            model="hf://owner/model",
+            target="cpu",
+            quantize="int8",
+            cors_origins=("http://localhost:3000",),
+        )
+    )
+    assert plan["quantize"] == "int8"
+    assert plan["cors_origins"] == ["http://localhost:3000"]
