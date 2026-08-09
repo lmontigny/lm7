@@ -628,3 +628,22 @@ def test_the_plan_reports_quantization_and_origins() -> None:
     )
     assert plan["quantize"] == "int8"
     assert plan["cors_origins"] == ["http://localhost:3000"]
+
+
+def test_quantizing_a_local_directory_is_refused_by_id_not_by_path(tmp_path: Path) -> None:
+    # The gate keys on a Hugging Face id; a directory has none, and the refusal
+    # has to say that rather than print a path where an id was promised.
+    directory = _saved_model_dir(tmp_path)
+    config = ServeConfig(model=str(directory), target="cpu", quantize="int8")
+    with pytest.raises(UnsupportedModelError, match="not available for a local directory"):
+        LM7ServeEngine.load(config)
+
+
+def test_serving_a_local_directory_unquantized_is_not_blocked_by_that(tmp_path: Path) -> None:
+    # The refusal must be about quantization only: the same directory with no
+    # --quantize has to get past this check and fail later, on the real load.
+    directory = _saved_model_dir(tmp_path)
+    config = ServeConfig(model=str(directory), target="cpu")
+    with pytest.raises(Exception) as caught:
+        LM7ServeEngine.load(config)
+    assert "not available for a local directory" not in str(caught.value)
