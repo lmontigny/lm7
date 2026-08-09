@@ -33,7 +33,10 @@ class ChatCompletionRequest(BaseModel):
 
     messages: list[ChatMessage] = Field(min_length=1)
     model: str | None = None
-    max_tokens: int = Field(default=256, ge=1)
+    # Optional, and None is not 'unlimited' but 'whatever the static cache has
+    # left'. A constant default cannot stay right for a client that resends a
+    # growing transcript: 256 fits on turn one and is impossible by turn ten.
+    max_tokens: int | None = Field(default=None, ge=1)
     temperature: float = Field(default=1.0, ge=0.0)
     top_p: float = Field(default=1.0, gt=0.0, le=1.0)
     seed: int | None = None
@@ -46,7 +49,10 @@ class CompletionRequest(BaseModel):
 
     prompt: str
     model: str | None = None
-    max_tokens: int = Field(default=256, ge=1)
+    # Optional, and None is not 'unlimited' but 'whatever the static cache has
+    # left'. A constant default cannot stay right for a client that resends a
+    # growing transcript: 256 fits on turn one and is impossible by turn ten.
+    max_tokens: int | None = Field(default=None, ge=1)
     temperature: float = Field(default=1.0, ge=0.0)
     top_p: float = Field(default=1.0, gt=0.0, le=1.0)
     seed: int | None = None

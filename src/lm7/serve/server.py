@@ -137,8 +137,13 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
         # response's model matches the request's. This server holds exactly one.
         return requested or engine.model_id
 
-    async def guard(http: Request, max_tokens: int, prompt: str) -> None:
-        """Refuse, before a response type is chosen, anything that cannot be served."""
+    async def guard(http: Request, max_tokens: int | None, prompt: str) -> int:
+        """Refuse anything unservable, and settle the token budget.
+
+        Returns the resolved budget so the handler generates with exactly what
+        was validated here, rather than re-deriving it from the body and hoping
+        the two agree.
+        """
         named = unsupported_fields(await _raw_body(http))
         if named:
             raise HTTPException(
@@ -150,12 +155,13 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
                 ),
             )
         try:
-            engine.check_capacity(prompt, max_tokens)
+            _, resolved = engine.resolve_budget(prompt, max_tokens)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return resolved
 
     async def stream_chat(
-        body: ChatCompletionRequest, prompt: str, http: Request
+        body: ChatCompletionRequest, prompt: str, http: Request, max_tokens: int
     ) -> AsyncIterator[str]:
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
@@ -176,7 +182,7 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
         yield chunk(ChatCompletionDelta(role="assistant", content=""), None)
         async for token in engine.generate(
             prompt,
-            max_tokens=body.max_tokens,
+            max_tokens=max_tokens,
             temperature=body.temperature,
             top_p=body.top_p,
             seed=body.seed,
@@ -189,7 +195,9 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
                 yield chunk(ChatCompletionDelta(content=token.text), None)
         yield "data: [DONE]\n\n"
 
-    async def stream_completion(body: CompletionRequest, http: Request) -> AsyncIterator[str]:
+    async def stream_completion(
+        body: CompletionRequest, http: Request, max_tokens: int
+    ) -> AsyncIterator[str]:
         completion_id = f"cmpl-{uuid.uuid4().hex}"
         created = int(time.time())
         name = model_name(body.model)
@@ -205,7 +213,7 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
 
         async for token in engine.generate(
             body.prompt,
-            max_tokens=body.max_tokens,
+            max_tokens=max_tokens,
             temperature=body.temperature,
             top_p=body.top_p,
             seed=body.seed,
@@ -250,17 +258,17 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
     @app.post("/v1/chat/completions")
     async def chat_completions(body: ChatCompletionRequest, http: Request) -> Any:
         prompt = engine.apply_chat_template(body.messages)
-        await guard(http, body.max_tokens, prompt)
+        max_tokens = await guard(http, body.max_tokens, prompt)
         if body.stream:
             return StreamingResponse(
-                stream_chat(body, prompt, http),
+                stream_chat(body, prompt, http, max_tokens),
                 media_type="text/event-stream",
                 headers=_STREAM_HEADERS,
             )
         prompt_tokens = int(engine.encode(prompt).shape[-1])
         text, reason, generated = await engine.complete(
             prompt,
-            max_tokens=body.max_tokens,
+            max_tokens=max_tokens,
             temperature=body.temperature,
             top_p=body.top_p,
             seed=body.seed,
@@ -280,17 +288,17 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
 
     @app.post("/v1/completions")
     async def completions(body: CompletionRequest, http: Request) -> Any:
-        await guard(http, body.max_tokens, body.prompt)
+        max_tokens = await guard(http, body.max_tokens, body.prompt)
         if body.stream:
             return StreamingResponse(
-                stream_completion(body, http),
+                stream_completion(body, http, max_tokens),
                 media_type="text/event-stream",
                 headers=_STREAM_HEADERS,
             )
         prompt_tokens = int(engine.encode(body.prompt).shape[-1])
         text, reason, generated = await engine.complete(
             body.prompt,
-            max_tokens=body.max_tokens,
+            max_tokens=max_tokens,
             temperature=body.temperature,
             top_p=body.top_p,
             seed=body.seed,

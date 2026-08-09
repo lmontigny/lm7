@@ -434,3 +434,59 @@ def test_the_built_in_chat_page_is_unavailable_behind_a_key() -> None:
         assert "chat page" in refused.json()["detail"]
     with client([EOS]) as open_http:
         assert open_http.get("/").status_code == 200
+
+
+# -- the budget a growing conversation gets --------------------------------
+
+
+def test_omitting_max_tokens_uses_what_the_cache_has_left() -> None:
+    with client([1, 2, EOS], max_model_len=64) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "temperature": 0},
+        )
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"]
+
+
+def test_a_long_conversation_still_answers_without_an_explicit_budget() -> None:
+    # The regression this fixes: the page asked for half the cache every turn, so
+    # once the transcript passed half the cache every turn was a 400. The prompt
+    # here is deliberately most of the cache.
+    long_turn = " ".join(["word"] * 20)
+    with client([1, EOS], max_model_len=24) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": long_turn}], "temperature": 0},
+        )
+    assert response.status_code == 200
+
+
+def test_an_explicit_budget_that_does_not_fit_is_still_refused() -> None:
+    with client([1, EOS], max_model_len=16) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 999},
+        )
+    assert response.status_code == 400
+    assert "Ask for at most" in response.json()["detail"]
+
+
+def test_a_prompt_that_fills_the_cache_says_so() -> None:
+    long_turn = " ".join(["word"] * 40)
+    with client([1, EOS], max_model_len=8) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": long_turn}]},
+        )
+    assert response.status_code == 400
+    assert "leaves no room" in response.json()["detail"]
+
+
+def test_the_chat_page_no_longer_pins_a_budget() -> None:
+    from lm7.serve.ui import PAGE
+
+    # A constant here is the bug: any share of the cache the page picks becomes
+    # impossible once the resent transcript grows past it. Matched with the colon
+    # so the comment explaining the absence does not satisfy the assertion.
+    assert "max_tokens:" not in PAGE

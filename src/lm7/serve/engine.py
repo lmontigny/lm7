@@ -363,22 +363,41 @@ class LM7ServeEngine:
         encoded = self.tokenizer(prompt, return_tensors="pt")
         return torch.as_tensor(encoded["input_ids"])
 
-    def check_capacity(self, prompt: str, max_tokens: int) -> torch.Tensor:
-        """Tokenize, and refuse anything the static cache cannot hold.
+    def resolve_budget(self, prompt: str, max_tokens: int | None) -> tuple[torch.Tensor, int]:
+        """Tokenize, and settle how many tokens this request may generate.
 
-        Called before the response type is chosen so that an oversized request is
-        a 400 with a reason, rather than a 200 whose stream dies after one chunk.
+        Called before the response type is chosen so that an impossible request
+        is a 400 with a reason, rather than a 200 whose stream dies after one
+        chunk.
+
+        ``max_tokens=None`` means "whatever still fits", which is the only budget
+        that stays correct as a conversation grows: a client resending its
+        transcript has a prompt that gets longer every turn, so any constant it
+        picked at the start is eventually larger than the space left. An explicit
+        ask is still refused rather than quietly narrowed -- a caller that
+        requested 512 tokens and silently received 40 has been misled.
         """
         input_ids = self.encode(prompt)
         prompt_tokens = int(input_ids.shape[-1])
-        if prompt_tokens + max_tokens > self.max_model_len:
+        remaining = self.max_model_len - prompt_tokens
+        if remaining < 1:
+            raise ValueError(
+                f"The prompt is {prompt_tokens} tokens, which leaves no room in the "
+                f"{self.max_model_len}-token static cache this server allocated at startup. "
+                "Send a shorter conversation, or restart the server with a larger "
+                "--max-model-len."
+            )
+        if max_tokens is None:
+            return input_ids, remaining
+        if max_tokens > remaining:
             raise ValueError(
                 f"The prompt is {prompt_tokens} tokens and {max_tokens} more were requested, "
                 f"which exceeds the {self.max_model_len}-token static cache this server "
-                "allocated at startup. Restart it with a larger --max-model-len, or ask for "
-                "fewer tokens."
+                f"allocated at startup. Ask for at most {remaining}, omit max_tokens to use "
+                "whatever fits, send a shorter conversation, or restart the server with a "
+                "larger --max-model-len."
             )
-        return input_ids
+        return input_ids, max_tokens
 
     # -- generation -------------------------------------------------------
 
@@ -386,7 +405,7 @@ class LM7ServeEngine:
         self,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float = 1.0,
         top_p: float = 1.0,
         seed: int | None = None,
@@ -402,7 +421,7 @@ class LM7ServeEngine:
         generation finished. Only one thread is ever in the runner, because the
         lock is held for the whole loop.
         """
-        input_ids = self.check_capacity(prompt, max_tokens)
+        input_ids, max_tokens = self.resolve_budget(prompt, max_tokens)
         prompt_tokens = int(input_ids.shape[-1])
         stops = _normalize_stop(stop)
         # How many characters to keep back from the stream. A stop sequence is
@@ -489,7 +508,7 @@ class LM7ServeEngine:
         self,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float = 1.0,
         top_p: float = 1.0,
         seed: int | None = None,
