@@ -70,18 +70,22 @@ still falls back to the reference runtime.
 
 | Runtime | Targets | Status |
 | --- | --- | --- |
-| `vllm` | `nvidia`, `amd`, `tpu`, `cpu` | Implemented, **not validated on hardware** |
+| `vllm` | `nvidia`, `amd`, `tpu`, `cpu` | Served real requests on Apple Silicon via vllm-metal; **no GPU has run it** |
 | `eager` | anything PyTorch runs | Validated on Apple M-series CPU |
 
 ### vLLM
 
-LM7 runs vLLM **in-process through vLLM's own OpenAI server**, not as a
-supervised subprocess. vLLM ships `run_server`, `build_app` and
-`build_async_engine_client_from_engine_args` as importable functions, so the
-engine and its FastAPI app run inside the LM7 interpreter. LM7 reimplements no
-part of the OpenAI schema and polls no health endpoint. Isolation is not lost:
-vLLM V1 already runs its `EngineCore` in a subprocess, so that boundary is
-inherited rather than rebuilt.
+LM7 runs vLLM **in-process through vLLM's own OpenAI-compatible app**, not as a
+supervised subprocess. It composes the functions vLLM exposes for embedding --
+`build_async_engine_client_from_engine_args`, `build_app`, `init_app_state` --
+and drives uvicorn itself, so the engine and its FastAPI app run inside the LM7
+interpreter. LM7 reimplements no part of the OpenAI schema and polls no health
+endpoint. Isolation is not lost: vLLM V1 already runs its `EngineCore` in a
+subprocess, so that boundary is inherited rather than rebuilt.
+
+It deliberately does *not* call `run_server`. That is vLLM's CLI entry point and
+it installs signal handlers, which only work on the main thread -- and a library
+cannot take the caller's main thread. See below.
 
 The translation is still real, but vLLM validates it. `serve_argv()` maps a
 `ServeRequest` onto vLLM's flags and is free of vLLM imports, so it is
@@ -102,9 +106,62 @@ this project already has extras that disagree about torch (`litert` pins
 `torch>=2.4,<2.13`), so a pin here would decide the torch version for everyone
 installing LM7. Install vLLM yourself; the runtime probes for it.
 
-**What is not validated:** the launch path has never run. No GPU was available
-when this landed, and vLLM does not install on Apple Silicon. `serve_argv` is
-tested; `launch()` is not. Treat the vLLM runtime as implemented, not proven.
+#### Running it on Apple Silicon
+
+vLLM does have an Apple Silicon story: [vllm-metal](https://github.com/vllm-project/vllm-metal),
+a community-maintained platform plugin that puts MLX under vLLM. It needs a
+**native arm64 Python 3.12** — a Rosetta/x86-64 interpreter is rejected, and a
+Homebrew or conda Python that reports `x86_64` will not do. Its `install.sh`
+fetches a prebuilt macOS arm64 vLLM wheel rather than building from source, so
+the same thing can be done directly:
+
+```bash
+uv venv --python 3.12 .venv-vllm && VIRTUAL_ENV=.venv-vllm uv pip install \
+  "https://github.com/vllm-project/vllm/releases/download/v0.26.0/vllm-0.26.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl" \
+  vllm-metal lm7
+```
+
+Running LM7 against it is what turned this runtime from unproven into tested,
+and it found three things that no test on an unmodified Mac could have:
+
+- **`FlexibleArgumentParser` moved** from `vllm.utils` to
+  `vllm.utils.argparse_utils` by 0.26. LM7 tries both, because it pins no vLLM
+  version.
+- **`run_server` cannot be called off the main thread.** It installs a SIGTERM
+  handler, which raises `ValueError: signal only works in main thread of the
+  main interpreter`. It is vLLM's *CLI* entry point; the embedding path is the
+  layer under it, so LM7 composes `build_async_engine_client_from_engine_args`,
+  `build_app` and `init_app_state` and drives uvicorn itself.
+- **`lm7.serve()` needs a `__main__` guard with this runtime.** vLLM V1 runs its
+  `EngineCore` in a *spawned* subprocess, so the child re-imports the calling
+  module; a script that calls `lm7.serve()` at module scope starts a second
+  engine while importing and dies with a `freeze_support` message that mentions
+  nothing relevant. LM7 detects that failure and says so. The CLI is unaffected.
+
+```python
+import lm7
+
+
+def main():
+    with lm7.serve("hf://…", runtime="vllm") as server:
+        ...
+
+
+if __name__ == "__main__":  # required: vLLM spawns its engine core
+    main()
+```
+
+**Still not validated:** everything above was measured on the vllm-metal CPU
+path on an 18 GiB M-series Mac. No NVIDIA GPU has run this runtime, so
+tensor parallelism, paged-KV throughput, and every performance claim in the
+capability table remain vLLM's rather than LM7's measurements.
+
+**LM7's memory preflight does not cover this runtime.** It runs in the built-in
+runtime only, and the first real launch here failed on exactly what it exists to
+prevent: vLLM's default `gpu-memory-utilization` of 0.92 asked for 16.56 GiB of
+an 18 GiB machine with 3.92 GiB free, and the engine discovered that ~40 seconds
+in. Pass `--kv-cache-fraction` to lower it. Extending the preflight across
+runtimes is not done.
 
 ### The reference runtime
 

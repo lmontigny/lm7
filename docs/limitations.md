@@ -220,9 +220,17 @@ See [serving.md](serving.md).
   TensorRT-LLM takes its own engine directory. `lm7 serve` therefore accepts a
   model URI and not an artifact path, and the export and serving paths do not
   meet.
-- **The vLLM runtime has never run.** Its argument translation is unit-tested
-  and its launch path is not: no GPU was available when it landed, and vLLM does
-  not install on Apple Silicon. Implemented, not validated.
+- **The vLLM runtime has run only on Apple Silicon, through
+  [vllm-metal](https://github.com/vllm-project/vllm-metal)'s CPU path.** That
+  was enough to find three real defects — a moved `FlexibleArgumentParser`, a
+  `run_server` that cannot be called off the main thread, and the `__main__`
+  guard that vLLM's spawned engine core requires — but **no NVIDIA GPU has ever
+  run it**. Tensor parallelism, paged-KV throughput, and every performance
+  property in its capability table are vLLM's claims, not LM7's measurements.
+- **The memory preflight covers the built-in runtime only.** The vLLM runtime
+  does not consult it, so the failure it exists to prevent still happens there:
+  vLLM's default `gpu-memory-utilization` asked for 16.56 GiB on an 18 GiB
+  machine and failed ~40 seconds into startup. See [serving.md](serving.md).
 - **The built-in `eager` runtime is not a serving system.** One request at a
   time, behind a lock, on the single static KV cache `compile_generation`
   allocates. It implements streaming, cancellation and metrics; it implements no

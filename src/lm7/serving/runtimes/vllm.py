@@ -68,6 +68,40 @@ def serve_argv(request: ServeRequest) -> list[str]:
     return argv
 
 
+def _startup_message(failure: BaseException) -> str:
+    """Translate the one vLLM startup failure that reads as someone else's bug.
+
+    vLLM V1 runs its ``EngineCore`` in a spawned subprocess, so the child
+    re-imports the caller's ``__main__``. A script that calls ``lm7.serve()`` at
+    module scope therefore tries to start the engine again while importing, and
+    multiprocessing answers with a bootstrapping error naming ``freeze_support``
+    -- which says nothing about serving, LM7, or vLLM.
+    """
+    text = str(failure)
+    if "bootstrapping phase" in text or "freeze_support" in text:
+        return (
+            "vLLM starts its engine in a spawned subprocess, which re-imports the "
+            "module that called lm7.serve(). Put the call under "
+            'if __name__ == "__main__": so importing the module does not start a '
+            "second engine. The lm7 CLI already does this."
+        )
+    return f"vLLM failed to start: {failure}"
+
+
+def _flexible_argument_parser() -> Any:
+    """vLLM's own argparse subclass, from wherever this vLLM keeps it.
+
+    It lived in ``vllm.utils`` and moved to ``vllm.utils.argparse_utils`` by
+    0.26. Both are tried because LM7 pins no vLLM version -- there is no `vllm`
+    extra -- so it meets whatever the user installed.
+    """
+    try:
+        from vllm.utils.argparse_utils import FlexibleArgumentParser
+    except ImportError:
+        from vllm.utils import FlexibleArgumentParser
+    return FlexibleArgumentParser()
+
+
 def build_namespace(request: ServeRequest) -> Any:
     """Parse and validate the request through vLLM's own CLI parser.
 
@@ -75,9 +109,8 @@ def build_namespace(request: ServeRequest) -> Any:
     a configuration vLLM has already accepted, not a string LM7 hopes is right.
     """
     from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
-    from vllm.utils import FlexibleArgumentParser
 
-    parser = make_arg_parser(FlexibleArgumentParser())
+    parser = make_arg_parser(_flexible_argument_parser())
     args = parser.parse_args(serve_argv(request))
     validate_parsed_serve_args(args)
     return args
@@ -166,32 +199,73 @@ class VLLMServingRuntime:
         return described
 
     def launch(self, request: ServeRequest) -> ServerHandle:
+        """Build vLLM's engine and app here, and serve them on a worker thread.
+
+        Deliberately *not* ``run_server``: that is vLLM's CLI entry point and it
+        installs a SIGTERM handler, which raises "signal only works in main
+        thread of the main interpreter" anywhere but the main thread. A library
+        cannot take the main thread from its caller, so LM7 composes the pieces
+        underneath it -- the engine client, ``build_app``, ``init_app_state`` --
+        and drives uvicorn itself. Those are the functions vLLM exposes for
+        embedding; the CLI is only one caller of them.
+        """
         probe = self.probe()
         if not probe.available:
             raise UnsupportedModelError(probe.reason)
-        from vllm.entrypoints.openai.api_server import run_server
+        import uvicorn
+        from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.entrypoints.openai.api_server import (
+            build_app,
+            build_async_engine_client_from_engine_args,
+            init_app_state,
+        )
 
         args = build_namespace(request)
+        engine_args = AsyncEngineArgs.from_cli_args(args)
         loop = asyncio.new_event_loop()
         failure: list[BaseException] = []
+        started = threading.Event()
+        holder: dict[str, Any] = {}
+
+        async def serve() -> None:
+            async with build_async_engine_client_from_engine_args(engine_args) as engine_client:
+                app = build_app(args)
+                await init_app_state(engine_client, app.state, args)
+                config = uvicorn.Config(
+                    app, host=request.host, port=request.port, log_level="warning"
+                )
+                server = uvicorn.Server(config)
+                holder["server"] = server
+                started.set()
+                await server.serve()
 
         def run() -> None:
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(run_server(args))
+                loop.run_until_complete(serve())
             except asyncio.CancelledError:
                 pass
-            except BaseException as exc:  # noqa: BLE001 - re-raised by stop(), not swallowed
+            except BaseException as exc:  # noqa: BLE001 - re-raised by wait_ready/stop
                 failure.append(exc)
             finally:
+                started.set()
                 loop.close()
 
         thread = threading.Thread(target=run, name="lm7-serve-vllm", daemon=True)
         thread.start()
+        # The engine loads weights and warms up before uvicorn binds, so this
+        # waits on the app rather than on the thread merely being alive -- and
+        # surfaces a startup failure here instead of leaving the caller to poll
+        # a port that will never open.
+        started.wait(timeout=1800)
+        if failure:
+            raise UnsupportedModelError(_startup_message(failure[0])) from failure[0]
 
         def stop() -> None:
-            loop.call_soon_threadsafe(loop.stop)
-            thread.join(timeout=30)
+            server = holder.get("server")
+            if server is not None:
+                server.should_exit = True
+            thread.join(timeout=60)
             if failure:
                 raise failure[0]
 
