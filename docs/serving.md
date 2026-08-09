@@ -468,6 +468,7 @@ from it.
 ```bash
 python -m pytest tests/test_serve.py               # portable; no extra needed
 python -m pytest -m serve                          # HTTP surface; needs [serve]
+python -m pytest -m serve_load                     # a real model; needs [serve,hf]
 ```
 
 `tests/test_serve.py` drives the engine against a scripted runner and a
@@ -475,6 +476,31 @@ fake tokenizer — stop sequences, EOS, capacity refusal, cancellation, sampling
 the lock — and runs on a plain `[dev]` install. `tests/test_serve_integration.py`
 checks the wire format an OpenAI client actually sees, and is in CI's
 `serve` job.
+
+### The load path needs a real model to test at all
+
+Both files above use fakes, which is right for testing the wire format and wrong
+for testing what happens before it. Nothing in them executes
+`LM7ServeEngine.load` — resolving what the user typed, both `from_pretrained`
+calls, the quantization gate, `compile_generation`, the static cache landing on
+the target — and **that is where every serve bug found by hand has been**: an
+indexed-device comparison that made `--target apple` 500 on every request; a
+quantization gate that printed a filesystem path where its own text promised a
+model id.
+
+`tests/test_serve_load_integration.py` closes that, using
+`hf-internal-testing/tiny-random-LlamaForCausalLM` — about **15 MB** of random
+weights. Its output is gibberish and nothing asserts otherwise; what is checked
+is that a real checkpoint travels from a URI to a token over HTTP, from the Hub
+and from a `save_pretrained` directory, that the cache is sized by
+`--max-model-len` rather than merely validated against it, and that the
+quantization gate refuses a model nobody has validated. Generated-text
+correctness belongs to [prefill and KV-cache decode](kv-cache-decode.md), which
+compares against eager on real models.
+
+It runs in CI's `serve` job, in a step **after** the fakes-only run, so the
+existing signal — that the HTTP surface works without Transformers installed —
+is preserved rather than absorbed.
 
 Two tests are worth knowing about, because they check claims this page makes
 rather than code paths:
