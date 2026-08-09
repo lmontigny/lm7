@@ -434,10 +434,51 @@ plus the plugin. Two consequences LM7 handles rather than leaves to you:
   `0.0.0.0` is left alone, since a real address is required there and LM7 cannot
   guess it.
 
+### A browser page for the vLLM path
+
+vLLM serves an API and no page, so `http://127.0.0.1:8200/` is empty. `--ui-port`
+puts the same chat page beside it:
+
+```bash
+lm7 model serve hf://Qwen/Qwen3.5-0.8B --target apple --backend vllm \
+  --port 8200 --ui-port 8201        # then open http://127.0.0.1:8201
+```
+
+```
+:8201   the chat page, served by LM7 from the standard library
+:8200   vLLM  ← the browser talks to this directly
+```
+
+LM7 hands out one HTML file and **nothing else** — no proxy, no relay, still not
+in the request path. The page is served by `http.server` rather than the `serve`
+extra's FastAPI, because it returns one string and needs no routing, no
+validation and no dependency; it comes up immediately, while vLLM is still
+loading.
+
+Two details that make it work against a server that is not LM7's:
+
+- **The page is a client, not a view.** Its API base URL is substituted at render
+  time — empty for LM7's own server (same origin, relative paths), a full origin
+  here. It reads the model name from `/v1/models`, the one endpoint every
+  OpenAI-compatible server has, and sends it as `model` because vLLM requires
+  that field while LM7 treats it as optional.
+- **LM7's own `/metrics` is treated as absent when it is.** vLLM answers
+  `/metrics` in Prometheus text and `/health` with an empty body, so the page
+  degrades to model name and timings rather than erroring. Compile state,
+  `steady_frames` and KV bytes appear only against LM7.
+
+No CORS flag is needed: vLLM answers `access-control-allow-origin: *` by default,
+preflight included. If you narrow it with vLLM's own `--allowed-origins`, include
+`http://127.0.0.1:8201`.
+
+`--ui-port` is refused for LM7's own backend, which already serves the page at
+`/` — a second copy on another port would be a puzzle, not a feature.
+
 > **Validated on Apple Silicon, and nowhere else.** `lm7 model serve --target
 > apple --backend vllm` was run end to end on an M-series Mac against
 > `Qwen/Qwen3.5-0.8B` with vLLM 0.26.0 + vllm-metal 0.3.0: `/v1/models`, chat
-> completions, SSE streaming, and the official `openai` SDK. **The CUDA, ROCm and
+> completions, SSE streaming, the official `openai` SDK, and `--ui-port`'s page
+> driving all three cross-origin. **The CUDA, ROCm and
 > TPU paths have still never been run** — no GPU box was rented for this. Note
 > also that vllm-metal supports a specific model list; `SmolLM2-135M` is not on
 > it, which is why this example uses Qwen3.5-0.8B (already in LM7's ladder).

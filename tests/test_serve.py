@@ -691,3 +691,70 @@ def test_the_plan_reports_quantization_and_origins() -> None:
     )
     assert plan["quantize"] == "int8"
     assert plan["cors_origins"] == ["http://localhost:3000"]
+
+
+# -- the chat page against another server ---------------------------------
+
+
+def test_the_page_defaults_to_the_server_that_sent_it() -> None:
+    """LM7 serves the page and the API from one origin, so paths stay relative."""
+    from lm7.serve.ui import render
+
+    assert 'const API = "";' in render()
+
+
+def test_the_page_can_be_pointed_at_another_server() -> None:
+    """`--ui-port` beside `--backend vllm`: vLLM owns the API port and has no page."""
+    from lm7.serve.ui import render
+
+    page = render("http://127.0.0.1:8200/")
+    assert 'const API = "http://127.0.0.1:8200";' in page
+    assert "__LM7_API_BASE__" not in page
+
+
+def test_a_page_pointed_elsewhere_is_still_self_contained() -> None:
+    """The API base is the one outward reference, and it is a local server."""
+    from lm7.serve.ui import render
+
+    page = render("http://127.0.0.1:8200")
+    assert page.count("http://") == 1
+    for marker in ("https://", "//cdn", "integrity=", "@import"):
+        assert marker not in page
+
+
+def test_the_page_server_serves_only_the_page() -> None:
+    import urllib.error
+    import urllib.request
+
+    from lm7.serve.ui import serve_page
+
+    server = serve_page(0, "http://127.0.0.1:8200")
+    port = server.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+            body = response.read().decode()
+        assert response.status == 200
+        assert "<title>lm7 serve</title>" in body
+        assert 'const API = "http://127.0.0.1:8200";' in body
+        # It hands out one file; the API is somewhere else entirely.
+        with pytest.raises(urllib.error.HTTPError, match="404"):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_ui_port_is_refused_where_the_page_is_already_served() -> None:
+    """LM7's own server has the page at `/`; a second copy would be a puzzle."""
+    from lm7.serve.cli import serve_model
+
+    config = ServeConfig(model="hf://owner/model", target="cpu", ui_port=8201)
+    with pytest.raises(UnsupportedModelError, match="serves the chat page itself"):
+        serve_model(config)
+
+
+def test_the_plan_names_the_chat_page_port() -> None:
+    plan = serve_plan(
+        ServeConfig(model="hf://owner/model", target="cpu", backend="vllm", ui_port=8201)
+    )
+    assert plan["ui_port"] == 8201

@@ -43,6 +43,7 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         # environment" -- vllm-metal builds its own venv on purpose.
         plan["vllm_executable"] = executable
         plan["argv"] = vllm_argv(config)
+        plan["ui_port"] = config.ui_port
         overrides = {
             name: value
             for name, value in vllm_environment(config).items()
@@ -82,8 +83,25 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
         # Nothing of LM7 is in the request path past this line -- see serve/vllm.py.
         from .vllm import serve_with_vllm
 
+        if config.ui_port is not None:
+            # A static page on its own port, so LM7 hands out one HTML file and
+            # the browser then talks to vLLM directly. vLLM answers
+            # `access-control-allow-origin: *` by default, so this needs no flag
+            # -- but a server started with a narrowed --allowed-origins would
+            # have to include this one.
+            from .ui import serve_page
+
+            api = f"http://{config.host}:{config.port}"
+            serve_page(config.ui_port, api, host=config.host)
+            print(f"lm7: chat page on http://{config.host}:{config.ui_port} (talking to {api})")
         print(f"lm7: handing {plan['model']} to vLLM on {config.host}:{config.port}")
         return serve_with_vllm(config)
+
+    if config.ui_port is not None:
+        raise UnsupportedModelError(
+            "--ui-port is for --backend vllm, which owns its port and serves no browser "
+            f"page. This server serves the chat page itself at http://{config.host}:{config.port}/."
+        )
 
     _require_serve_extra()
     from .engine import LM7ServeEngine
@@ -143,6 +161,8 @@ def _format_plan(plan: dict[str, Any]) -> str:
         lines.append(f"{'command':<16}{' '.join(plan['argv'])}")
         for name, value in plan["environment"].items():
             lines.append(f"{'env':<16}{name}={value}")
+        if plan["ui_port"] is not None:
+            lines.append(f"{'chat page':<16}http://{plan['host']}:{plan['ui_port']}")
     else:
         lines.append(f"{'quantize':<16}{plan['quantize']}")
         lines.append(f"{'cors_origins':<16}{', '.join(plan['cors_origins']) or 'none'}")
