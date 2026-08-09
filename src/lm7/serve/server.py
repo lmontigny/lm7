@@ -10,6 +10,7 @@ lazily from everywhere else, is what lets the rest of ``lm7`` stay importable
 without the ``serve`` extra installed.
 """
 
+import hmac
 import json
 import time
 import uuid
@@ -17,7 +18,8 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from .engine import LM7ServeEngine
 from .schemas import (
@@ -56,6 +58,65 @@ def _finish(reason: str | None) -> FinishReason:
     return _FINISH_REASONS.get(reason or "", "stop")
 
 
+# Answered without a key so a container probe, a shell loop, or a reverse proxy
+# can tell whether the model finished loading without being trusted to generate.
+_UNAUTHENTICATED_PATHS = frozenset({"/health"})
+
+
+def _add_access_control(app: FastAPI, config: Any) -> None:
+    """Bearer-token and CORS middleware, in the order a browser needs them.
+
+    CORS is added *last* so it ends up outermost: Starlette builds the stack with
+    the most recently added middleware on the outside, and a 401 that comes back
+    without CORS headers is reported by the browser as a CORS failure, which
+    sends someone debugging an auth problem to the wrong file entirely.
+
+    A preflight ``OPTIONS`` is never authenticated, because browsers do not send
+    ``Authorization`` on one -- requiring a key there would make every
+    cross-origin request fail before the real request was ever sent.
+    """
+    api_key = config.api_key
+
+    if api_key is not None:
+
+        @app.middleware("http")
+        async def require_api_key(request: Request, call_next: Any) -> Any:
+            if request.method == "OPTIONS" or request.url.path in _UNAUTHENTICATED_PATHS:
+                return await call_next(request)
+            scheme, _, token = request.headers.get("authorization", "").partition(" ")
+            # Constant-time: the comparison is against a secret, and `==` on
+            # `str` returns as soon as two bytes differ.
+            if scheme.lower() != "bearer" or not hmac.compare_digest(token, api_key):
+                return JSONResponse(
+                    {
+                        "detail": (
+                            "Missing or invalid bearer token. This server was started with "
+                            "--api-key, so every request except /health needs an "
+                            "'Authorization: Bearer <key>' header. The built-in chat page "
+                            "at / has no way to send one, so it is unavailable while a key "
+                            "is set."
+                        )
+                    },
+                    status_code=401,
+                )
+            return await call_next(request)
+
+    origins = list(config.cors_origins)
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["*"],
+            # `Authorization` and `Content-Type` both have to survive preflight,
+            # and an OpenAI client sends both.
+            allow_headers=["*"],
+            # Deliberately off: a bearer token is not a CORS credential, and
+            # `allow_credentials=True` alongside `allow_origins=["*"]` is the
+            # combination browsers refuse outright.
+            allow_credentials=False,
+        )
+
+
 def build_app(engine: LM7ServeEngine) -> FastAPI:
     """An application bound to one already-loaded engine.
 
@@ -69,6 +130,7 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
         version=_version(),
     )
     app.state.engine = engine
+    _add_access_control(app, engine.config)
 
     def model_name(requested: str | None) -> str:
         # Echoed back if the client named one, because some SDKs assert that the

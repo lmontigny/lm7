@@ -25,13 +25,15 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.serve
 
 
-def client(script: list[int], *, max_model_len: int = 64) -> TestClient:
+def client(
+    script: list[int], *, max_model_len: int = 64, config: ServeConfig | None = None
+) -> TestClient:
     from lm7.serve.server import build_app
 
     engine = LM7ServeEngine(
         ScriptedRunner(script),
         FakeTokenizer(),
-        ServeConfig(model="hf://owner/fake", max_model_len=max_model_len),
+        config or ServeConfig(model="hf://owner/fake", max_model_len=max_model_len),
         model_id="owner/fake",
     )
     # A context-managed TestClient runs every request on one event loop, which is
@@ -319,3 +321,116 @@ def test_metrics_count_what_actually_ran() -> None:
     assert body["ttft_ms"] > 0
     assert body["model"] == "owner/fake"
     assert body["max_model_len"] == 64
+
+
+# -- CORS and bearer auth --------------------------------------------------
+
+
+def _config(**overrides: object) -> ServeConfig:
+    return ServeConfig(model="hf://owner/fake", max_model_len=64, **overrides)  # type: ignore[arg-type]
+
+
+def test_a_browser_ui_on_another_port_is_allowed_by_default() -> None:
+    with client([EOS]) as http:
+        response = http.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_the_preflight_a_browser_sends_before_a_chat_request_succeeds() -> None:
+    with client([EOS]) as http:
+        response = http.options(
+            "/v1/chat/completions",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_narrowing_the_origins_excludes_everything_else() -> None:
+    config = _config(cors_origins=("http://localhost:3000",))
+    with client([EOS], config=config) as http:
+        allowed = http.get("/health", headers={"Origin": "http://localhost:3000"})
+        denied = http.get("/health", headers={"Origin": "http://evil.example"})
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    # The request still succeeds; it is the browser that refuses to hand the body
+    # to a page whose origin is missing from the response.
+    assert "access-control-allow-origin" not in denied.headers
+
+
+def test_an_empty_origin_list_turns_cors_off_entirely() -> None:
+    with client([EOS], config=_config(cors_origins=())) as http:
+        response = http.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_without_a_key_the_server_is_open() -> None:
+    with client([EOS]) as http:
+        assert http.get("/v1/models").status_code == 200
+
+
+def test_a_key_is_required_when_one_was_configured() -> None:
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        assert http.get("/v1/models").status_code == 401
+        assert http.get("/v1/models", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert http.get("/v1/models", headers={"Authorization": "s3cret"}).status_code == 401
+        ok = http.get("/v1/models", headers={"Authorization": "Bearer s3cret"})
+    assert ok.status_code == 200
+
+
+def test_health_answers_without_a_key_so_a_probe_can_use_it() -> None:
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        response = http.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_a_rejected_request_still_carries_cors_headers() -> None:
+    # Without this, a browser reports the 401 as a CORS failure and the person
+    # debugging it goes looking in the wrong place entirely.
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        response = http.get("/v1/models", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_a_preflight_is_never_authenticated() -> None:
+    # Browsers do not send Authorization on a preflight, so requiring a key here
+    # would fail every cross-origin request before the real one was sent.
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        response = http.options(
+            "/v1/chat/completions",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+    assert response.status_code == 200
+
+
+def test_generation_works_through_the_key() -> None:
+    with client([1, 2, EOS], config=_config(api_key="s3cret")) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer s3cret"},
+            json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 4},
+        )
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"]
+
+
+def test_the_built_in_chat_page_is_unavailable_behind_a_key() -> None:
+    # The page is fetched by a browser and cannot send an Authorization header,
+    # so a key and the built-in UI are mutually exclusive. Asserted rather than
+    # left to be discovered as a blank page.
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        refused = http.get("/")
+        assert refused.status_code == 401
+        assert "chat page" in refused.json()["detail"]
+    with client([EOS]) as open_http:
+        assert open_http.get("/").status_code == 200

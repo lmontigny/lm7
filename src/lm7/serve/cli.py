@@ -42,6 +42,10 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         plan["runtime"] = "lm7"
         plan["dtype"] = config.dtype
         plan["compile_mode"] = config.compile_mode
+        plan["quantize"] = config.quantize
+        plan["cors_origins"] = list(config.cors_origins)
+        # Whether, not which: --dry-run output ends up in terminals and issues.
+        plan["api_key"] = config.api_key is not None
         plan["endpoints"] = [
             "/health",
             "/metrics",
@@ -127,6 +131,9 @@ def _format_plan(plan: dict[str, Any]) -> str:
         lines.append(f"{'vllm':<16}{state}")
         lines.append(f"{'command':<16}{' '.join(plan['argv'])}")
     else:
+        lines.append(f"{'quantize':<16}{plan['quantize']}")
+        lines.append(f"{'cors_origins':<16}{', '.join(plan['cors_origins']) or 'none'}")
+        lines.append(f"{'api_key':<16}{'required' if plan['api_key'] else 'none'}")
         lines.append(f"{'endpoints':<16}{' '.join(plan['endpoints'])}")
     return "\n".join(lines)
 

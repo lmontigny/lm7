@@ -12,6 +12,9 @@ evaluating LM7.
   project ([ZML](https://zml.ai/)), kept for comparison while designing LM7's
   own PJRT/StableHLO path. Referenced from
   [docs/stablehlo-pjrt-evaluation.md](../docs/stablehlo-pjrt-evaluation.md).
+- [`servable-artifacts.md`](servable-artifacts.md) — design note on what it
+  would take to `lm7 model serve ./model.lm7`, and why the artifact format
+  cannot do it today. Nothing implemented.
 - [`project-summary-draft.md`](project-summary-draft.md) — unpublished one-page
   external summary of LM7: the compressed pitch, the use cases it is the
   shortest path for, where it is the wrong tool, and every claim traced back to

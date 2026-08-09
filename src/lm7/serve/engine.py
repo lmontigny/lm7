@@ -97,17 +97,24 @@ class ServeConfig:
     A static cache is allocated once at the size named here and never grows, so
     ``max_model_len`` is a property of the *server*, not of a request: a prompt
     that does not fit is refused rather than served with a reallocated cache.
+
+    ``cors_origins`` defaults to every origin because the server binds loopback
+    and holds no credentials, and a browser UI on another port is the ordinary
+    way to use it. Narrow it when the server is reachable from anywhere else.
     """
 
     model: str
     target: str = "auto"
     backend: str = "auto"
     dtype: str = "auto"
-    max_model_len: int = 2048
+    max_model_len: int = 4096
     compile_mode: str | None = None
     compile_prefill: bool = True
     host: str = "127.0.0.1"
     port: int = 8000
+    quantize: str = "none"
+    cors_origins: tuple[str, ...] = ("*",)
+    api_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +127,11 @@ class ServeConfig:
             "compile_prefill": self.compile_prefill,
             "host": self.host,
             "port": self.port,
+            "quantize": self.quantize,
+            "cors_origins": list(self.cors_origins),
+            # Whether one is set, never which one: this dict backs --dry-run and
+            # --json, and a key printed to a terminal is a key in a scrollback.
+            "api_key": self.api_key is not None,
         }
 
 
@@ -286,11 +298,21 @@ class LM7ServeEngine:
         # whole compile stack, and `lm7.serve` is imported by the CLI parser
         # before anyone has asked to serve anything.
         from ..generation import compile_generation
-        from ..huggingface import _resolve_dtype
+        from ..huggingface import (
+            _apply_quantization,
+            _resolve_dtype,
+            _validate_quantization,
+            normalize_quantization,
+        )
 
         model_id = resolve_model_source(config.model)
         target = resolve_target(config.target)
         dtype = _resolve_dtype(config.dtype, target)
+        # Gated before the download, not after: every quantization refusal here
+        # is a property of the target, backend and dtype, so finding out costs
+        # nothing and finding out late costs a multi-gigabyte checkpoint.
+        quantization = normalize_quantization(config.quantize)
+        _validate_quantization(quantization, target, config.backend, config.dtype, model_id)
         transformers = _load_transformers()
         try:
             tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
@@ -299,6 +321,11 @@ class LM7ServeEngine:
             raise UnsupportedModelError(
                 f"Model load stage failed for {config.model}: {exc}."
             ) from exc
+        # Before `compile_generation`, which uses the model exactly as given and
+        # so compiles whatever it is handed -- a model quantized here decodes
+        # quantized. `_apply_quantization` refuses a filter that matched nothing
+        # rather than reporting a quantization that did not happen.
+        _apply_quantization(model, target, quantization)
         runner = compile_generation(
             model,
             target,
