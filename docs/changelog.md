@@ -53,7 +53,7 @@ file stays a index rather than a second, drifting description.
 | [#47](https://github.com/lmontigny/lm7/pull/47) | Add Hugging Face model compatibility preflight |
 | [#54](https://github.com/lmontigny/lm7/pull/54) | Add artifact inspection command |
 | [#112](https://github.com/lmontigny/lm7/pull/112) | Add separate compiled prefill and KV-cache decode graphs |
-| [#115](https://github.com/lmontigny/lm7/pull/115) | Add `lm7 model serve`: an OpenAI-compatible endpoint over the compiled decode loop |
+| [#116](https://github.com/lmontigny/lm7/pull/116) | Add `lm7 model serve`: an OpenAI-compatible endpoint over the compiled decode loop |
 
 ## On-device validation
 
