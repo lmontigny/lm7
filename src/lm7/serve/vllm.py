@@ -24,7 +24,7 @@ from pathlib import Path
 from ..detection import resolve_target
 from ..errors import UnsupportedModelError
 from ..targets import TargetSpec
-from .engine import ServeConfig
+from .engine import ServeConfig, resolve_model_source
 
 # Where vLLM has a device backend and LM7 has a target, and they mean the same
 # hardware. Everything outside this map is refused rather than launched: vLLM
@@ -98,14 +98,14 @@ def vllm_argv(config: ServeConfig) -> list[str]:
     translation stays unit-testable on a machine where vLLM is not installed, and
     so the ``--dry-run`` output is something a user can copy into a shell.
     """
-    from ..huggingface import _model_id
-
     target = resolve_target(config.target)
     vllm_platform(target)
     argv = [
         "vllm",
         "serve",
-        _model_id(config.model),
+        # vLLM takes a local directory in the same positional slot as a Hub id,
+        # so a local model hands over as cleanly as a Hub one.
+        resolve_model_source(config.model),
         "--host",
         config.host,
         "--port",

@@ -14,15 +14,23 @@ without asserting anything about PyTorch.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from pathlib import Path
 
 import pytest
 import torch
 
 import lm7.serve.vllm as vllm_module
+from lm7.cli import _build_parser, _cors_origins
 from lm7.errors import UnsupportedModelError
 from lm7.serve.cli import serve_plan
-from lm7.serve.engine import LM7ServeEngine, ServeConfig, select_token
+from lm7.serve.engine import (
+    LM7ServeEngine,
+    ServeConfig,
+    resolve_model_source,
+    select_token,
+)
 from lm7.serve.validation import unsupported_fields
 from lm7.serve.vllm import vllm_argv, vllm_platform
 from lm7.targets import parse_target
@@ -257,14 +265,37 @@ def test_each_request_resets_the_shared_cache() -> None:
 def test_a_prompt_the_static_cache_cannot_hold_is_refused() -> None:
     engine = build_engine([1, 2], max_model_len=8)
     with pytest.raises(ValueError, match="exceeds the 8-token static cache"):
-        engine.check_capacity("one two three four five", 8)
+        engine.resolve_budget("one two three four five", 8)
 
 
 def test_capacity_counts_the_completion_too() -> None:
     engine = build_engine([1, 2], max_model_len=8)
-    engine.check_capacity("one two", 6)
+    engine.resolve_budget("one two", 6)
     with pytest.raises(ValueError):
-        engine.check_capacity("one two", 7)
+        engine.resolve_budget("one two", 7)
+
+
+def test_an_explicit_budget_is_never_quietly_narrowed() -> None:
+    # The whole reason `None` exists: a caller that asked for 7 and received 6
+    # would have been misled, so the ask is refused and the refusal says 6.
+    engine = build_engine([1, 2], max_model_len=8)
+    with pytest.raises(ValueError, match="Ask for at most 6"):
+        engine.resolve_budget("one two", 7)
+
+
+def test_omitting_the_budget_takes_whatever_the_cache_has_left() -> None:
+    engine = build_engine([1, 2], max_model_len=8)
+    assert engine.resolve_budget("one two", None)[1] == 6
+    # And it shrinks as the conversation grows, instead of becoming impossible.
+    assert engine.resolve_budget("one two three four", None)[1] == 4
+
+
+def test_a_prompt_that_fills_the_cache_is_a_different_failure() -> None:
+    # Not "ask for fewer tokens" -- there is no number of tokens that would fit,
+    # so the message has to point at the conversation instead.
+    engine = build_engine([1, 2], max_model_len=4)
+    with pytest.raises(ValueError, match="leaves no room"):
+        engine.resolve_budget("one two three four five", None)
 
 
 # -- concurrency ----------------------------------------------------------
@@ -528,3 +559,132 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     # plan names which vllm was found rather than only whether one was.
     assert "vllm_executable" in plan
     assert plan["environment"].get("VLLM_HOST_IP") == "127.0.0.1"
+
+
+# -- where the model comes from -------------------------------------------
+
+
+def _saved_model_dir(tmp_path: Path, name: str = "checkpoint") -> Path:
+    """A directory shaped like one `save_pretrained` wrote, without weights.
+
+    `resolve_model_source` decides what to hand `from_pretrained`; it never loads
+    anything, so `config.json` existing is the whole fixture.
+    """
+    directory = tmp_path / name
+    directory.mkdir()
+    (directory / "config.json").write_text("{}")
+    return directory
+
+
+def test_a_local_directory_is_served_as_itself(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    assert resolve_model_source(str(directory)) == str(directory.resolve())
+
+
+def test_a_relative_local_directory_resolves_to_an_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _saved_model_dir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # The served id has to survive the server changing directory later, and a
+    # client reading /v1/models cannot resolve "./checkpoint" against our cwd.
+    assert resolve_model_source("./checkpoint") == str(directory.resolve())
+
+
+def test_a_hub_uri_still_resolves_to_the_model_id() -> None:
+    assert resolve_model_source("hf://owner/model") == "owner/model"
+
+
+def test_a_directory_without_a_config_says_so_rather_than_failing_in_transformers(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "not-a-model"
+    empty.mkdir()
+    with pytest.raises(UnsupportedModelError, match="does not contain config.json"):
+        resolve_model_source(str(empty))
+
+
+def test_a_path_that_does_not_exist_is_not_reported_as_a_bad_hub_uri(tmp_path: Path) -> None:
+    # The Hub error ("expected a Hugging Face URI") sends someone who typed a
+    # path to the wrong place entirely.
+    with pytest.raises(UnsupportedModelError, match="No such directory"):
+        resolve_model_source(str(tmp_path / "missing"))
+
+
+def test_a_file_is_refused_with_the_reason(tmp_path: Path) -> None:
+    weights = tmp_path / "model.safetensors"
+    weights.write_text("")
+    with pytest.raises(UnsupportedModelError, match="is a file, not a directory"):
+        resolve_model_source(str(weights))
+
+
+def test_a_bare_name_is_still_refused_because_a_hub_id_needs_its_prefix() -> None:
+    with pytest.raises(UnsupportedModelError, match="hf://"):
+        resolve_model_source("owner/model")
+
+
+def test_the_plan_reports_a_local_directory(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    plan = serve_plan(ServeConfig(model=str(directory), target="cpu"))
+    assert plan["model"] == str(directory.resolve())
+
+
+def test_vllm_is_handed_the_local_directory(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    argv = vllm_argv(ServeConfig(model=str(directory), target="cpu", backend="vllm"))
+    assert argv[:3] == ["vllm", "serve", str(directory.resolve())]
+
+
+# -- deployment flags ------------------------------------------------------
+
+
+def test_the_two_cache_flags_are_one_setting() -> None:
+    # Two spellings sharing a dest, so a user who reaches for vLLM's name and a
+    # user who reaches for compile_generation's name configure the same cache.
+    parser = _build_parser()
+    long_form = parser.parse_args(["model", "serve", "hf://owner/model", "--max-model-len", "77"])
+    alias = parser.parse_args(["model", "serve", "hf://owner/model", "--max-sequence-length", "77"])
+    assert long_form.max_model_len == alias.max_model_len == 77
+
+
+def test_the_cache_default_is_reported_by_the_parser_not_only_the_dataclass() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["model", "serve", "hf://owner/model"])
+    assert args.max_model_len == ServeConfig(model="x").max_model_len == 4096
+
+
+def test_cors_origins_are_split_and_stripped() -> None:
+    assert _cors_origins("*") == ("*",)
+    assert _cors_origins("http://localhost:3000, http://localhost:8080") == (
+        "http://localhost:3000",
+        "http://localhost:8080",
+    )
+    # A trailing comma is a typo, not a request for an empty origin.
+    assert _cors_origins("http://localhost:3000,") == ("http://localhost:3000",)
+
+
+def test_disabling_cors_is_expressible() -> None:
+    # "" has to mean "no origins", not "fall back to the wildcard default", or
+    # there is no way to turn the default off.
+    assert _cors_origins("") == ()
+
+
+def test_the_plan_never_prints_the_api_key() -> None:
+    config = ServeConfig(model="hf://owner/model", target="cpu", api_key="s3cret")
+    plan = serve_plan(config)
+    assert plan["api_key"] is True
+    assert "s3cret" not in json.dumps(plan)
+    assert "s3cret" not in json.dumps(config.to_dict())
+
+
+def test_the_plan_reports_quantization_and_origins() -> None:
+    plan = serve_plan(
+        ServeConfig(
+            model="hf://owner/model",
+            target="cpu",
+            quantize="int8",
+            cors_origins=("http://localhost:3000",),
+        )
+    )
+    assert plan["quantize"] == "int8"
+    assert plan["cors_origins"] == ["http://localhost:3000"]

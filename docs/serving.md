@@ -31,6 +31,51 @@ print(
 )
 ```
 
+## Where the model comes from
+
+Two forms, and the rule between them is positional rather than clever:
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct   # the Hub
+lm7 model serve ./my-finetune                              # a local directory
+```
+
+A **directory that exists on disk wins**, and a Hub id is only ever accepted
+with its `hf://` prefix — so there is no ambiguity to arbitrate. A bare
+`owner/model` that is not a directory was never valid and still isn't.
+
+The local form is whatever `save_pretrained` wrote: `config.json`, the weights,
+and the tokenizer files beside them. That is what makes a fine-tune, a
+pre-downloaded checkpoint, or an air-gapped box reachable without a Hub round
+trip. The path is resolved to an absolute one, and **that resolved path is the
+served model id** — it appears in `/health`, in `/v1/models`, and in the `model`
+field of every response:
+
+```console
+$ lm7 model serve ./local-smollm2 --target cpu --max-model-len 256
+lm7: loading /abs/path/to/local-smollm2 for cpu:arm64...
+$ curl -s localhost:8000/v1/models | jq -r '.data[0].id'
+/abs/path/to/local-smollm2
+```
+
+Resolving matters because the server may change directory later and a client
+reading `/v1/models` cannot resolve `./local-smollm2` against a cwd it does not
+share. `--backend vllm` is handed the same resolved path, since `vllm serve`
+takes a directory in the same positional slot as a Hub id.
+
+A directory that is not a model is refused with the reason — no `config.json`,
+a file where a directory was expected, or a path that does not exist each get
+their own message rather than a Hugging Face URI error that would send someone
+looking in the wrong place.
+
+> **This widens where a model comes from, not what shape it can be.**
+> `compile_generation` requires the Hugging Face causal-LM contract — the model
+> must accept `past_key_values` and `cache_position` — so a custom architecture
+> that manages its KV cache differently still will not serve, from either form.
+> To serve a model object you already hold in memory, build the runner yourself
+> with [`lm7.compile_generation`](kv-cache-decode.md) and hand it to
+> `LM7ServeEngine`, which takes a prebuilt runner and tokenizer.
+
 ## What this is, and what it is not
 
 This is a **single-user local server**. It holds one model, one pair of compiled
@@ -133,8 +178,9 @@ docker run -d -p 3000:8080 \
 
 Then open <http://localhost:3000>. On Linux, replace `host.docker.internal` with
 `172.17.0.1` or run with `--network=host`. Serve with `--host 0.0.0.0` if the
-client is not on this machine — the default binds to loopback, and there is no
-authentication on this endpoint.
+client is not on this machine — the default binds to loopback. Once it is
+reachable off-machine, set `--api-key` and pass it as `OPENAI_API_KEY`, and
+narrow `--cors-origins`; see [access control](#access-control-cors-and-api-keys).
 
 Also known to work against an OpenAI-compatible base URL: **Continue** and
 **Cline** (VS Code), **Zed**'s assistant, **Aider**, **LibreChat**, and any
@@ -180,19 +226,108 @@ to report and the requested value is the only truthful one.
 ## The static cache is the hard limit
 
 `--max-model-len` allocates the KV cache at startup, on the target device, and it
-never grows. `prompt + max_tokens` must fit inside it:
+never grows. `--max-sequence-length` is the same setting under
+`compile_generation`'s name for it — one static cache, two spellings, so neither
+can silently lose to the other. It defaults to **4096** tokens.
+`prompt + max_tokens` must fit inside it:
 
 ```
 $ curl -s localhost:8000/v1/chat/completions -d '{"messages":[...],"max_tokens":600}'
 {"detail":"The prompt is 31 tokens and 600 more were requested, which exceeds the
-512-token static cache this server allocated at startup. Restart it with a larger
---max-model-len, or ask for fewer tokens."}
+512-token static cache this server allocated at startup. Ask for at most 481, omit
+max_tokens to use whatever fits, send a shorter conversation, or restart the server
+with a larger --max-model-len."}
 ```
 
 Checked **before** the response type is chosen, so an oversized request is a 400
 with a reason rather than a 200 whose SSE stream dies after one chunk. Note the
-cost of raising it: the cache is `2 × layers × kv_heads × head_dim × dtype_bytes
-× max_model_len` bytes, allocated whether or not it is used.
+cost of the default: the cache is `2 × layers × kv_heads × head_dim ×
+dtype_bytes × max_model_len` bytes, allocated whether or not it is used, so
+4096 tokens costs twice what 2048 does on a machine that may never send a prompt
+that long. Lower it on a small device; the startup line prints what it took.
+
+### Omitting `max_tokens` asks for whatever fits
+
+`max_tokens` is optional, and leaving it out is not "unlimited" — it is
+`max_model_len − prompt_tokens`, computed per request.
+
+That matters for any client that resends a conversation, which is every chat
+client, because the engine has one static cache and no notion of a session. The
+prompt grows every turn, so **a constant `max_tokens` is a wall, not a limit**:
+a client asking for half the cache on every turn succeeds until the transcript
+crosses half the cache, and from that moment every single turn is arithmetically
+impossible. Omitting it instead makes replies get shorter as the conversation
+grows, which degrades rather than stops.
+
+An *explicit* `max_tokens` that does not fit is still refused rather than
+narrowed — a caller that asked for 512 and silently received 40 has been misled —
+but the refusal now names the largest number that would have worked.
+
+When the prompt alone fills the cache there is no budget to offer, so that is a
+different message pointing at the conversation rather than at the token count.
+
+## Access control: CORS and API keys
+
+The [built-in page](#talking-to-it-from-a-browser) is served by this process, so
+it has no origin to cross. Any *other* browser UI — Open WebUI, a Next.js app on
+`:3000` — is a different origin from `127.0.0.1:8000`, and the browser will not
+hand it the response body unless the server says the origin is allowed. That is
+what `--cors-origins` sets:
+
+```bash
+lm7 model serve hf://owner/model --cors-origins "http://localhost:3000"
+```
+
+It defaults to `*`, because the server binds loopback, holds no credentials and
+is single-user — the ordinary case is a UI on another local port, and a default
+that broke it would just be turned off by everyone. Narrow it whenever the
+server is reachable from anywhere but this machine, and `--cors-origins ""`
+turns CORS off entirely rather than falling back to the wildcard.
+
+`--api-key` adds a bearer check, for a server on a shared machine or behind a
+tunnel:
+
+```bash
+lm7 model serve hf://owner/model --api-key s3cret
+curl -H "Authorization: Bearer s3cret" localhost:8000/v1/models
+```
+
+Two deliberate holes in it, both so the thing works at all:
+
+- **`/health` answers without a key**, so a container probe or a shell loop can
+  wait for the model to finish loading without being trusted to generate.
+- **A preflight `OPTIONS` is never authenticated**, because browsers do not send
+  `Authorization` on one. Requiring a key there would fail every cross-origin
+  request before the real one was sent.
+
+A 401 still carries its CORS headers. Without that a browser reports the refusal
+as a CORS failure, which sends whoever is debugging it to the wrong file.
+
+> **`--api-key` turns the built-in chat page off.** A page fetched by a browser
+> cannot attach an `Authorization` header, so `GET /` is refused like everything
+> else and the 401 says so rather than rendering blank. A key is for a server
+> reachable by something other than you; the page is for the case where it is
+> not. Use one or the other.
+
+This is a bearer check on a loopback server, not an authorization system: one
+key, no rotation, no per-client identity, and the token is compared in constant
+time but travels in plaintext unless something in front of it terminates TLS.
+
+## Quantizing what gets served
+
+`--quantize` quantizes the weights before the decode loop is compiled, so what
+is compiled is what is served:
+
+```bash
+lm7 model serve hf://owner/model --target nvidia --quantize int8
+```
+
+`none`, `int8`, `fp8` and `nvfp4`, gated by exactly the rules in
+[quantization](quantization.md) — the mode is checked against the target,
+backend and dtype **before** the checkpoint is downloaded, and a filter that
+matches no layer in the model is a refusal rather than a silent no-op that would
+report a quantization that never happened. `--backend eager` plus `--quantize`
+is refused for the same reason.
 
 ## First request compiles
 
@@ -320,6 +455,28 @@ driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
 - `/health` at 10–30 ms during a live generation
 - 400 on an oversized prompt, on `n=4`; 200 on the `n=1`/zero-penalty defaults
   every OpenAI SDK sends; 422 on an empty `messages` array
+
+The **token budget** was checked against the failure that motivated it, on a
+1024-token cache: a 660-token transcript with an explicit `max_tokens: 512` is
+refused and told to ask for at most 364, and the same transcript with
+`max_tokens` omitted generates (660 prompt + 19 completion, `finish: stop`).
+
+The **deployment flags** were exercised against that same local checkpoint on
+`cpu:arm64`: `/health` answering without a key while `/v1/models` returned 401
+without one, 401 with a wrong one and 200 with the right one; a 401 still
+carrying `access-control-allow-origin`; a preflight `OPTIONS` succeeding with no
+`Authorization` header and echoing back `authorization, content-type`; a
+disallowed origin getting no CORS header at all; and a generation completing
+through the key. **`--quantize` has not been run through the server** — its
+gates and its application are the same functions `lm7 model run` uses and are
+tested there, but no served request has been answered by a quantized model.
+
+The **local-directory form** was run the same way, on `cpu:arm64`: the same
+checkpoint written out with `save_pretrained` and served as `./local-smollm2`,
+with `--dry-run` resolving the relative path, `/health` and `/v1/models`
+reporting the absolute one, a buffered completion, an SSE stream, and a round
+trip through the `openai` SDK. `/health` reported `backend=auto` before the
+first request and `backend=inductor` after it, as it does for a Hub model.
 
 > Serving on MPS did not work until this change. `compile_generation` compiles
 > with `transfers="explicit"`, and that check compared an unindexed

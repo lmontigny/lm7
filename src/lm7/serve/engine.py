@@ -19,6 +19,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -29,6 +30,59 @@ from ..targets import TargetSpec
 
 # What a caller may pass to `/v1/chat/completions` as `stop`.
 StopSequences = Sequence[str]
+
+# Files `save_pretrained` always writes, and the cheapest proof that a directory
+# holds a model rather than happening to exist.
+_MODEL_CONFIG_NAME = "config.json"
+
+
+def resolve_model_source(model: str) -> str:
+    """The string to hand ``from_pretrained``, from what the user typed.
+
+    ``hf://owner/model`` is the Hub. A path to a directory holding a model --
+    what ``save_pretrained`` writes -- is served directly, which is what makes a
+    local fine-tune, a pre-downloaded checkpoint, or an air-gapped box reachable
+    without a Hub round trip. An existing directory always wins, and there is no
+    ambiguity to arbitrate: a Hub id is only ever accepted with its ``hf://``
+    prefix, so a bare string that is not a directory was never valid anyway.
+
+    The resolved absolute path is also the served model id. The server holds
+    exactly one model and echoes back whatever name a client sends, so the id is
+    read by humans debugging, and a path says which checkpoint far better than
+    its last path component would.
+    """
+    candidate = Path(model).expanduser()
+    if candidate.is_dir():
+        resolved = candidate.resolve()
+        if not (resolved / _MODEL_CONFIG_NAME).is_file():
+            raise UnsupportedModelError(
+                f"{resolved} is a directory but does not contain {_MODEL_CONFIG_NAME}, so it "
+                "does not hold a model saved by save_pretrained. Point at the directory that "
+                "does, or use a Hugging Face URI such as 'hf://owner/model'."
+            )
+        return str(resolved)
+    if candidate.exists():
+        raise UnsupportedModelError(
+            f"{model!r} is a file, not a directory. A local model is the directory "
+            f"save_pretrained wrote, containing {_MODEL_CONFIG_NAME} and the weights."
+        )
+    if not model.startswith("hf://") and _looks_like_a_path(model):
+        raise UnsupportedModelError(
+            f"No such directory {model!r}. A local model is a directory containing "
+            f"{_MODEL_CONFIG_NAME}; a Hub model is 'hf://owner/model'."
+        )
+    # Imported here rather than at module scope: `huggingface` pulls in
+    # Transformers and the whole compile stack, and this module is imported by
+    # `--dry-run`, which must not load either.
+    from ..huggingface import _model_id
+
+    return _model_id(model)
+
+
+def _looks_like_a_path(model: str) -> bool:
+    """Whether a user who typed this meant a path, so the error can say so."""
+    return model.startswith((".", "~", "/")) or "\\" in model
+
 
 # Awaited between decode steps to notice a client that has gone away. Kept as a
 # parameter rather than reaching for `starlette.Request` so the engine stays
@@ -43,17 +97,24 @@ class ServeConfig:
     A static cache is allocated once at the size named here and never grows, so
     ``max_model_len`` is a property of the *server*, not of a request: a prompt
     that does not fit is refused rather than served with a reallocated cache.
+
+    ``cors_origins`` defaults to every origin because the server binds loopback
+    and holds no credentials, and a browser UI on another port is the ordinary
+    way to use it. Narrow it when the server is reachable from anywhere else.
     """
 
     model: str
     target: str = "auto"
     backend: str = "auto"
     dtype: str = "auto"
-    max_model_len: int = 2048
+    max_model_len: int = 4096
     compile_mode: str | None = None
     compile_prefill: bool = True
     host: str = "127.0.0.1"
     port: int = 8000
+    quantize: str = "none"
+    cors_origins: tuple[str, ...] = ("*",)
+    api_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +127,11 @@ class ServeConfig:
             "compile_prefill": self.compile_prefill,
             "host": self.host,
             "port": self.port,
+            "quantize": self.quantize,
+            "cors_origins": list(self.cors_origins),
+            # Whether one is set, never which one: this dict backs --dry-run and
+            # --json, and a key printed to a terminal is a key in a scrollback.
+            "api_key": self.api_key is not None,
         }
 
 
@@ -232,19 +298,34 @@ class LM7ServeEngine:
         # whole compile stack, and `lm7.serve` is imported by the CLI parser
         # before anyone has asked to serve anything.
         from ..generation import compile_generation
-        from ..huggingface import _model_id, _resolve_dtype
+        from ..huggingface import (
+            _apply_quantization,
+            _resolve_dtype,
+            _validate_quantization,
+            normalize_quantization,
+        )
 
-        model_id = _model_id(config.model)
+        model_id = resolve_model_source(config.model)
         target = resolve_target(config.target)
         dtype = _resolve_dtype(config.dtype, target)
+        # Gated before the download, not after: every quantization refusal here
+        # is a property of the target, backend and dtype, so finding out costs
+        # nothing and finding out late costs a multi-gigabyte checkpoint.
+        quantization = normalize_quantization(config.quantize)
+        _validate_quantization(quantization, target, config.backend, config.dtype, model_id)
         transformers = _load_transformers()
         try:
             tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
             model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype).eval()
         except Exception as exc:
             raise UnsupportedModelError(
-                f"Hugging Face load stage failed for {config.model}: {exc}."
+                f"Model load stage failed for {config.model}: {exc}."
             ) from exc
+        # Before `compile_generation`, which uses the model exactly as given and
+        # so compiles whatever it is handed -- a model quantized here decodes
+        # quantized. `_apply_quantization` refuses a filter that matched nothing
+        # rather than reporting a quantization that did not happen.
+        _apply_quantization(model, target, quantization)
         runner = compile_generation(
             model,
             target,
@@ -282,22 +363,41 @@ class LM7ServeEngine:
         encoded = self.tokenizer(prompt, return_tensors="pt")
         return torch.as_tensor(encoded["input_ids"])
 
-    def check_capacity(self, prompt: str, max_tokens: int) -> torch.Tensor:
-        """Tokenize, and refuse anything the static cache cannot hold.
+    def resolve_budget(self, prompt: str, max_tokens: int | None) -> tuple[torch.Tensor, int]:
+        """Tokenize, and settle how many tokens this request may generate.
 
-        Called before the response type is chosen so that an oversized request is
-        a 400 with a reason, rather than a 200 whose stream dies after one chunk.
+        Called before the response type is chosen so that an impossible request
+        is a 400 with a reason, rather than a 200 whose stream dies after one
+        chunk.
+
+        ``max_tokens=None`` means "whatever still fits", which is the only budget
+        that stays correct as a conversation grows: a client resending its
+        transcript has a prompt that gets longer every turn, so any constant it
+        picked at the start is eventually larger than the space left. An explicit
+        ask is still refused rather than quietly narrowed -- a caller that
+        requested 512 tokens and silently received 40 has been misled.
         """
         input_ids = self.encode(prompt)
         prompt_tokens = int(input_ids.shape[-1])
-        if prompt_tokens + max_tokens > self.max_model_len:
+        remaining = self.max_model_len - prompt_tokens
+        if remaining < 1:
+            raise ValueError(
+                f"The prompt is {prompt_tokens} tokens, which leaves no room in the "
+                f"{self.max_model_len}-token static cache this server allocated at startup. "
+                "Send a shorter conversation, or restart the server with a larger "
+                "--max-model-len."
+            )
+        if max_tokens is None:
+            return input_ids, remaining
+        if max_tokens > remaining:
             raise ValueError(
                 f"The prompt is {prompt_tokens} tokens and {max_tokens} more were requested, "
                 f"which exceeds the {self.max_model_len}-token static cache this server "
-                "allocated at startup. Restart it with a larger --max-model-len, or ask for "
-                "fewer tokens."
+                f"allocated at startup. Ask for at most {remaining}, omit max_tokens to use "
+                "whatever fits, send a shorter conversation, or restart the server with a "
+                "larger --max-model-len."
             )
-        return input_ids
+        return input_ids, max_tokens
 
     # -- generation -------------------------------------------------------
 
@@ -305,7 +405,7 @@ class LM7ServeEngine:
         self,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float = 1.0,
         top_p: float = 1.0,
         seed: int | None = None,
@@ -321,7 +421,7 @@ class LM7ServeEngine:
         generation finished. Only one thread is ever in the runner, because the
         lock is held for the whole loop.
         """
-        input_ids = self.check_capacity(prompt, max_tokens)
+        input_ids, max_tokens = self.resolve_budget(prompt, max_tokens)
         prompt_tokens = int(input_ids.shape[-1])
         stops = _normalize_stop(stop)
         # How many characters to keep back from the stream. A stop sequence is
@@ -408,7 +508,7 @@ class LM7ServeEngine:
         self,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float = 1.0,
         top_p: float = 1.0,
         seed: int | None = None,

@@ -300,10 +300,12 @@ async function stream(target) {
       messages,
       stream: true,
       temperature: 0.7,
-      // Leaves room for the prompt inside the static cache, which cannot grow.
-      // Asking for more is a 400 rather than a truncated answer, so the page
-      // asks for a share rather than a fixed number.
-      max_tokens: Math.max(64, Math.floor(maxModelLen / 2)),
+      // No max_tokens on purpose: the server fills whatever the static cache has
+      // left after this prompt. The transcript is resent every turn and so grows
+      // without bound, which means any number the page picked here would be
+      // impossible once the conversation passed that share of the cache -- half
+      // the cache was a 400 on every turn from the moment the transcript crossed
+      // half the cache, which is a wall rather than a warning.
     }),
   });
   if (!response.ok) {

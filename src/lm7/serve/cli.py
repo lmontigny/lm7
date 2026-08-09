@@ -13,7 +13,7 @@ from typing import Any
 
 from ..detection import resolve_target
 from ..errors import UnsupportedModelError
-from .engine import ServeConfig
+from .engine import ServeConfig, resolve_model_source
 
 
 def serve_plan(config: ServeConfig) -> dict[str, Any]:
@@ -24,11 +24,9 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
     also answers the two questions that decide whether the handover will work at
     all: which ``vllm`` LM7 found, and what it will change in the environment.
     """
-    from ..huggingface import _model_id
-
     target = resolve_target(config.target)
     plan: dict[str, Any] = {
-        "model": _model_id(config.model),
+        "model": resolve_model_source(config.model),
         "target": str(target),
         "backend": config.backend,
         "max_model_len": config.max_model_len,
@@ -55,6 +53,10 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         plan["runtime"] = "lm7"
         plan["dtype"] = config.dtype
         plan["compile_mode"] = config.compile_mode
+        plan["quantize"] = config.quantize
+        plan["cors_origins"] = list(config.cors_origins)
+        # Whether, not which: --dry-run output ends up in terminals and issues.
+        plan["api_key"] = config.api_key is not None
         plan["endpoints"] = [
             "/health",
             "/metrics",
@@ -142,6 +144,9 @@ def _format_plan(plan: dict[str, Any]) -> str:
         for name, value in plan["environment"].items():
             lines.append(f"{'env':<16}{name}={value}")
     else:
+        lines.append(f"{'quantize':<16}{plan['quantize']}")
+        lines.append(f"{'cors_origins':<16}{', '.join(plan['cors_origins']) or 'none'}")
+        lines.append(f"{'api_key':<16}{'required' if plan['api_key'] else 'none'}")
         lines.append(f"{'endpoints':<16}{' '.join(plan['endpoints'])}")
     return "\n".join(lines)
 

@@ -34,6 +34,16 @@ from .serve.engine import ServeConfig
 from .targets import DeviceInfo, TargetSpec
 
 
+def _cors_origins(value: str) -> tuple[str, ...]:
+    """Split ``--cors-origins`` on commas, dropping the empties a trailing one leaves.
+
+    An empty string is not "allow everything" but "allow nothing", so a caller
+    who passes ``--cors-origins ""`` gets no ``Access-Control-Allow-Origin`` at
+    all rather than the wildcard they were trying to turn off.
+    """
+    return tuple(origin.strip() for origin in value.split(",") if origin.strip())
+
+
 def _target_data(device: DeviceInfo) -> dict[str, Any]:
     target = device.target
     return {
@@ -531,7 +541,12 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser = model_subparsers.add_parser(
         "serve", help="serve a model over an OpenAI-compatible HTTP endpoint"
     )
-    serve_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    serve_parser.add_argument(
+        "model_uri",
+        help=(
+            "hf://owner/model, or the path to a directory holding a model saved by save_pretrained"
+        ),
+    )
     serve_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     serve_parser.add_argument(
         "--backend",
@@ -553,11 +568,43 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
     serve_parser.add_argument(
         "--max-model-len",
+        # Two spellings of one static cache. `--max-sequence-length` matches
+        # `compile_generation`'s own parameter name, `--max-model-len` matches
+        # vLLM's flag; they share a dest so neither can silently lose to the other.
+        "--max-sequence-length",
+        dest="max_model_len",
         type=int,
-        default=2048,
+        default=4096,
         help=(
-            "tokens of static KV cache to allocate at startup (default: 2048). "
-            "The cache never grows, so this is the hard limit on prompt plus completion"
+            "tokens of static KV cache to allocate at startup (default: 4096). "
+            "The cache never grows, so this is the hard limit on prompt plus completion, "
+            "and it is allocated whether or not it is used"
+        ),
+    )
+    serve_parser.add_argument(
+        "--quantize",
+        choices=("none", "int8", "fp8", "nvfp4"),
+        default="none",
+        help=(
+            "quantize the weights before compiling the decode loop (default: none). "
+            "Refused, rather than ignored, on a target or backend that cannot do it"
+        ),
+    )
+    serve_parser.add_argument(
+        "--cors-origins",
+        default="*",
+        help=(
+            "comma-separated origins allowed to call this server from a browser "
+            '(default: "*"), for a local UI on another port. Narrow it if the server '
+            "is reachable from anywhere but this machine"
+        ),
+    )
+    serve_parser.add_argument(
+        "--api-key",
+        default=None,
+        help=(
+            "require 'Authorization: Bearer <key>' on every request except /health "
+            "(default: no key, because the server binds loopback)"
         ),
     )
     serve_parser.add_argument(
@@ -732,6 +779,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     compile_prefill=args.compile_prefill,
                     host=args.host,
                     port=args.port,
+                    quantize=args.quantize,
+                    cors_origins=_cors_origins(args.cors_origins),
+                    api_key=args.api_key,
                 ),
                 dry_run=args.dry_run,
                 as_json=args.json,
