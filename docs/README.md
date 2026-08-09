@@ -68,6 +68,9 @@ This index covers everything else.
   installable backend.
 - [Compiled Hugging Face generation](huggingface-generation.md) — the static
   KV-cache decode path, as `lm7 model generate` drives it through Transformers.
+- [Serving](serving.md) — `lm7 model serve`: an OpenAI-compatible HTTP endpoint
+  over the compiled decode loop. Single-stream by design, with `--backend vllm`
+  as the handover when throughput matters.
 - [Prefill and KV-cache decode](kv-cache-decode.md) — `lm7.compile_generation`:
   two separately compiled graphs, one device-resident cache, and per-phase
   compile counters. Measured on an H100.

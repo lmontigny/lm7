@@ -30,6 +30,7 @@ from .huggingface import (
 )
 from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
+from .serve.engine import ServeConfig
 from .targets import DeviceInfo, TargetSpec
 
 
@@ -527,6 +528,56 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_json_argument(generate_parser)
 
+    serve_parser = model_subparsers.add_parser(
+        "serve", help="serve a model over an OpenAI-compatible HTTP endpoint"
+    )
+    serve_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    serve_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    serve_parser.add_argument(
+        "--backend",
+        default="auto",
+        help=(
+            "backend selector for the compiled decode loop: auto, eager, or inductor. "
+            "'vllm' instead hands the port to vLLM, which must be installed separately"
+        ),
+    )
+    serve_parser.add_argument(
+        "--dtype",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        default="auto",
+        help="model dtype (default: auto)",
+    )
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
+    serve_parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=2048,
+        help=(
+            "tokens of static KV cache to allocate at startup (default: 2048). "
+            "The cache never grows, so this is the hard limit on prompt plus completion"
+        ),
+    )
+    serve_parser.add_argument(
+        "--compile-mode",
+        default=None,
+        help="Inductor preset for both graphs, for example reduce-overhead (default: none)",
+    )
+    serve_parser.add_argument(
+        "--no-compile-prefill",
+        dest="compile_prefill",
+        action="store_false",
+        help="leave the prompt pass in eager, so a new prompt length does not recompile",
+    )
+    serve_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would be served, without loading a model or binding a port",
+    )
+    _add_json_argument(serve_parser)
+
     export_parser = model_subparsers.add_parser(
         "export", help="capture a model into an LM7 artifact"
     )
@@ -664,6 +715,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _emit_json(generate_result.to_dict())
                 if args.json
                 else _print_model_generate(generate_result)
+            )
+        elif args.command == "model" and args.model_command == "serve":
+            # Imported here rather than at module scope so that building the
+            # parser for any other subcommand never reaches FastAPI.
+            from .serve.cli import serve_model
+
+            return serve_model(
+                ServeConfig(
+                    model=args.model_uri,
+                    target=args.target,
+                    backend=args.backend,
+                    dtype=args.dtype,
+                    max_model_len=args.max_model_len,
+                    compile_mode=args.compile_mode,
+                    compile_prefill=args.compile_prefill,
+                    host=args.host,
+                    port=args.port,
+                ),
+                dry_run=args.dry_run,
+                as_json=args.json,
             )
         elif args.command == "model" and args.model_command == "export":
             export_result = export_hf_model(

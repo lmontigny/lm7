@@ -249,6 +249,31 @@ had stated.
   fake runtime.
 - `aws:trainium` parses as a target and is never executed.
 
+## Serving
+
+`lm7 model serve` is a **single-user local server**, and the things that make a
+serving engine fast are absent from it on purpose — see [serving](serving.md).
+
+- **One request at a time.** `compile_generation` owns one static KV cache that
+  every decode step mutates in place, so concurrent generations would corrupt
+  each other silently. An `asyncio.Lock` serializes them; a second caller waits.
+  No continuous batching, no paged attention, no prefix caching, no chunked
+  prefill, no speculative decoding, no LoRA. A request that asks for one of these
+  — or for `n > 1`, logprobs, tools, or structured output — is refused with a
+  400 naming the field rather than served as something narrower.
+- **The KV cache is allocated at startup and never grows.** `prompt + max_tokens`
+  above `--max-model-len` is a 400, not a longer wait.
+- **Validated on one target and one model.** Apple M-series `cpu:arm64` with
+  SmolLM2-135M-Instruct, driven by `curl` and by the official `openai` Python
+  SDK: both endpoints, both buffered and streamed, greedy output byte-identical
+  to `model.generate`. **No accelerator target has served anything**, no model
+  above 135M has, and there is no serving benchmark in this repo — so no claim
+  about serving latency or throughput can be sourced from it.
+- **`--backend vllm` has never been run.** LM7 translates its flags into vLLM's
+  own `vllm serve` argv and hands over the process. `vllm_argv` is unit-tested;
+  the handover is not, because vLLM does not install on Apple Silicon and no GPU
+  box was rented for it. Say "implemented", not "validated".
+
 ## Evaluated, not adopted
 
 These have measurement harnesses or written plans, and no registered backend:

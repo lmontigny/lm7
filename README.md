@@ -235,6 +235,7 @@ uv pip install -e ".[onnxruntime]"   # CPU — or ".[onnxruntime-gpu]" for CUDA 
 uv pip install -e ".[iree-vulkan]"   # Vulkan AOT export
 uv pip install -e ".[openxla]"       # on a TPU VM
 uv pip install -e ".[tvm]"           # Apache TVM
+uv pip install -e ".[serve]"         # FastAPI/Uvicorn for `lm7 model serve`
 ```
 
 Three need their own environment, because they pin PyTorch or ship outside PyPI:
@@ -321,6 +322,20 @@ token, state = runner.decode(state.next_token, state)
 
 See [prefill and KV-cache decode](docs/kv-cache-decode.md) for the API and the
 H100 numbers.
+
+To put that loop behind the API your local client already speaks:
+
+```bash
+uv pip install -e ".[serve,hf]"
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
+```
+
+`POST /v1/chat/completions` (streaming or not), `/v1/completions`, `/v1/models`,
+`/health`, `/metrics` — driven successfully by the official `openai` SDK. It is a
+**single-user** server: one model, one static KV cache, one request at a time,
+and no batching or paged attention, because adding those would mean writing a
+serving engine. `--backend vllm` hands the port to vLLM instead and steps out of
+the request path. See [serving](docs/serving.md).
 
 ## 5. Export an artifact
 
@@ -477,6 +492,7 @@ The [documentation index](docs/README.md) lists everything. Most useful:
 - [Limitations](docs/limitations.md) — what LM7 does not do, per backend.
 - [Architecture](docs/architecture.md) — targets, backends, planner, artifacts.
 - [JIT vs. AOT](docs/jit-vs-aot.md) — compilation timing and artifact rules.
+- [Serving](docs/serving.md) — `lm7 model serve`, and what it deliberately is not.
 - [Development and testing](docs/development.md) — running the suite, GPU tests.
 
 ## Contributing
