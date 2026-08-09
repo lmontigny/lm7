@@ -31,6 +31,51 @@ print(
 )
 ```
 
+## Where the model comes from
+
+Two forms, and the rule between them is positional rather than clever:
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct   # the Hub
+lm7 model serve ./my-finetune                              # a local directory
+```
+
+A **directory that exists on disk wins**, and a Hub id is only ever accepted
+with its `hf://` prefix — so there is no ambiguity to arbitrate. A bare
+`owner/model` that is not a directory was never valid and still isn't.
+
+The local form is whatever `save_pretrained` wrote: `config.json`, the weights,
+and the tokenizer files beside them. That is what makes a fine-tune, a
+pre-downloaded checkpoint, or an air-gapped box reachable without a Hub round
+trip. The path is resolved to an absolute one, and **that resolved path is the
+served model id** — it appears in `/health`, in `/v1/models`, and in the `model`
+field of every response:
+
+```console
+$ lm7 model serve ./local-smollm2 --target cpu --max-model-len 256
+lm7: loading /abs/path/to/local-smollm2 for cpu:arm64...
+$ curl -s localhost:8000/v1/models | jq -r '.data[0].id'
+/abs/path/to/local-smollm2
+```
+
+Resolving matters because the server may change directory later and a client
+reading `/v1/models` cannot resolve `./local-smollm2` against a cwd it does not
+share. `--backend vllm` is handed the same resolved path, since `vllm serve`
+takes a directory in the same positional slot as a Hub id.
+
+A directory that is not a model is refused with the reason — no `config.json`,
+a file where a directory was expected, or a path that does not exist each get
+their own message rather than a Hugging Face URI error that would send someone
+looking in the wrong place.
+
+> **This widens where a model comes from, not what shape it can be.**
+> `compile_generation` requires the Hugging Face causal-LM contract — the model
+> must accept `past_key_values` and `cache_position` — so a custom architecture
+> that manages its KV cache differently still will not serve, from either form.
+> To serve a model object you already hold in memory, build the runner yourself
+> with [`lm7.compile_generation`](kv-cache-decode.md) and hand it to
+> `LM7ServeEngine`, which takes a prebuilt runner and tokenizer.
+
 ## What this is, and what it is not
 
 This is a **single-user local server**. It holds one model, one pair of compiled
@@ -177,6 +222,13 @@ driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
 - `/health` at 10–30 ms during a live generation
 - 400 on an oversized prompt, on `n=4`; 200 on the `n=1`/zero-penalty defaults
   every OpenAI SDK sends; 422 on an empty `messages` array
+
+The **local-directory form** was run the same way, on `cpu:arm64`: the same
+checkpoint written out with `save_pretrained` and served as `./local-smollm2`,
+with `--dry-run` resolving the relative path, `/health` and `/v1/models`
+reporting the absolute one, a buffered completion, an SSE stream, and a round
+trip through the `openai` SDK. `/health` reported `backend=auto` before the
+first request and `backend=inductor` after it, as it does for a Hub model.
 
 > Serving on MPS did not work until this change. `compile_generation` compiles
 > with `transfers="explicit"`, and that check compared an unindexed

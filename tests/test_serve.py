@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -22,7 +23,12 @@ import torch
 import lm7.serve.vllm as vllm_module
 from lm7.errors import UnsupportedModelError
 from lm7.serve.cli import serve_plan
-from lm7.serve.engine import LM7ServeEngine, ServeConfig, select_token
+from lm7.serve.engine import (
+    LM7ServeEngine,
+    ServeConfig,
+    resolve_model_source,
+    select_token,
+)
 from lm7.serve.validation import unsupported_fields
 from lm7.serve.vllm import vllm_argv, vllm_platform
 from lm7.targets import parse_target
@@ -439,3 +445,77 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     assert plan["runtime"] == "vllm"
     assert plan["argv"][:2] == ["vllm", "serve"]
     assert isinstance(plan["vllm_installed"], bool)
+
+
+# -- where the model comes from -------------------------------------------
+
+
+def _saved_model_dir(tmp_path: Path, name: str = "checkpoint") -> Path:
+    """A directory shaped like one `save_pretrained` wrote, without weights.
+
+    `resolve_model_source` decides what to hand `from_pretrained`; it never loads
+    anything, so `config.json` existing is the whole fixture.
+    """
+    directory = tmp_path / name
+    directory.mkdir()
+    (directory / "config.json").write_text("{}")
+    return directory
+
+
+def test_a_local_directory_is_served_as_itself(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    assert resolve_model_source(str(directory)) == str(directory.resolve())
+
+
+def test_a_relative_local_directory_resolves_to_an_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _saved_model_dir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # The served id has to survive the server changing directory later, and a
+    # client reading /v1/models cannot resolve "./checkpoint" against our cwd.
+    assert resolve_model_source("./checkpoint") == str(directory.resolve())
+
+
+def test_a_hub_uri_still_resolves_to_the_model_id() -> None:
+    assert resolve_model_source("hf://owner/model") == "owner/model"
+
+
+def test_a_directory_without_a_config_says_so_rather_than_failing_in_transformers(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "not-a-model"
+    empty.mkdir()
+    with pytest.raises(UnsupportedModelError, match="does not contain config.json"):
+        resolve_model_source(str(empty))
+
+
+def test_a_path_that_does_not_exist_is_not_reported_as_a_bad_hub_uri(tmp_path: Path) -> None:
+    # The Hub error ("expected a Hugging Face URI") sends someone who typed a
+    # path to the wrong place entirely.
+    with pytest.raises(UnsupportedModelError, match="No such directory"):
+        resolve_model_source(str(tmp_path / "missing"))
+
+
+def test_a_file_is_refused_with_the_reason(tmp_path: Path) -> None:
+    weights = tmp_path / "model.safetensors"
+    weights.write_text("")
+    with pytest.raises(UnsupportedModelError, match="is a file, not a directory"):
+        resolve_model_source(str(weights))
+
+
+def test_a_bare_name_is_still_refused_because_a_hub_id_needs_its_prefix() -> None:
+    with pytest.raises(UnsupportedModelError, match="hf://"):
+        resolve_model_source("owner/model")
+
+
+def test_the_plan_reports_a_local_directory(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    plan = serve_plan(ServeConfig(model=str(directory), target="cpu"))
+    assert plan["model"] == str(directory.resolve())
+
+
+def test_vllm_is_handed_the_local_directory(tmp_path: Path) -> None:
+    directory = _saved_model_dir(tmp_path)
+    argv = vllm_argv(ServeConfig(model=str(directory), target="cpu", backend="vllm"))
+    assert argv[:3] == ["vllm", "serve", str(directory.resolve())]
