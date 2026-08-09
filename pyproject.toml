@@ -114,6 +114,7 @@ markers = [
     "tvm: requires Apache TVM with the Relax PyTorch frontend",
     "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
     "serve: requires the FastAPI/Uvicorn HTTP stack from the serve extra",
+    "serve_load: requires the serve and hf extras, and downloads a tiny model",
 ]
 
 [tool.ruff]

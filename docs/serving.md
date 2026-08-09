@@ -329,6 +329,20 @@ matches no layer in the model is a refusal rather than a silent no-op that would
 report a quantization that never happened. `--backend eager` plus `--quantize`
 is refused for the same reason.
 
+`lm7 model compatibility <model> --target <target>` reports each mode's gate
+without downloading weights, which is the cheapest way to find out what a
+machine can do. On Apple Silicon the answer is nothing: quantization runs
+through TorchAO, `int8` is gated to NVIDIA and CPU targets, and `fp8`/`nvfp4` to
+NVIDIA alone — so `--target apple --quantize int8` is refused and `--target cpu`
+is the local option.
+
+> **`--quantize` needs the `hf://` form.** The gate is per model as well as per
+> target, keyed by Hugging Face id against a list of checkpoints someone has
+> actually validated — and a local directory carries no id, because
+> `save_pretrained` does not record where the checkpoint came from. A local
+> directory plus `--quantize` is therefore refused, saying so. Serving that same
+> directory unquantized is unaffected.
+
 ## First request compiles
 
 The graphs compile lazily, on their first call. The first request therefore pays
@@ -508,9 +522,15 @@ without one, 401 with a wrong one and 200 with the right one; a 401 still
 carrying `access-control-allow-origin`; a preflight `OPTIONS` succeeding with no
 `Authorization` header and echoing back `authorization, content-type`; a
 disallowed origin getting no CORS header at all; and a generation completing
-through the key. **`--quantize` has not been run through the server** — its
-gates and its application are the same functions `lm7 model run` uses and are
-tested there, but no served request has been answered by a quantized model.
+through the key.
+
+**`--quantize int8` has now been served**, on `cpu:arm64` with
+SmolLM2-135M-Instruct: 210 modules converted, model storage 538 MB → 220 MB
+(2.44x), and a served request answered correctly by the quantized model. Both
+refusals were checked the same way — `--target apple --quantize int8` on the
+vendor gate, `--backend eager --quantize int8` on the backend gate, each firing
+before the checkpoint downloads. `fp8` and `nvfp4` remain unserved: they need an
+`sm90` and an `sm120` card respectively.
 
 The **local-directory form** was run the same way, on `cpu:arm64`: the same
 checkpoint written out with `save_pretrained` and served as `./local-smollm2`,
@@ -541,6 +561,7 @@ from it.
 ```bash
 python -m pytest tests/test_serve.py               # portable; no extra needed
 python -m pytest -m serve                          # HTTP surface; needs [serve]
+python -m pytest -m serve_load                     # a real model; needs [serve,hf]
 ```
 
 `tests/test_serve.py` drives the engine against a scripted runner and a
@@ -548,6 +569,31 @@ fake tokenizer — stop sequences, EOS, capacity refusal, cancellation, sampling
 the lock — and runs on a plain `[dev]` install. `tests/test_serve_integration.py`
 checks the wire format an OpenAI client actually sees, and is in CI's
 `serve` job.
+
+### The load path needs a real model to test at all
+
+Both files above use fakes, which is right for testing the wire format and wrong
+for testing what happens before it. Nothing in them executes
+`LM7ServeEngine.load` — resolving what the user typed, both `from_pretrained`
+calls, the quantization gate, `compile_generation`, the static cache landing on
+the target — and **that is where every serve bug found by hand has been**: an
+indexed-device comparison that made `--target apple` 500 on every request; a
+quantization gate that printed a filesystem path where its own text promised a
+model id.
+
+`tests/test_serve_load_integration.py` closes that, using
+`hf-internal-testing/tiny-random-LlamaForCausalLM` — about **15 MB** of random
+weights. Its output is gibberish and nothing asserts otherwise; what is checked
+is that a real checkpoint travels from a URI to a token over HTTP, from the Hub
+and from a `save_pretrained` directory, that the cache is sized by
+`--max-model-len` rather than merely validated against it, and that the
+quantization gate refuses a model nobody has validated. Generated-text
+correctness belongs to [prefill and KV-cache decode](kv-cache-decode.md), which
+compares against eager on real models.
+
+It runs in CI's `serve` job, in a step **after** the fakes-only run, so the
+existing signal — that the HTTP surface works without Transformers installed —
+is preserved rather than absorbed.
 
 Two tests are worth knowing about, because they check claims this page makes
 rather than code paths:
