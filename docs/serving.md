@@ -78,6 +78,39 @@ convenience rather than part of the API contract. The conversation lives in the
 page: LM7's engine is one static KV cache with no notion of a session, so each
 turn resends the transcript exactly as an OpenAI client would.
 
+### The status line
+
+Above the input, the page says what the server is doing — because "slow" and
+"hung" look identical otherwise, and on a cold server the first message really
+is slow:
+
+```
+cold — the first message compiles the graphs and will be slow
+compiling prefill and decode graphs…          ← first message, from /metrics warm:false
+prefill…                                      ← subsequent messages, before the first token
+generating · 88 char/s                        ← streaming
+20 tokens · 412 ms to first token · 9.4 tok/s · 1 prefill graph(s) · 0 decode recompiles
+```
+
+The last line is the part no other local server can show you, and it is the
+whole point of the two-graph split:
+
+- **`0 decode recompiles`** is `steady_frames` from `runner.counters`. Above zero
+  means a *token* triggered a compile — the regression separate prefill and
+  decode graphs exist to prevent — and the page turns red and says `RECOMPILED`
+  rather than burying it. See [prefill and KV-cache decode](kv-cache-decode.md).
+- **`N prefill graph(s)`** is the cost that split accepts: the prompt pass is
+  compiled per prompt length, so this climbs as prompt lengths vary. Watching it
+  climb while recompiles stay at 0 is the design working as intended.
+
+Both are also on `/metrics`, so a script can assert them without the browser.
+
+> Token counts come from the server, which counts tokens; the live `char/s`
+> reading is characters, because mid-stream the page has SSE text fragments and
+> not tokens. Timings are wall clock from the page and include HTTP over
+> loopback. **They are indicators, not benchmarks** — there is no serving
+> benchmark in this repo.
+
 > **What is and is not covered.** Tests assert that `/` serves the page, that it
 > contains no external reference, and that it stays out of the schema; the SSE
 > reassembly the page performs was checked against a real captured stream fed in
@@ -119,7 +152,7 @@ that depends on tools will report an error rather than degrade.
 | --- | --- |
 | `GET /` | the built-in chat page (not in the OpenAPI schema) |
 | `GET /health` | model, target, and the backend that compiled the decode graph |
-| `GET /metrics` | request count, token counts, TTFT, TPOT, KV cache bytes |
+| `GET /metrics` | request/token counts, TTFT, TPOT, KV cache bytes, and the compile state: `warm`, `prefill_lengths`, `steady_frames` |
 | `GET /v1/models` | the one model this server holds |
 | `POST /v1/chat/completions` | `stream: true` or `false` |
 | `POST /v1/completions` | the pre-chat endpoint, same engine |
@@ -165,7 +198,30 @@ cost of raising it: the cache is `2 × layers × kv_heads × head_dim × dtype_b
 
 The graphs compile lazily, on their first call. The first request therefore pays
 for Inductor and the rest do not, which shows up as a large TTFT average until
-enough requests have run to dilute it. `--no-compile-prefill` leaves the prompt
+enough requests have run to dilute it. `/metrics` reports `warm: false` until
+that first request completes, which is how the chat page knows to say
+"compiling" rather than looking hung.
+
+That LM7 compiled at all is checkable rather than assumed. On Apple M-series with
+SmolLM2-135M-Instruct, `--target auto` resolving to `apple:metal`:
+
+```
+$ curl -s localhost:8000/metrics          # before any request
+"backend": "auto",  "warm": false,  "prefill_lengths": 0,  "steady_frames": 0
+$ curl -s localhost:8000/metrics          # after one message
+"backend": "inductor",  "warm": true,  "prefill_lengths": 1,  "steady_frames": 0
+```
+
+and directly from the runner, which is where those numbers come from:
+
+```
+selected backend : inductor
+counters         : prefill {frames: 1, unique_graphs: 1, graph_breaks: 0}
+                   decode  {frames: 1, unique_graphs: 1, graph_breaks: 0}
+                   steady  {frames: 0}
+```
+
+One graph per phase, no graph breaks, and nothing compiled in steady state. `--no-compile-prefill` leaves the prompt
 pass in eager, which is worth it when prompt lengths vary: a compiled prefill is
 compiled *per prompt length*, so a varied workload recompiles it repeatedly
 while the decode graph — the one that runs a thousand times — is compiled once

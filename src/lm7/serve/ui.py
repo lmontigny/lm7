@@ -83,6 +83,19 @@ main { flex: 1; overflow-y: auto; padding: 18px 16px; }
 }
 @keyframes blink { to { visibility: hidden; } }
 footer { border-top: 1px solid var(--line); padding: 12px 16px; }
+.status {
+  max-width: 760px; margin: 0 auto 8px; min-height: 17px;
+  color: var(--muted); font-size: 12.5px;
+  display: flex; align-items: center; gap: 7px;
+}
+.status .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none;
+}
+.status.busy .dot { animation: pulse 1.1s ease-in-out infinite; }
+.status.idle .dot { background: var(--muted); opacity: .5; }
+.status.warn { color: var(--error); }
+.status.warn .dot { background: var(--error); animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 form { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
 textarea {
   flex: 1; resize: none; font: inherit; color: var(--fg); background: var(--bg);
@@ -106,10 +119,13 @@ form button[type=submit] { padding: 9px 16px; }
     <code>POST /v1/chat/completions</code> &middot; <code>/docs</code> for the schema
   </p>
 </div></main>
-<footer><form id="form">
-  <textarea id="input" rows="1" placeholder="Message the model…" autofocus></textarea>
-  <button type="submit" id="send">Send</button>
-</form></footer>
+<footer>
+  <div class="status idle" id="status"><span class="dot"></span><span id="statustext"></span></div>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Message the model…" autofocus></textarea>
+    <button type="submit" id="send">Send</button>
+  </form>
+</footer>
 
 <script>
 const log = document.getElementById("log");
@@ -118,11 +134,20 @@ const input = document.getElementById("input");
 const send = document.getElementById("send");
 const meta = document.getElementById("meta");
 
+const status = document.getElementById("status");
+const statusText = document.getElementById("statustext");
+
 // Sent verbatim on every turn. The server keeps no session, so this array is
 // the entire conversation -- see the module docstring.
 let messages = [];
 let maxModelLen = 2048;
 let busy = false;
+let latest = null;
+
+function setStatus(text, kind) {
+  status.className = "status " + (kind || "idle");
+  statusText.textContent = text;
+}
 
 async function refreshHeader() {
   try {
@@ -130,14 +155,30 @@ async function refreshHeader() {
       fetch("/health").then((r) => r.json()),
       fetch("/metrics").then((r) => r.json()),
     ]);
+    latest = metrics;
     maxModelLen = metrics.max_model_len;
     const mib = (metrics.kv_cache_bytes / 1048576).toFixed(0);
     meta.innerHTML =
       `<code>${escapeHtml(health.model)}</code> &middot; ${escapeHtml(health.target)}` +
       ` &middot; backend ${escapeHtml(health.backend)}` +
       ` &middot; ${maxModelLen} ctx &middot; kv ${mib} MiB`;
+    if (!busy) {
+      // A token that triggers a compile is the one regression the split into
+      // separate prefill and decode graphs exists to prevent, so it outranks
+      // every other thing this line could be saying.
+      if (metrics.steady_frames > 0) {
+        setStatus(
+          `${metrics.steady_frames} compile(s) during decode — a token is` +
+            ` triggering recompilation`,
+          "warn"
+        );
+      } else if (!metrics.warm) {
+        setStatus("cold — the first message compiles the graphs and will be slow", "idle");
+      }
+    }
   } catch (err) {
     meta.textContent = "server unreachable";
+    if (!busy) setStatus("server unreachable", "warn");
   }
 }
 
@@ -193,6 +234,7 @@ document.getElementById("clear").addEventListener("click", () => {
   messages = [];
   log.replaceChildren();
   bubble("assistant", "Cleared. The server held none of that — the page did.");
+  refreshHeader();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -205,24 +247,50 @@ form.addEventListener("submit", async (event) => {
   bubble("user", content);
 
   setBusy(true);
+  // A cold server is about to compile; a warm one is only running prefill.
+  // Saying which is the difference between "slow" and "hung".
+  const cold = !latest || !latest.warm;
+  setStatus(cold ? "compiling prefill and decode graphs…" : "prefill…", "busy");
+
+  const before = latest;
   const target = bubble("assistant", "");
   target.parentElement.classList.add("cursor");
   let answer = "";
   try {
     answer = await stream(target);
     messages.push({ role: "assistant", content: answer });
+    await summarize(before);
   } catch (err) {
     target.parentElement.remove();
     bubble("error", String(err.message || err));
     // Dropped so a failed turn is not resent as context on the next one.
     messages.pop();
+    setStatus("failed", "warn");
   } finally {
     target.parentElement.classList.remove("cursor");
     setBusy(false);
-    refreshHeader();
     input.focus();
   }
 });
+
+async function summarize(before) {
+  // Token counts come from the server, which counts tokens; the page would be
+  // counting SSE deltas, which are text fragments and not the same thing.
+  await refreshHeader();
+  if (!latest || !before) return;
+  const tokens = latest.generated_tokens - before.generated_tokens;
+  const parts = [`${tokens} tokens`];
+  if (firstTokenMs !== null) parts.push(`${Math.round(firstTokenMs)} ms to first token`);
+  if (decodeSeconds > 0 && tokens > 1) {
+    parts.push(`${((tokens - 1) / decodeSeconds).toFixed(1)} tok/s`);
+  }
+  parts.push(`${latest.prefill_lengths} prefill graph(s)`);
+  parts.push(latest.steady_frames === 0 ? "0 decode recompiles" : "RECOMPILED");
+  setStatus(parts.join(" · "), latest.steady_frames === 0 ? "idle" : "warn");
+}
+
+let firstTokenMs = null;
+let decodeSeconds = 0;
 
 async function stream(target) {
   const response = await fetch("/v1/chat/completions", {
@@ -246,8 +314,12 @@ async function stream(target) {
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const started = performance.now();
   let buffer = "";
   let answer = "";
+  let firstAt = null;
+  firstTokenMs = null;
+  decodeSeconds = 0;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -263,8 +335,17 @@ async function stream(target) {
       if (payload === "[DONE]") continue;
       const delta = JSON.parse(payload).choices[0].delta.content;
       if (delta) {
+        if (firstAt === null) {
+          // Wall clock from the page, so it includes HTTP over loopback. It is
+          // an indicator, not a benchmark -- see docs/serving.md.
+          firstAt = performance.now();
+          firstTokenMs = firstAt - started;
+        }
         answer += delta;
+        decodeSeconds = (performance.now() - firstAt) / 1000;
         target.textContent = answer;
+        const rate = decodeSeconds > 0 ? ` · ${(answer.length / decodeSeconds).toFixed(0)} char/s` : "";
+        setStatus(`generating${rate}`, "busy");
         scroll();
       }
     }

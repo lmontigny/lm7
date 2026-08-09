@@ -290,6 +290,25 @@ def test_an_empty_message_list_fails_schema_validation() -> None:
 # -- metrics --------------------------------------------------------------
 
 
+def test_metrics_report_the_compile_state_the_page_shows() -> None:
+    with client([1, 2, EOS]) as http:
+        cold = http.get("/metrics").json()
+        assert cold["warm"] is False
+        http.post("/v1/chat/completions", json=chat())
+        warm = http.get("/metrics").json()
+    assert warm["warm"] is True
+    # The claim the whole two-graph split exists to make checkable.
+    assert warm["steady_frames"] == 0
+    assert "prefill_lengths" in warm
+
+
+def test_the_chat_page_reads_the_compile_state() -> None:
+    from lm7.serve.ui import PAGE
+
+    for field in ("warm", "steady_frames", "prefill_lengths"):
+        assert field in PAGE
+
+
 def test_metrics_count_what_actually_ran() -> None:
     with client([1, 2, 3, EOS]) as http:
         assert http.get("/metrics").json()["requests"] == 0
