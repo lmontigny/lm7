@@ -34,10 +34,18 @@ undefined `c10` symbol.
 
 ```bash
 python3 -m venv .venv-et
+.venv-et/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv-et/bin/python -m pip install -e ".[dev,executorch]"
-.venv-et/bin/python -m pip install "torch==2.12.*" --index-url https://download.pytorch.org/whl/cpu
 source .venv-et/bin/activate
 ```
+
+CPU torch goes in first so the extra keeps it if it is new enough and replaces
+it if not; the `executorch` wheel's own requirement is what decides — 1.4.0 asks
+for `torch>=2.13.0a0`, and that requirement, rather than a version written down
+here, is what tracks the libtorch it is linked against. Don't install a pinned torch
+*after* the extra: forcing 2.12 under ExecuTorch 1.4.0 loads the runtime
+extension against the wrong libtorch and `.pte` load fails with an undefined
+`_pthreadpool_create_v2`.
 
 Activate the environment rather than calling `.venv-et/bin/python` directly.
 ExecuTorch shells out to `flatc` during serialization and resolves it from

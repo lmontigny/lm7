@@ -34,12 +34,17 @@ extra beyond `.[executorch]`, and `coremltools` comes along as its dependency:
 ```bash
 python3 -m venv .venv-et
 .venv-et/bin/python -m pip install -e ".[dev,executorch]"
-.venv-et/bin/python -m pip install "torch==2.12.*" --index-url https://download.pytorch.org/whl/cpu
 ```
 
-coremltools reported "Torch 2.12.1 has not been tested with coremltools" at
+Let the extra resolve PyTorch — the `executorch` wheel declares the torch its
+prebuilt runtime extension is ABI-linked against, and pinning one yourself
+afterwards is what [docs/executorch.md](executorch.md#install) warns about.
+macOS has no CUDA build to avoid, so the extra alone is the whole install here.
+
+coremltools reported "Torch 2.13.0 has not been tested with coremltools" at
 install time (tested up to 2.7.0) — a warning, not a failure; every test in
-this backend's suite passed against it.
+this backend's suite passed against it, on an M-series Mac under macOS 26 with
+ExecuTorch 1.4.0 and coremltools 9.0.
 
 ## Options
 
