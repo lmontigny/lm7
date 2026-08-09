@@ -166,9 +166,10 @@ could load and serve happily from the wrong device.
 
 ## What has actually been run
 
-Apple M-series, `--target cpu` (`cpu:arm64`), `SmolLM2-135M-Instruct`,
-transformers 5.14.1 / torch 2.13.0, driven with `curl` and with the official
-`openai` Python SDK 2.53.0:
+Apple M-series, `SmolLM2-135M-Instruct`, transformers 5.14.1 / torch 2.13.0,
+driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
+`--target cpu` (`cpu:arm64`) and `--target auto` (`apple:metal`, resolving to
+`backend=inductor`):
 
 - `/health`, `/metrics`, `/v1/models`
 - chat completions, buffered and streamed; `/v1/completions`, buffered and streamed
@@ -177,10 +178,22 @@ transformers 5.14.1 / torch 2.13.0, driven with `curl` and with the official
 - 400 on an oversized prompt, on `n=4`; 200 on the `n=1`/zero-penalty defaults
   every OpenAI SDK sends; 422 on an empty `messages` array
 
-Not run: any accelerator target (`nvidia`, `apple`, `intel:npu`, `tpu`), any
-model above 135M, any throughput or latency measurement, and the vLLM handover.
-No serving benchmark exists in this repo, and no claim about serving performance
-should be made from it.
+> Serving on MPS did not work until this change. `compile_generation` compiles
+> with `transfers="explicit"`, and that check compared an unindexed
+> `torch.device("mps")` against the `mps:0` a transfer actually produces — so
+> every request on `--target apple` was a 500, with an `InputDeviceError` saying
+> `expected mps, got mps:0`. That is a **core** bug rather than a serving one
+> (any `lm7.compile(..., transfers="explicit")` on an indexed device hit it, CUDA
+> included); it simply had no caller until now. Fixed in `module.py:_same_device`
+> — credit to [#115](https://github.com/lmontigny/lm7/pull/115), which found it
+> independently.
+
+Not run: `nvidia`, `intel:npu`, `tpu`, any model above 135M, and the vLLM
+handover. **No timing here is a measurement.** The KV cache is allocated at
+startup and the graphs compile inside the first request, so `/metrics` TTFT and
+TPOT are compile-polluted until several requests have run. No serving benchmark
+exists in this repo, and no claim about serving performance should be sourced
+from it.
 
 ## Tests
 
