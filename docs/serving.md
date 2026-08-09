@@ -59,12 +59,100 @@ behind it.
 When throughput matters, use `--backend vllm` (below) and LM7 steps out of the
 request path entirely.
 
+## Talking to it from a browser
+
+`http://127.0.0.1:8000/` is a chat page, so a compiled model can be checked by
+hand without writing a client — which is the job `lm7 model serve` exists for.
+
+It is one file (`src/lm7/serve/ui.py`), about 9 KB, with **no CDN, no web font,
+no build step and no external requests of any kind**. That is a requirement
+rather than a preference: a page that fetches a stylesheet from a CDN renders
+fine on the laptop it was written on and fails on exactly the airgapped machine
+where running a model locally is the point. A test asserts the absence, so a
+later addition cannot quietly reintroduce it.
+
+The page is an ordinary client. It reads `/health` and `/metrics` for its header
+and posts to `/v1/chat/completions` with `stream: true`, with no privileged
+access to the engine, and it is excluded from the OpenAPI schema because it is a
+convenience rather than part of the API contract. The conversation lives in the
+page: LM7's engine is one static KV cache with no notion of a session, so each
+turn resends the transcript exactly as an OpenAI client would.
+
+### The status line
+
+Above the input, the page says what the server is doing — because "slow" and
+"hung" look identical otherwise, and on a cold server the first message really
+is slow:
+
+```
+cold — the first message compiles the graphs and will be slow
+compiling prefill and decode graphs…          ← first message, from /metrics warm:false
+prefill…                                      ← subsequent messages, before the first token
+generating · 88 char/s                        ← streaming
+20 tokens · 412 ms to first token · 9.4 tok/s · 1 prefill graph(s) · 0 decode recompiles
+```
+
+The last line is the part no other local server can show you, and it is the
+whole point of the two-graph split:
+
+- **`0 decode recompiles`** is `steady_frames` from `runner.counters`. Above zero
+  means a *token* triggered a compile — the regression separate prefill and
+  decode graphs exist to prevent — and the page turns red and says `RECOMPILED`
+  rather than burying it. See [prefill and KV-cache decode](kv-cache-decode.md).
+- **`N prefill graph(s)`** is the cost that split accepts: the prompt pass is
+  compiled per prompt length, so this climbs as prompt lengths vary. Watching it
+  climb while recompiles stay at 0 is the design working as intended.
+
+Both are also on `/metrics`, so a script can assert them without the browser.
+
+> Token counts come from the server, which counts tokens; the live `char/s`
+> reading is characters, because mid-stream the page has SSE text fragments and
+> not tokens. Timings are wall clock from the page and include HTTP over
+> loopback. **They are indicators, not benchmarks** — there is no serving
+> benchmark in this repo.
+
+> **What is and is not covered.** Tests assert that `/` serves the page, that it
+> contains no external reference, and that it stays out of the schema; the SSE
+> reassembly the page performs was checked against a real captured stream fed in
+> at arbitrary read boundaries. **Nothing renders it in a browser** — there is no
+> headless-browser dependency in this repo and adding one for a 9 KB dev page is
+> not worth it. Treat rendering as manually verified, not CI-verified.
+
+### Open WebUI, and other clients
+
+For conversation history, multiple models, or RAG, point a real client at the
+endpoint. LM7 implements the OpenAI chat API, so anything that speaks it works:
+
+```bash
+docker run -d -p 3000:8080 \
+  -e OPENAI_API_BASE_URL=http://host.docker.internal:8000/v1 \
+  -e OPENAI_API_KEY=not-needed \
+  -v open-webui:/app/backend/data --name open-webui \
+  ghcr.io/open-webui/open-webui:main
+```
+
+Then open <http://localhost:3000>. On Linux, replace `host.docker.internal` with
+`172.17.0.1` or run with `--network=host`. Serve with `--host 0.0.0.0` if the
+client is not on this machine — the default binds to loopback, and there is no
+authentication on this endpoint.
+
+Also known to work against an OpenAI-compatible base URL: **Continue** and
+**Cline** (VS Code), **Zed**'s assistant, **Aider**, **LibreChat**, and any
+`openai` SDK. Expect one caveat everywhere: this server refuses `n > 1`,
+logprobs, tool calling and structured output with a 400 (see below), so a client
+that depends on tools will report an error rather than degrade.
+
+> These clients have **not** been tested against LM7 — they are listed because
+> they consume the same API, not because anyone here has run them. The `openai`
+> SDK is what has actually been driven end to end.
+
 ## Endpoints
 
 | | |
 | --- | --- |
+| `GET /` | the built-in chat page (not in the OpenAPI schema) |
 | `GET /health` | model, target, and the backend that compiled the decode graph |
-| `GET /metrics` | request count, token counts, TTFT, TPOT, KV cache bytes |
+| `GET /metrics` | request/token counts, TTFT, TPOT, KV cache bytes, and the compile state: `warm`, `prefill_lengths`, `steady_frames` |
 | `GET /v1/models` | the one model this server holds |
 | `POST /v1/chat/completions` | `stream: true` or `false` |
 | `POST /v1/completions` | the pre-chat endpoint, same engine |
@@ -110,7 +198,30 @@ cost of raising it: the cache is `2 × layers × kv_heads × head_dim × dtype_b
 
 The graphs compile lazily, on their first call. The first request therefore pays
 for Inductor and the rest do not, which shows up as a large TTFT average until
-enough requests have run to dilute it. `--no-compile-prefill` leaves the prompt
+enough requests have run to dilute it. `/metrics` reports `warm: false` until
+that first request completes, which is how the chat page knows to say
+"compiling" rather than looking hung.
+
+That LM7 compiled at all is checkable rather than assumed. On Apple M-series with
+SmolLM2-135M-Instruct, `--target auto` resolving to `apple:metal`:
+
+```
+$ curl -s localhost:8000/metrics          # before any request
+"backend": "auto",  "warm": false,  "prefill_lengths": 0,  "steady_frames": 0
+$ curl -s localhost:8000/metrics          # after one message
+"backend": "inductor",  "warm": true,  "prefill_lengths": 1,  "steady_frames": 0
+```
+
+and directly from the runner, which is where those numbers come from:
+
+```
+selected backend : inductor
+counters         : prefill {frames: 1, unique_graphs: 1, graph_breaks: 0}
+                   decode  {frames: 1, unique_graphs: 1, graph_breaks: 0}
+                   steady  {frames: 0}
+```
+
+One graph per phase, no graph breaks, and nothing compiled in steady state. `--no-compile-prefill` leaves the prompt
 pass in eager, which is worth it when prompt lengths vary: a compiled prefill is
 compiled *per prompt length*, so a varied workload recompiles it repeatedly
 while the decode graph — the one that runs a thousand times — is compiled once

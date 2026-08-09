@@ -161,6 +161,15 @@ class MetricsResponse(BaseModel):
     tpot_ms: float
     kv_cache_bytes: int
     max_model_len: int
+    # False until the first request has compiled the graphs, which is why that
+    # request is slow. A client can say "compiling" instead of looking hung.
+    warm: bool
+    # How many distinct prompt lengths the prefill graph has compiled for.
+    prefill_lengths: int
+    # Compiles triggered *after* warmup. Must stay 0: anything else means a
+    # token caused a recompile, which is the regression the prefill/decode
+    # split exists to prevent -- see docs/kv-cache-decode.md.
+    steady_frames: int
 
 
 __all__ = [
