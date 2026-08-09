@@ -510,7 +510,10 @@ def test_vllm_is_looked_for_where_it_is_actually_installed(
 
     monkeypatch.setattr(vllm_module.shutil, "which", lambda _: None)
     monkeypatch.setattr(vllm_module.Path, "exists", lambda _: True)
-    assert vllm_module.vllm_executable().endswith(".venv-vllm-metal/bin/vllm")
+    # Compared as a path rather than a suffix string: Windows renders the same
+    # location with backslashes, and this suite runs there too.
+    expected = Path(vllm_module._VLLM_METAL_VENV).expanduser()
+    assert Path(vllm_module.vllm_executable()) == expected
 
 
 def test_a_loopback_server_pins_vllm_to_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
