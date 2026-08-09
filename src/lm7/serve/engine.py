@@ -537,6 +537,38 @@ class LM7ServeEngine:
     def kv_cache_bytes(self) -> int:
         return int(getattr(self.runner, "cache_bytes", 0))
 
+    @property
+    def warm(self) -> bool:
+        """Whether the compile cost has been paid.
+
+        The graphs compile on their first call, so the first request of a
+        server's life is slower than every one after it by however long the
+        backend takes. A client that knows this can say so instead of looking
+        hung.
+        """
+        return self.metrics.requests > 0
+
+    def graph_stats(self) -> dict[str, int]:
+        """What the runner's Dynamo counters say about compiling so far.
+
+        ``steady_frames`` is the number this path exists to make checkable:
+        anything above zero means a *token* triggered a compile, which is the
+        failure the split into separate prefill and decode graphs prevents. It
+        is surfaced over HTTP rather than left in ``runner.counters`` because a
+        server is exactly where that regression would go unnoticed.
+
+        ``prefill_lengths`` is the cost the split accepts in exchange: the prompt
+        pass is compiled per prompt length, so a varied workload pays repeatedly.
+        See docs/kv-cache-decode.md.
+        """
+        counters = getattr(self.runner, "counters", None)
+        steady = counters.get("steady", {}) if isinstance(counters, dict) else {}
+        lengths = getattr(self.runner, "compiled_prefill_lengths", ())
+        return {
+            "prefill_lengths": len(lengths),
+            "steady_frames": int(steady.get("frames", 0) or 0),
+        }
+
     def metrics_snapshot(self) -> dict[str, Any]:
         return {
             "model": self.model_id,
@@ -544,6 +576,8 @@ class LM7ServeEngine:
             "backend": self.backend,
             "kv_cache_bytes": self.kv_cache_bytes,
             "max_model_len": self.max_model_len,
+            "warm": self.warm,
+            **self.graph_stats(),
             **self.metrics.to_dict(),
         }
 

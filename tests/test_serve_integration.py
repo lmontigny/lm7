@@ -67,6 +67,45 @@ def chat(messages: list[dict] | None = None, **extra: object) -> dict:
     return body
 
 
+# -- the chat page --------------------------------------------------------
+
+
+def test_the_root_serves_a_chat_page() -> None:
+    with client([1, EOS]) as http:
+        response = http.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<title>lm7 serve</title>" in response.text
+
+
+def test_the_chat_page_makes_no_external_requests() -> None:
+    """The page must render on an airgapped box, which is where local inference matters.
+
+    A CDN script tag or a web font would work on the laptop it was written on
+    and fail on exactly the machine `lm7 model serve` is for, so this asserts
+    the absence rather than trusting review to catch a later addition.
+    """
+    from lm7.serve.ui import PAGE
+
+    for marker in ("http://", "https://", "//cdn", "integrity=", "@import"):
+        assert marker not in PAGE, f"the chat page reaches outside itself: {marker!r}"
+
+
+def test_the_chat_page_drives_the_documented_endpoints() -> None:
+    """It is a client, not a privileged path -- so it uses the public routes."""
+    from lm7.serve.ui import PAGE
+
+    for route in ("/health", "/metrics", "/v1/chat/completions"):
+        assert route in PAGE
+
+
+def test_the_chat_page_is_not_in_the_openapi_schema() -> None:
+    with client([1]) as http:
+        schema = http.get("/openapi.json").json()
+    assert "/" not in schema["paths"]
+    assert "/v1/chat/completions" in schema["paths"]
+
+
 # -- discovery ------------------------------------------------------------
 
 
@@ -253,6 +292,25 @@ def test_an_empty_message_list_fails_schema_validation() -> None:
 # -- metrics --------------------------------------------------------------
 
 
+def test_metrics_report_the_compile_state_the_page_shows() -> None:
+    with client([1, 2, EOS]) as http:
+        cold = http.get("/metrics").json()
+        assert cold["warm"] is False
+        http.post("/v1/chat/completions", json=chat())
+        warm = http.get("/metrics").json()
+    assert warm["warm"] is True
+    # The claim the whole two-graph split exists to make checkable.
+    assert warm["steady_frames"] == 0
+    assert "prefill_lengths" in warm
+
+
+def test_the_chat_page_reads_the_compile_state() -> None:
+    from lm7.serve.ui import PAGE
+
+    for field in ("warm", "steady_frames", "prefill_lengths"):
+        assert field in PAGE
+
+
 def test_metrics_count_what_actually_ran() -> None:
     with client([1, 2, 3, EOS]) as http:
         assert http.get("/metrics").json()["requests"] == 0
@@ -364,3 +422,15 @@ def test_generation_works_through_the_key() -> None:
         )
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"]
+
+
+def test_the_built_in_chat_page_is_unavailable_behind_a_key() -> None:
+    # The page is fetched by a browser and cannot send an Authorization header,
+    # so a key and the built-in UI are mutually exclusive. Asserted rather than
+    # left to be discovered as a blank page.
+    with client([EOS], config=_config(api_key="s3cret")) as http:
+        refused = http.get("/")
+        assert refused.status_code == 401
+        assert "chat page" in refused.json()["detail"]
+    with client([EOS]) as open_http:
+        assert open_http.get("/").status_code == 200

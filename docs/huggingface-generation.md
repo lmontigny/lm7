@@ -128,10 +128,84 @@ LM7 no longer sends a `compile_config` it knows will be refused. Passing one
 anyway is not free: it produces that warning on every non-compiling target,
 which reads like an LM7 fault rather than an upstream gate.
 
-Forcing the issue is not worth it. With Transformers' private
-`_compile_all_devices` flag set, CPU decode for DeepSeek-Coder-1.3B compiled in
-42.8 s and then ran 1.06x faster than eager — a rounding error for a 43-second
-build, which is presumably why the upstream gate exists.
+### Forcing it is worth it on Apple Silicon, and not on CPU
+
+The gate is a **hardcoded device allowlist, not a capability check**:
+
+```python
+valid_hardware = self.device.type in ["cuda", "xpu", "neuron", "tpu"] or bool(
+    generation_config.compile_config is not None
+    and generation_config.compile_config._compile_all_devices
+)
+```
+
+So the honest question is whether a skipped target *cannot* compile or merely
+*is not allowed to*, and the private `_compile_all_devices` escape hatch answers
+it. The two answers are not the same:
+
+| | forced compile vs eager |
+| --- | --- |
+| CPU, DeepSeek-Coder-1.3B | 1.06x, after a 42.8 s build — a rounding error |
+| CPU, SmolLM2-135M | 1.01–1.04x |
+| **Apple Silicon (MPS), SmolLM2-135M** | **1.76–1.79x** |
+
+MPS compiles perfectly well and gets meaningfully faster for it. It is excluded
+by a list, not by a limitation. An earlier revision of this page concluded
+"forcing the issue is not worth it" from the CPU number alone; that generalized
+one target's result to every skipped target, and the MPS measurement below
+corrects it.
+
+## Four ways to generate the same tokens
+
+`benchmarks/generation_paths.py` runs all four arms in one harness — same
+checkpoint, same tokenized prompt, same token budget, same timing function — and
+compares their output text, so an arm that is "faster" because it decoded
+something else is reported rather than believed.
+
+```bash
+python benchmarks/generation_paths.py --target apple --repeats 9
+python benchmarks/generation_paths.py --target cpu --output artifacts/paths.json
+```
+
+Apple M-series, SmolLM2-135M-Instruct, 64 new tokens, `--repeats 9`, total wall
+clock ÷ tokens, compile cost excluded by a warmup call. Ranges span **three
+independent runs**, because a laptop is not a quiet machine. Every arm produced
+**identical text**:
+
+| arm | `apple:metal` (fp16) | | `cpu:arm64` (fp32) | |
+| --- | --- | --- | --- | --- |
+| `eager` — `model.generate()` | 18.4–19.0 ms/tok | 1.00x | 15.1–15.3 ms/tok | 1.00x |
+| `hf-static` — `+ StaticCache + CompileConfig` | 17.8–18.0 | 1.03–1.06x | 17.0–17.2 | 0.88–0.89x |
+| `hf-forced` — `+ _compile_all_devices` | 10.5–10.8 | 1.76–1.79x | 14.6–15.0 | 1.01–1.04x |
+| `lm7` — `compile_generation()` | **6.5–6.8** | **2.77–2.93x** | 17.6–20.2 | **0.75–0.86x** |
+
+> Ranges rather than single numbers on purpose. At `--repeats 3` the eager arm
+> wandered between 13.9 and 19.5 ms/token while the compiled arms held to within
+> 0.3, so the *ratio* moved by a third on the strength of the baseline alone.
+> Nine repeats and three runs is what it took for these to stop moving; a
+> one-shot number here would have been fiction.
+
+Three things worth reading off this table:
+
+- **`hf-static` is the eager arm in disguise** on both targets — and *slower*
+  than plain eager on CPU, because it pays for a static cache and gets no
+  compilation for it. A server that configures Transformers exactly as
+  documented still decodes eagerly here, and the only sign is one
+  `warning_once` in the logs.
+- **`compile_generation` beats even the forced arm on MPS**, ~6.6 against ~10.6
+  ms/token. Both compile the decode step; LM7 additionally compiles prefill as
+  its own fixed-shape graph and drives the loop itself instead of going through
+  `generate`. Which of those accounts for the gap is **not isolated here** — it
+  is a measured difference, not an explained one.
+- **On CPU, LM7 loses**, consistently, across every run: 0.75–0.86x. At 135M on
+  this CPU there is nothing for Inductor to reclaim — `hf-forced` says the same
+  at 1.01–1.04x — and LM7's fully materialized static cache costs what it costs.
+  Compiling is not free, and this is the case where it does not pay.
+
+Measured on Apple M-series with torch 2.13.0 / transformers 5.14.1. One model at
+one size on two targets: nothing here says what happens at 8B, on CUDA, or under
+concurrency. The CPU arm in particular is a 135M result and should not be read
+as "compiling never pays on CPU".
 
 ## Current support
 

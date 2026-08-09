@@ -222,6 +222,35 @@ def test_the_reported_backend_is_the_one_that_compiled_not_the_one_requested() -
     assert engine.backend == "inductor"
 
 
+def test_the_server_reports_whether_the_compile_cost_has_been_paid() -> None:
+    """`warm` is what lets a client say "compiling" instead of looking hung."""
+    engine = build_engine([1, EOS])
+    assert engine.warm is False
+    collect(engine)
+    assert engine.warm is True
+
+
+def test_graph_stats_surface_a_token_that_triggered_a_compile() -> None:
+    """`steady_frames > 0` is the regression the prefill/decode split prevents.
+
+    It lives in `runner.counters`, where a server would never notice it, so the
+    engine lifts it onto `/metrics`.
+    """
+    engine = build_engine([1, EOS])
+    assert engine.graph_stats() == {"prefill_lengths": 0, "steady_frames": 0}
+
+    engine.runner.compiled_prefill_lengths = [7, 13]
+    engine.runner.counters = {"steady": {"frames": 2}}
+    assert engine.graph_stats() == {"prefill_lengths": 2, "steady_frames": 2}
+
+
+def test_graph_stats_tolerate_a_runner_without_counters() -> None:
+    """`backend="eager"` compiles nothing, so the counters may not exist at all."""
+    engine = build_engine([1, EOS])
+    engine.runner.counters = None
+    assert engine.graph_stats()["steady_frames"] == 0
+
+
 def test_each_request_resets_the_shared_cache() -> None:
     engine = build_engine([1, 2, EOS])
     collect(engine)

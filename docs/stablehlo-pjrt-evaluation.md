@@ -254,7 +254,7 @@ process can have it.
 ## Status
 
 Evaluated, working, and **now a registered export backend** — see
-[`lm7.export(backend="stablehlo")`](../README.md#5-export-an-artifact). What
+[`lm7.export(backend="stablehlo")`](../README.md#6-export-an-artifact). What
 remains open:
 
 1. Re-run the capture with a **bounded dynamic sequence dimension** to see
