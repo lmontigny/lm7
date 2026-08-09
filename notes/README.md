@@ -13,8 +13,9 @@ evaluating LM7.
   own PJRT/StableHLO path. Referenced from
   [docs/stablehlo-pjrt-evaluation.md](../docs/stablehlo-pjrt-evaluation.md).
 - [`project-summary-draft.md`](project-summary-draft.md) — unpublished one-page
-  external summary of LM7 in Show HN form, with every claim traced back to the
-  doc it came from.
+  external summary of LM7: the compressed pitch, the use cases it is the
+  shortest path for, where it is the wrong tool, and every claim traced back to
+  the doc it came from.
 - [`competition.md`](competition.md) — competitive landscape survey (Modular,
   ZML, Roofline.ai, TVM/OctoML, IREE, tinygrad, Thunder, ONNX Runtime,
   PyTorch/XLA) against LM7's positioning.
