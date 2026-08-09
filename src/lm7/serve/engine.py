@@ -19,6 +19,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -29,6 +30,59 @@ from ..targets import TargetSpec
 
 # What a caller may pass to `/v1/chat/completions` as `stop`.
 StopSequences = Sequence[str]
+
+# Files `save_pretrained` always writes, and the cheapest proof that a directory
+# holds a model rather than happening to exist.
+_MODEL_CONFIG_NAME = "config.json"
+
+
+def resolve_model_source(model: str) -> str:
+    """The string to hand ``from_pretrained``, from what the user typed.
+
+    ``hf://owner/model`` is the Hub. A path to a directory holding a model --
+    what ``save_pretrained`` writes -- is served directly, which is what makes a
+    local fine-tune, a pre-downloaded checkpoint, or an air-gapped box reachable
+    without a Hub round trip. An existing directory always wins, and there is no
+    ambiguity to arbitrate: a Hub id is only ever accepted with its ``hf://``
+    prefix, so a bare string that is not a directory was never valid anyway.
+
+    The resolved absolute path is also the served model id. The server holds
+    exactly one model and echoes back whatever name a client sends, so the id is
+    read by humans debugging, and a path says which checkpoint far better than
+    its last path component would.
+    """
+    candidate = Path(model).expanduser()
+    if candidate.is_dir():
+        resolved = candidate.resolve()
+        if not (resolved / _MODEL_CONFIG_NAME).is_file():
+            raise UnsupportedModelError(
+                f"{resolved} is a directory but does not contain {_MODEL_CONFIG_NAME}, so it "
+                "does not hold a model saved by save_pretrained. Point at the directory that "
+                "does, or use a Hugging Face URI such as 'hf://owner/model'."
+            )
+        return str(resolved)
+    if candidate.exists():
+        raise UnsupportedModelError(
+            f"{model!r} is a file, not a directory. A local model is the directory "
+            f"save_pretrained wrote, containing {_MODEL_CONFIG_NAME} and the weights."
+        )
+    if not model.startswith("hf://") and _looks_like_a_path(model):
+        raise UnsupportedModelError(
+            f"No such directory {model!r}. A local model is a directory containing "
+            f"{_MODEL_CONFIG_NAME}; a Hub model is 'hf://owner/model'."
+        )
+    # Imported here rather than at module scope: `huggingface` pulls in
+    # Transformers and the whole compile stack, and this module is imported by
+    # `--dry-run`, which must not load either.
+    from ..huggingface import _model_id
+
+    return _model_id(model)
+
+
+def _looks_like_a_path(model: str) -> bool:
+    """Whether a user who typed this meant a path, so the error can say so."""
+    return model.startswith((".", "~", "/")) or "\\" in model
+
 
 # Awaited between decode steps to notice a client that has gone away. Kept as a
 # parameter rather than reaching for `starlette.Request` so the engine stays
@@ -232,9 +286,9 @@ class LM7ServeEngine:
         # whole compile stack, and `lm7.serve` is imported by the CLI parser
         # before anyone has asked to serve anything.
         from ..generation import compile_generation
-        from ..huggingface import _model_id, _resolve_dtype
+        from ..huggingface import _resolve_dtype
 
-        model_id = _model_id(config.model)
+        model_id = resolve_model_source(config.model)
         target = resolve_target(config.target)
         dtype = _resolve_dtype(config.dtype, target)
         transformers = _load_transformers()
@@ -243,7 +297,7 @@ class LM7ServeEngine:
             model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype).eval()
         except Exception as exc:
             raise UnsupportedModelError(
-                f"Hugging Face load stage failed for {config.model}: {exc}."
+                f"Model load stage failed for {config.model}: {exc}."
             ) from exc
         runner = compile_generation(
             model,

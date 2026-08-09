@@ -12,7 +12,7 @@ from typing import Any
 
 from ..detection import resolve_target
 from ..errors import UnsupportedModelError
-from .engine import ServeConfig
+from .engine import ServeConfig, resolve_model_source
 
 
 def serve_plan(config: ServeConfig) -> dict[str, Any]:
@@ -23,11 +23,9 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
     handover cannot be exercised on any machine this project has, so printing
     the argv it would run is the only check available for it.
     """
-    from ..huggingface import _model_id
-
     target = resolve_target(config.target)
     plan: dict[str, Any] = {
-        "model": _model_id(config.model),
+        "model": resolve_model_source(config.model),
         "target": str(target),
         "backend": config.backend,
         "max_model_len": config.max_model_len,

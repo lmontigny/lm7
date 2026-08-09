@@ -531,7 +531,12 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser = model_subparsers.add_parser(
         "serve", help="serve a model over an OpenAI-compatible HTTP endpoint"
     )
-    serve_parser.add_argument("model_uri", help="model URI, for example hf://owner/model")
+    serve_parser.add_argument(
+        "model_uri",
+        help=(
+            "hf://owner/model, or the path to a directory holding a model saved by save_pretrained"
+        ),
+    )
     serve_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     serve_parser.add_argument(
         "--backend",
