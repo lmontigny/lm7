@@ -17,6 +17,17 @@ lm7 = "lm7.cli:main"
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
 hf = ["transformers>=4.52.3", "safetensors>=0.4"]
+# The HTTP surface for `lm7 model serve`, and nothing else: no serving engine,
+# no scheduler, no tokenizer. Pure-Python wheels on every platform, so unlike
+# most extras here this one installs anywhere -- but it stays optional because
+# `import lm7` must not pull in a web framework. `httpx` is FastAPI's test
+# client transport, needed to exercise the routes at all.
+serve = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.7,<3",
+    "httpx>=0.27",
+]
 torchao = ["torchao==0.17.0"]
 onnxruntime = [
     "onnxruntime>=1.23,<2",
@@ -102,6 +113,7 @@ markers = [
     "coreml: requires the ExecuTorch Core ML backend on macOS",
     "tvm: requires Apache TVM with the Relax PyTorch frontend",
     "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
+    "serve: requires the FastAPI/Uvicorn HTTP stack from the serve extra",
 ]
 
 [tool.ruff]
@@ -114,3 +126,12 @@ disallow_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unreachable = true
+
+# The `serve` extra is the only optional dependency LM7 imports with a plain
+# `import` statement rather than through `importlib.import_module`, so it is the
+# only one mypy tries to resolve -- and CI type-checks a `[dev]` install, where
+# it is absent. When the extra *is* installed these are checked against the real
+# stubs; when it is not, they fall back to Any instead of failing the run.
+[[tool.mypy.overrides]]
+module = ["fastapi.*", "pydantic.*", "uvicorn.*"]
+ignore_missing_imports = true

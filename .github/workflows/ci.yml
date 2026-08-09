@@ -249,6 +249,38 @@ jobs:
       - name: Run the ${{ matrix.marker }} tests
         run: python -m pytest -m ${{ matrix.marker }} -v
 
+  # Deliberately its own job rather than a row in the `backend` matrix above:
+  # `serve` is not a compiler backend, so `lm7 backends` says nothing about it
+  # and the matrix's job name would be actively misleading. The extra is pure
+  # Python and installs anywhere, and the tests drive the HTTP surface against a
+  # scripted runner -- no model download, no compile, no hardware.
+  serve:
+    name: Serving HTTP surface
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7 with the serve extra
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,serve]"
+
+      # The plan is printed without loading a model or binding a port, so this
+      # exercises the CLI wiring even though no model is downloaded here.
+      - name: Report what `lm7 model serve` would do
+        run: python -m lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --dry-run
+
+      - name: Run the serve tests
+        run: python -m pytest -m serve -v
+
   torchbench-compile:
     name: TorchBench CPU torch.compile
     runs-on: ubuntu-24.04

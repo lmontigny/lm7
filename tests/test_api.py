@@ -78,3 +78,21 @@ def test_inductor_failure_is_strict_when_requested(monkeypatch):
     )
     with pytest.raises(CompilationError, match="compiler unavailable"):
         wrapped(torch.tensor(3))
+
+
+def test_an_unindexed_target_device_accepts_the_indexed_device_a_transfer_produces():
+    """`transfers="explicit"` was impossible to satisfy on every indexed device.
+
+    `torch.device("mps") != torch.device("mps", 0)` and `.to()` produces the
+    latter, so placing an input exactly where LM7 asked still raised
+    `InputDeviceError`. Reproducing it end to end needs an accelerator; the
+    comparison it turns on does not.
+    """
+    from lm7.module import _same_device
+
+    for kind in ("mps", "cuda", "xpu"):
+        assert _same_device(torch.device(kind, 0), torch.device(kind))
+        assert _same_device(torch.device(kind), torch.device(kind, 0))
+        assert _same_device(torch.device(kind, 1), torch.device(kind, 1))
+        assert not _same_device(torch.device(kind, 1), torch.device(kind, 0))
+        assert not _same_device(torch.device("cpu"), torch.device(kind))
