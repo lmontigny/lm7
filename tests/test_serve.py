@@ -265,14 +265,37 @@ def test_each_request_resets_the_shared_cache() -> None:
 def test_a_prompt_the_static_cache_cannot_hold_is_refused() -> None:
     engine = build_engine([1, 2], max_model_len=8)
     with pytest.raises(ValueError, match="exceeds the 8-token static cache"):
-        engine.check_capacity("one two three four five", 8)
+        engine.resolve_budget("one two three four five", 8)
 
 
 def test_capacity_counts_the_completion_too() -> None:
     engine = build_engine([1, 2], max_model_len=8)
-    engine.check_capacity("one two", 6)
+    engine.resolve_budget("one two", 6)
     with pytest.raises(ValueError):
-        engine.check_capacity("one two", 7)
+        engine.resolve_budget("one two", 7)
+
+
+def test_an_explicit_budget_is_never_quietly_narrowed() -> None:
+    # The whole reason `None` exists: a caller that asked for 7 and received 6
+    # would have been misled, so the ask is refused and the refusal says 6.
+    engine = build_engine([1, 2], max_model_len=8)
+    with pytest.raises(ValueError, match="Ask for at most 6"):
+        engine.resolve_budget("one two", 7)
+
+
+def test_omitting_the_budget_takes_whatever_the_cache_has_left() -> None:
+    engine = build_engine([1, 2], max_model_len=8)
+    assert engine.resolve_budget("one two", None)[1] == 6
+    # And it shrinks as the conversation grows, instead of becoming impossible.
+    assert engine.resolve_budget("one two three four", None)[1] == 4
+
+
+def test_a_prompt_that_fills_the_cache_is_a_different_failure() -> None:
+    # Not "ask for fewer tokens" -- there is no number of tokens that would fit,
+    # so the message has to point at the conversation instead.
+    engine = build_engine([1, 2], max_model_len=4)
+    with pytest.raises(ValueError, match="leaves no room"):
+        engine.resolve_budget("one two three four five", None)
 
 
 # -- concurrency ----------------------------------------------------------

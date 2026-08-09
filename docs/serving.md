@@ -234,8 +234,9 @@ can silently lose to the other. It defaults to **4096** tokens.
 ```
 $ curl -s localhost:8000/v1/chat/completions -d '{"messages":[...],"max_tokens":600}'
 {"detail":"The prompt is 31 tokens and 600 more were requested, which exceeds the
-512-token static cache this server allocated at startup. Restart it with a larger
---max-model-len, or ask for fewer tokens."}
+512-token static cache this server allocated at startup. Ask for at most 481, omit
+max_tokens to use whatever fits, send a shorter conversation, or restart the server
+with a larger --max-model-len."}
 ```
 
 Checked **before** the response type is chosen, so an oversized request is a 400
@@ -244,6 +245,26 @@ cost of the default: the cache is `2 × layers × kv_heads × head_dim ×
 dtype_bytes × max_model_len` bytes, allocated whether or not it is used, so
 4096 tokens costs twice what 2048 does on a machine that may never send a prompt
 that long. Lower it on a small device; the startup line prints what it took.
+
+### Omitting `max_tokens` asks for whatever fits
+
+`max_tokens` is optional, and leaving it out is not "unlimited" — it is
+`max_model_len − prompt_tokens`, computed per request.
+
+That matters for any client that resends a conversation, which is every chat
+client, because the engine has one static cache and no notion of a session. The
+prompt grows every turn, so **a constant `max_tokens` is a wall, not a limit**:
+a client asking for half the cache on every turn succeeds until the transcript
+crosses half the cache, and from that moment every single turn is arithmetically
+impossible. Omitting it instead makes replies get shorter as the conversation
+grows, which degrades rather than stops.
+
+An *explicit* `max_tokens` that does not fit is still refused rather than
+narrowed — a caller that asked for 512 and silently received 40 has been misled —
+but the refusal now names the largest number that would have worked.
+
+When the prompt alone fills the cache there is no budget to offer, so that is a
+different message pointing at the conversation rather than at the token count.
 
 ## Access control: CORS and API keys
 
@@ -402,6 +423,11 @@ driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
 - `/health` at 10–30 ms during a live generation
 - 400 on an oversized prompt, on `n=4`; 200 on the `n=1`/zero-penalty defaults
   every OpenAI SDK sends; 422 on an empty `messages` array
+
+The **token budget** was checked against the failure that motivated it, on a
+1024-token cache: a 660-token transcript with an explicit `max_tokens: 512` is
+refused and told to ask for at most 364, and the same transcript with
+`max_tokens` omitted generates (660 prompt + 19 completion, `finish: stop`).
 
 The **deployment flags** were exercised against that same local checkpoint on
 `cpu:arm64`: `/health` answering without a key while `/v1/models` returned 401
