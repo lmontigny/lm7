@@ -126,3 +126,12 @@ disallow_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unreachable = true
+
+# The `serve` extra is the only optional dependency LM7 imports with a plain
+# `import` statement rather than through `importlib.import_module`, so it is the
+# only one mypy tries to resolve -- and CI type-checks a `[dev]` install, where
+# it is absent. When the extra *is* installed these are checked against the real
+# stubs; when it is not, they fall back to Any instead of failing the run.
+[[tool.mypy.overrides]]
+module = ["fastapi.*", "pydantic.*", "uvicorn.*"]
+ignore_missing_imports = true
