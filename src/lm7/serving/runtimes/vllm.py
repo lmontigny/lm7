@@ -175,6 +175,17 @@ class VLLMServingRuntime:
         missing = unmet_capabilities(request, self.capabilities())
         if missing:
             return Support(False, f"vLLM does not implement {', '.join(missing)}.")
+        if request.compile_backend != "auto":
+            # Refused rather than ignored, for the same reason the capability
+            # flags are: vLLM is handed a checkpoint and compiles it internally,
+            # so there is nothing here for an LM7 compile backend to act on, and
+            # accepting the flag would imply otherwise.
+            return Support(
+                False,
+                f"vLLM compiles internally and cannot be driven by LM7's "
+                f"{request.compile_backend!r} backend; --compile-backend applies "
+                "to the built-in runtime only.",
+            )
         return Support(True, "vLLM serves this target with paged KV and continuous batching.", 90)
 
     def describe(self, request: ServeRequest) -> Mapping[str, Any]:

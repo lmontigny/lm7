@@ -68,9 +68,10 @@ def build_app(server: Any) -> FastAPI:
     @app.get("/metrics")
     async def metrics() -> dict[str, Any]:
         return {
-            "runtime": "eager",
+            "runtime": server.runtime_name,
             "model": server.model_id,
             "memory": server.budget.to_dict(),
+            "compilation": server.compilation(),
             **server.metrics.to_dict(),
         }
 

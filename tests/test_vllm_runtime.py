@@ -100,6 +100,27 @@ def test_probe_reports_the_install_instruction_when_absent() -> None:
     assert runtime.supports(_request()).supported is False
 
 
+def test_a_compile_backend_is_refused_rather_than_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """vLLM compiles internally, so LM7's compile backend has nothing to act on.
+
+    Accepting the flag would imply LM7 drove the compilation. The probe is
+    stubbed because the refusal is what is under test, not the install.
+    """
+    from lm7.serving.base import RuntimeInfo
+
+    runtime = VLLMServingRuntime()
+    monkeypatch.setattr(
+        runtime, "probe", lambda: RuntimeInfo("vllm", "0.0.0", True, "stubbed as installed")
+    )
+    support = runtime.supports(_request(compile_backend="inductor"))
+    assert support.supported is False
+    assert "compiles internally" in support.reason
+    # The default must still be accepted, or vLLM could never be selected.
+    assert runtime.supports(_request()).supported is True
+
+
 def test_capabilities_claim_the_full_serving_feature_set() -> None:
     capabilities = VLLMServingRuntime().capabilities()
     assert capabilities.continuous_batching

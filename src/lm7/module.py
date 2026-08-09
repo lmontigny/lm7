@@ -33,6 +33,20 @@ def _map_tensors(value: Any, fn: Any) -> Any:
     return value
 
 
+def _same_device(tensor_device: torch.device, target_device: torch.device) -> bool:
+    """Whether a tensor sits on the device a target resolves to.
+
+    ``torch.device("mps") != torch.device("mps", 0)``, and moving a tensor to
+    the former produces the latter -- so a plain ``!=`` made ``transfers=
+    "explicit"`` impossible to satisfy on every indexed device. The caller could
+    not win: placing the input exactly where LM7 asked still failed the check.
+    An unindexed device means "the current one", which is index 0 here.
+    """
+    if tensor_device.type != target_device.type:
+        return False
+    return (tensor_device.index or 0) == (target_device.index or 0)
+
+
 class CompiledModule(torch.nn.Module):
     def __init__(
         self,
@@ -77,7 +91,7 @@ class CompiledModule(torch.nn.Module):
             )
 
         def validate(tensor: torch.Tensor) -> torch.Tensor:
-            if tensor.device != device:
+            if not _same_device(tensor.device, device):
                 raise InputDeviceError(
                     f"Input transfer stage failed for target {self.target}: expected {device}, "
                     f"got {tensor.device}. Move inputs explicitly or use transfers='automatic'."

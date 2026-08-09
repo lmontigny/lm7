@@ -33,7 +33,7 @@ class BuiltinServingRuntime:
     the most honest description of what LM7 implements by itself.
     """
 
-    name = "eager"
+    name = "builtin"
 
     def probe(self) -> RuntimeInfo:
         missing = [
@@ -71,6 +71,10 @@ class BuiltinServingRuntime:
             "model": _model_id(request.model),
             "max_model_len": request.max_model_len,
             "max_num_seqs": request.max_num_seqs,
+            # Requested, not resolved: `auto` becomes a concrete backend only
+            # when the planner runs inside compile_generation, which needs the
+            # loaded model. The handle and /metrics report what actually ran.
+            "compile_backend_requested": request.compile_backend,
             "note": "One request at a time; no batching, no paged KV cache.",
         }
 
@@ -111,6 +115,8 @@ class _Metrics:
 
 
 class _ReferenceServer:
+    runtime_name = "builtin"
+
     def __init__(self, request: ServeRequest) -> None:
         from ...huggingface import _model_id
 
@@ -280,7 +286,7 @@ class _ReferenceServer:
         if port == 0 and server.servers:
             port = server.servers[0].sockets[0].getsockname()[1]
         return ServerHandle(
-            runtime="eager",
+            runtime=self.runtime_name,
             base_url=f"http://{self.request.host}:{port}",
             target=self.target,
             config={
@@ -288,6 +294,30 @@ class _ReferenceServer:
                 "max_model_len": self.request.max_model_len,
                 "max_num_seqs": self.request.max_num_seqs,
                 "memory": self.budget.to_dict(),
+                **self.compilation(),
             },
             _stop=stop,
         )
+
+    def compilation(self) -> dict[str, Any]:
+        """What the compiler actually did, as opposed to what was asked for.
+
+        ``compile_generation`` resolves ``auto`` through LM7's own planner, so
+        the answer is only knowable after the model is loaded -- and it differs
+        per target. Reporting the request instead of the result is how a doc
+        ends up claiming a compile that never happened.
+        """
+        # `runner.backend` is the string that was *asked for*, so it still reads
+        # "auto" after the planner has chosen. The decode graph's CompiledModule
+        # records what was actually selected, but only once it has compiled --
+        # which happens on the first decode, not at load.
+        decode_graph = getattr(self.runner, "_decode_graph", None)
+        selected = getattr(decode_graph, "selected_backend", None)
+        return {
+            "compile_backend_requested": self.request.compile_backend,
+            "compile_backend": selected,
+            "compiled_decode": selected is not None,
+            # Left eager on purpose: the prefill graph compiles per prompt
+            # length, which a server pays repeatedly. See _load.
+            "compiled_prefill": False,
+        }

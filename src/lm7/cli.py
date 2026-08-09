@@ -104,6 +104,7 @@ def _serve_request_from_args(args: argparse.Namespace) -> tuple[Any, str]:
         host=args.host,
         port=args.port,
         dtype=args.dtype,
+        compile_backend=args.compile_backend,
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         max_batched_tokens=args.max_batched_tokens,
@@ -551,6 +552,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         choices=("auto", "float32", "float16", "bfloat16"),
         help="model dtype (default: auto)",
+    )
+    serve_parser.add_argument(
+        "--compile-backend",
+        default="auto",
+        choices=("auto", "eager", "inductor"),
+        help=(
+            "LM7 compile backend for the built-in runtime's decode graph "
+            "(default: auto). A third-party runtime compiles internally and "
+            "refuses this rather than ignoring it."
+        ),
     )
     serve_parser.add_argument(
         "--max-model-len",

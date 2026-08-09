@@ -78,3 +78,20 @@ def test_inductor_failure_is_strict_when_requested(monkeypatch):
     )
     with pytest.raises(CompilationError, match="compiler unavailable"):
         wrapped(torch.tensor(3))
+
+
+def test_an_indexed_device_satisfies_an_unindexed_target() -> None:
+    """`torch.device("mps") != torch.device("mps", 0)`, and `.to()` yields the latter.
+
+    A plain `!=` therefore made `transfers="explicit"` impossible to satisfy on
+    every indexed device: placing the input exactly where LM7 asked still
+    raised. Checked directly because reproducing it needs an accelerator, while
+    the comparison it turns on does not.
+    """
+    from lm7.module import _same_device
+
+    assert _same_device(torch.device("mps", 0), torch.device("mps"))
+    assert _same_device(torch.device("cuda", 0), torch.device("cuda"))
+    assert _same_device(torch.device("cpu"), torch.device("cpu"))
+    assert not _same_device(torch.device("cuda", 1), torch.device("cuda"))
+    assert not _same_device(torch.device("cpu"), torch.device("mps"))

@@ -231,7 +231,12 @@ See [serving.md](serving.md).
   does not consult it, so the failure it exists to prevent still happens there:
   vLLM's default `gpu-memory-utilization` asked for 16.56 GiB on an 18 GiB
   machine and failed ~40 seconds into startup. See [serving.md](serving.md).
-- **The built-in `eager` runtime is not a serving system.** One request at a
+- **The built-in runtime compiles its decode graph but not its prompt pass.**
+  Prefill compiles per prompt length, which a server pays repeatedly, so it
+  stays eager. Measured gain on an M3 Pro with SmolLM2-135M: 1.4–2.1x per token
+  on MPS, 1.0–1.2x on CPU — the CPU case is close to measurement noise. Nothing
+  larger than 135M and no GPU has been measured. See [serving.md](serving.md).
+- **The built-in runtime is not a serving system.** One request at a
   time, behind a lock, on the single static KV cache `compile_generation`
   allocates. It implements streaming, cancellation and metrics; it implements no
   continuous batching, paged KV cache, prefix caching, chunked prefill,

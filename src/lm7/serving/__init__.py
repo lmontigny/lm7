@@ -23,8 +23,8 @@ runtime_registry.register(BuiltinServingRuntime())
 runtime_registry.register(VLLMServingRuntime())
 
 __all__ = [
-    "Capabilities",
     "BuiltinServingRuntime",
+    "Capabilities",
     "MemoryBudget",
     "ModelShape",
     "RuntimeCandidate",

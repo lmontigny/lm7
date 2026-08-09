@@ -13,7 +13,7 @@ model URI + target + constraints
             ↓
       LM7 serving planner     ← capability check, memory preflight, explain
             ↓
-        vLLM  |  eager (reference)
+        vLLM  |  builtin (reference)
 ```
 
 ## Quick start
@@ -57,7 +57,7 @@ $ lm7 serve hf://owner/model --target cpu --max-num-seqs 8 --explain
 Selected nothing for cpu:arm64 serving hf://owner/model
 
 Candidates:
-  eager: unavailable (priority 0) - The reference runtime does not implement
+  builtin: unavailable (priority 0) - The reference runtime does not implement
     continuous_batching. It serves one request at a time; use a real serving runtime.
   vllm: unavailable (priority 0) - vLLM is not installed; install it separately
     with 'pip install vllm'.
@@ -71,7 +71,7 @@ still falls back to the reference runtime.
 | Runtime | Targets | Status |
 | --- | --- | --- |
 | `vllm` | `nvidia`, `amd`, `tpu`, `cpu` | Served real requests on Apple Silicon via vllm-metal; **no GPU has run it** |
-| `eager` | anything PyTorch runs | Validated on Apple M-series CPU |
+| `builtin` | anything PyTorch runs | Validated on Apple M-series CPU and MPS |
 
 ### vLLM
 
@@ -163,9 +163,9 @@ an 18 GiB machine with 3.92 GiB free, and the engine discovered that ~40 seconds
 in. Pass `--kv-cache-fraction` to lower it. Extending the preflight across
 runtimes is not done.
 
-### The reference runtime
+### The built-in runtime
 
-`eager` is LM7's own single-stream server over `compile_generation`. It exists
+`builtin` is LM7's own single-stream server over `compile_generation`. It exists
 for three reasons, and none of them is performance:
 
 1. `--fallback` should mean the same thing for `serve` as for `compile`.
@@ -180,6 +180,45 @@ writes into the same buffers. It implements streaming, cancellation and metrics;
 it implements no continuous batching, no paged KV cache, no prefix caching, no
 chunked prefill, no speculative decoding and no LoRA. It is not a serving
 system and should never be described as one.
+
+#### It serves a compiled model
+
+This is the one place where `lm7 serve` and `lm7.compile` meet. The built-in
+runtime drives `compile_generation`, so its decode graph goes through LM7's own
+planner and compiler:
+
+```bash
+lm7 serve hf://… --target apple                          # auto: the planner picks
+lm7 serve hf://… --target apple --compile-backend eager  # opt out
+```
+
+**The decode graph compiles; the prompt pass does not.** `GenerationRunner`
+compiles prefill *per prompt length*, so compiling it in a server means a fresh
+compile the first time each new prompt length arrives — invisible to a benchmark
+that sends one length, constant for a server. The decode graph compiles once, at
+a fixed shape, and every token of every request reuses it.
+
+`/metrics` reports what actually ran, not what was asked for: `auto` resolves
+through the planner and appears as the backend it chose.
+
+Measured on an Apple M3 Pro, SmolLM2-135M-Instruct, `max_model_len=512`,
+steady-state after warmup (the compile cost is excluded from the per-token
+figure and reported separately). Two to three runs each; a laptop under load is
+noisy, hence the ranges:
+
+| Target | `--compile-backend eager` | `auto` (→ `inductor`) | Speedup | One-time compile |
+| --- | --- | --- | --- | --- |
+| `cpu` | 23.6–27.4 ms/token | 22.0–23.9 ms/token | 1.0–1.2x | ~5.5–7 s |
+| `apple` (MPS) | 19.1–23.7 ms/token | 11.2–13.7 ms/token | 1.4–2.1x | ~4.5–17 s |
+
+So MPS is worth it and CPU is close to noise. `auto` is the default anyway,
+because the cost is paid once per process and the CPU case never *lost* — but a
+short-lived server that answers a handful of requests should pass
+`--compile-backend eager` and skip the wait.
+
+Third-party runtimes **refuse** this flag rather than ignoring it: vLLM is handed
+a checkpoint and compiles internally, so there is nothing for an LM7 compile
+backend to drive.
 
 Cancellation is measured, not inferred from the design. Each decode step runs in
 a worker thread, so the event loop stays free to notice a client that

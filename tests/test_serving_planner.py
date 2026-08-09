@@ -126,10 +126,10 @@ def test_cli_runtimes_lists_capabilities(capsys: pytest.CaptureFixture[str]) -> 
     assert main(["runtimes", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     names = {runtime["name"] for runtime in data["runtimes"]}
-    assert {"eager", "vllm"} <= names
-    eager = next(r for r in data["runtimes"] if r["name"] == "eager")
-    assert eager["capabilities"]["streaming"] is True
-    assert eager["capabilities"]["paged_kv_cache"] is False
+    assert {"builtin", "vllm"} <= names
+    builtin = next(r for r in data["runtimes"] if r["name"] == "builtin")
+    assert builtin["capabilities"]["streaming"] is True
+    assert builtin["capabilities"]["paged_kv_cache"] is False
 
 
 @pytest.mark.skipif(
@@ -140,7 +140,7 @@ def test_cli_serve_explain_reports_the_plan(capsys: pytest.CaptureFixture[str]) 
     exit_code = main(["serve", "hf://owner/model", "--target", "cpu", "--explain", "--json"])
     data = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert data["selected_runtime"] == "eager"
+    assert data["selected_runtime"] == "builtin"
     assert data["resolved_config"]["model"] == "owner/model"
 
 
@@ -189,5 +189,5 @@ def test_cli_serve_explain_names_the_capability_that_was_missing(
     data = _explain_with_batching(capsys)
     candidates = data["candidates"]
     assert isinstance(candidates, list)
-    eager = next(c for c in candidates if c["runtime"] == "eager")
-    assert "continuous_batching" in eager["reason"]
+    builtin = next(c for c in candidates if c["runtime"] == "builtin")
+    assert "continuous_batching" in builtin["reason"]

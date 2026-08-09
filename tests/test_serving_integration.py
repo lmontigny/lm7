@@ -142,9 +142,23 @@ def test_abandoning_a_stream_stops_the_decode_loop(client) -> None:  # type: ign
     assert client.get("/metrics").json()["generated_tokens"] - before < asked
 
 
+def test_metrics_report_the_compiler_that_actually_ran(client) -> None:  # type: ignore[no-untyped-def]
+    """Not the backend that was requested: `auto` has to resolve to a name.
+
+    Reporting the request is how a doc ends up claiming a compile that never
+    happened -- and this asserts the decode graph compiled while the prefill
+    graph deliberately did not.
+    """
+    compilation = client.get("/metrics").json()["compilation"]
+    assert compilation["compile_backend_requested"] == "auto"
+    assert compilation["compile_backend"] not in (None, "auto")
+    assert compilation["compiled_decode"] is True
+    assert compilation["compiled_prefill"] is False
+
+
 def test_metrics_report_what_was_served(client) -> None:  # type: ignore[no-untyped-def]
     metrics = client.get("/metrics").json()
-    assert metrics["runtime"] == "eager"
+    assert metrics["runtime"] == "builtin"
     assert metrics["requests"] >= 1
     assert metrics["generated_tokens"] >= 1
     assert metrics["ttft_ms"] > 0
