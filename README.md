@@ -323,21 +323,43 @@ token, state = runner.decode(state.next_token, state)
 See [prefill and KV-cache decode](docs/kv-cache-decode.md) for the API and the
 H100 numbers.
 
-To put that loop behind the API your local client already speaks:
+## 5. Serve a model
+
+To talk to that loop over HTTP — and to check a compiled model by hand without
+writing a client:
 
 ```bash
 uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
 
-`POST /v1/chat/completions` (streaming or not), `/v1/completions`, `/v1/models`,
-`/health`, `/metrics` — driven successfully by the official `openai` SDK. It is a
-**single-user** server: one model, one static KV cache, one request at a time,
-and no batching or paged attention, because adding those would mean writing a
-serving engine. `--backend vllm` hands the port to vLLM instead and steps out of
-the request path. See [serving](docs/serving.md).
+Open <http://127.0.0.1:8000> for a chat page, or point any OpenAI-compatible
+client at `http://127.0.0.1:8000/v1`:
 
-## 5. Export an artifact
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="not-needed")
+client.chat.completions.create(model="...", messages=[{"role": "user", "content": "hi"}])
+```
+
+`POST /v1/chat/completions` (streaming or not), `/v1/completions`, `/v1/models`,
+`/health`, `/metrics`, and `/docs` for the schema. The chat page is a plain
+single-file page with no CDN, no build step and no external requests, so it
+works on an airgapped box; Open WebUI and other clients connect the same way —
+see [serving](docs/serving.md).
+
+This is a **single-user** server: one model, one static KV cache, one request at
+a time, and no batching or paged attention, because adding those would mean
+writing a serving engine and LM7 does not write compilers either. It is for
+trying a model on a target, not for production throughput. `--backend vllm`
+hands the port to vLLM instead and steps out of the request path entirely.
+
+Validated on `cpu:arm64` and `apple:metal` with SmolLM2-135M-Instruct; no other
+target has served anything, and there is no serving benchmark here — see
+[limitations](docs/limitations.md#serving).
+
+## 6. Export an artifact
 
 Capture a model and reload it in another process:
 

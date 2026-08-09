@@ -59,10 +59,65 @@ behind it.
 When throughput matters, use `--backend vllm` (below) and LM7 steps out of the
 request path entirely.
 
+## Talking to it from a browser
+
+`http://127.0.0.1:8000/` is a chat page, so a compiled model can be checked by
+hand without writing a client — which is the job `lm7 model serve` exists for.
+
+It is one file (`src/lm7/serve/ui.py`), about 9 KB, with **no CDN, no web font,
+no build step and no external requests of any kind**. That is a requirement
+rather than a preference: a page that fetches a stylesheet from a CDN renders
+fine on the laptop it was written on and fails on exactly the airgapped machine
+where running a model locally is the point. A test asserts the absence, so a
+later addition cannot quietly reintroduce it.
+
+The page is an ordinary client. It reads `/health` and `/metrics` for its header
+and posts to `/v1/chat/completions` with `stream: true`, with no privileged
+access to the engine, and it is excluded from the OpenAPI schema because it is a
+convenience rather than part of the API contract. The conversation lives in the
+page: LM7's engine is one static KV cache with no notion of a session, so each
+turn resends the transcript exactly as an OpenAI client would.
+
+> **What is and is not covered.** Tests assert that `/` serves the page, that it
+> contains no external reference, and that it stays out of the schema; the SSE
+> reassembly the page performs was checked against a real captured stream fed in
+> at arbitrary read boundaries. **Nothing renders it in a browser** — there is no
+> headless-browser dependency in this repo and adding one for a 9 KB dev page is
+> not worth it. Treat rendering as manually verified, not CI-verified.
+
+### Open WebUI, and other clients
+
+For conversation history, multiple models, or RAG, point a real client at the
+endpoint. LM7 implements the OpenAI chat API, so anything that speaks it works:
+
+```bash
+docker run -d -p 3000:8080 \
+  -e OPENAI_API_BASE_URL=http://host.docker.internal:8000/v1 \
+  -e OPENAI_API_KEY=not-needed \
+  -v open-webui:/app/backend/data --name open-webui \
+  ghcr.io/open-webui/open-webui:main
+```
+
+Then open <http://localhost:3000>. On Linux, replace `host.docker.internal` with
+`172.17.0.1` or run with `--network=host`. Serve with `--host 0.0.0.0` if the
+client is not on this machine — the default binds to loopback, and there is no
+authentication on this endpoint.
+
+Also known to work against an OpenAI-compatible base URL: **Continue** and
+**Cline** (VS Code), **Zed**'s assistant, **Aider**, **LibreChat**, and any
+`openai` SDK. Expect one caveat everywhere: this server refuses `n > 1`,
+logprobs, tool calling and structured output with a 400 (see below), so a client
+that depends on tools will report an error rather than degrade.
+
+> These clients have **not** been tested against LM7 — they are listed because
+> they consume the same API, not because anyone here has run them. The `openai`
+> SDK is what has actually been driven end to end.
+
 ## Endpoints
 
 | | |
 | --- | --- |
+| `GET /` | the built-in chat page (not in the OpenAPI schema) |
 | `GET /health` | model, target, and the backend that compiled the decode graph |
 | `GET /metrics` | request count, token counts, TTFT, TPOT, KV cache bytes |
 | `GET /v1/models` | the one model this server holds |

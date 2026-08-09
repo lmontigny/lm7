@@ -65,6 +65,45 @@ def chat(messages: list[dict] | None = None, **extra: object) -> dict:
     return body
 
 
+# -- the chat page --------------------------------------------------------
+
+
+def test_the_root_serves_a_chat_page() -> None:
+    with client([1, EOS]) as http:
+        response = http.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<title>lm7 serve</title>" in response.text
+
+
+def test_the_chat_page_makes_no_external_requests() -> None:
+    """The page must render on an airgapped box, which is where local inference matters.
+
+    A CDN script tag or a web font would work on the laptop it was written on
+    and fail on exactly the machine `lm7 model serve` is for, so this asserts
+    the absence rather than trusting review to catch a later addition.
+    """
+    from lm7.serve.ui import PAGE
+
+    for marker in ("http://", "https://", "//cdn", "integrity=", "@import"):
+        assert marker not in PAGE, f"the chat page reaches outside itself: {marker!r}"
+
+
+def test_the_chat_page_drives_the_documented_endpoints() -> None:
+    """It is a client, not a privileged path -- so it uses the public routes."""
+    from lm7.serve.ui import PAGE
+
+    for route in ("/health", "/metrics", "/v1/chat/completions"):
+        assert route in PAGE
+
+
+def test_the_chat_page_is_not_in_the_openapi_schema() -> None:
+    with client([1]) as http:
+        schema = http.get("/openapi.json").json()
+    assert "/" not in schema["paths"]
+    assert "/v1/chat/completions" in schema["paths"]
+
+
 # -- discovery ------------------------------------------------------------
 
 

@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .engine import LM7ServeEngine
 from .schemas import (
@@ -38,6 +38,7 @@ from .schemas import (
     ModelList,
     Usage,
 )
+from .ui import PAGE
 from .validation import unsupported_fields
 
 FinishReason = Literal["stop", "length"]
@@ -154,6 +155,17 @@ def build_app(engine: LM7ServeEngine) -> FastAPI:
             else:
                 yield chunk(token.text, None)
         yield "data: [DONE]\n\n"
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def index() -> str:
+        """A chat page, so `lm7 model serve` can be checked without a client.
+
+        Out of the OpenAPI schema on purpose: it is a dev convenience, not part
+        of the API contract an OpenAI client codes against. It reads `/health`
+        and `/metrics` and posts to `/v1/chat/completions` like any other
+        caller, with no privileged path into the engine.
+        """
+        return PAGE
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
