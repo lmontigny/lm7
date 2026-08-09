@@ -286,6 +286,18 @@ jobs:
       - name: Run the serve tests
         run: python -m pytest -m serve -v
 
+      # Everything above drives a scripted runner and a fake tokenizer, so the
+      # path that actually loads a model -- both `from_pretrained` calls, the
+      # quantization gate, `compile_generation`, the static cache -- is never
+      # executed. That is where every serve bug found so far has been, and each
+      # was found by hand. The model is ~15 MB of random weights, so this costs
+      # a small download rather than a real checkpoint.
+      - name: Install the Hugging Face extra
+        run: python -m pip install -e ".[hf]"
+
+      - name: Load and serve a real model
+        run: python -m pytest -m serve_load -v
+
   torchbench-compile:
     name: TorchBench CPU torch.compile
     runs-on: ubuntu-24.04

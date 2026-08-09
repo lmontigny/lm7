@@ -263,6 +263,12 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   400 naming the field rather than served as something narrower.
 - **The KV cache is allocated at startup and never grows.** `prompt + max_tokens`
   above `--max-model-len` is a 400, not a longer wait.
+- **CI now loads a real model, but a 15 MB random-weight one.**
+  `tests/test_serve_load_integration.py` runs `LM7ServeEngine.load` end to end on
+  every commit, which nothing did before — the rest of the serve suite uses a
+  scripted runner and a fake tokenizer. It proves the path works, not that
+  output is right: the model has random weights, so no test in CI checks that a
+  served answer is correct.
 - **Validated on two targets and one model.** Apple M-series `cpu:arm64` and
   `apple:metal` with SmolLM2-135M-Instruct, driven by `curl` and by the official
   `openai` Python SDK: both endpoints, both buffered and streamed, greedy output
