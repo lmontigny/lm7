@@ -271,10 +271,15 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   this repo — so no claim about serving latency or throughput can be sourced from
   it. `/metrics` TTFT and TPOT are compile-polluted until several requests have
   run, because the graphs compile inside the first one.
-- **`--backend vllm` has never been run.** LM7 translates its flags into vLLM's
-  own `vllm serve` argv and hands over the process. `vllm_argv` is unit-tested;
-  the handover is not, because vLLM does not install on Apple Silicon and no GPU
-  box was rented for it. Say "implemented", not "validated".
+- **`--backend vllm` is validated on Apple Silicon only.** LM7 translates its
+  flags into vLLM's own `vllm serve` argv and hands over the process. That
+  handover was run end to end on an M-series Mac against `Qwen/Qwen3.5-0.8B`
+  through the [vllm-metal](https://github.com/vllm-project/vllm-metal) platform
+  plugin — vLLM 0.26.0 + vllm-metal 0.3.0, chat, streaming, and the `openai` SDK.
+  **The CUDA, ROCm and TPU handovers have still never been run**, since no GPU
+  box was rented for it; for those, say "implemented", not "validated". vLLM's
+  own supported-model list applies once LM7 has handed over, and it is narrower
+  than LM7's — `SmolLM2-135M` is not on vllm-metal's, for instance.
 
 ## Evaluated, not adopted
 

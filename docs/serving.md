@@ -253,27 +253,59 @@ answers the port afterwards is vLLM, unmodified, with every vLLM feature working
 and none of LM7's behaviour above applying. `--dry-run` prints the exact command:
 
 ```
-$ lm7 model serve hf://owner/model --target cpu --backend vllm --dry-run
-model           owner/model
-target          cpu:arm64
+$ lm7 model serve hf://Qwen/Qwen3.5-0.8B --target apple --backend vllm --port 8200 --dry-run
+model           Qwen/Qwen3.5-0.8B
+target          apple:metal
 runtime         vllm
-address         http://127.0.0.1:8000
+address         http://127.0.0.1:8200
 max_model_len   2048
-vllm            NOT INSTALLED
-command         vllm serve owner/model --host 127.0.0.1 --port 8000 --max-model-len 2048
+vllm            /Users/you/.venv-vllm-metal/bin/vllm
+command         vllm serve Qwen/Qwen3.5-0.8B --host 127.0.0.1 --port 8200 --max-model-len 2048
+env             VLLM_HOST_IP=127.0.0.1
 ```
 
 vLLM is **not** an LM7 extra, deliberately: it pins a specific PyTorch, and
 pinning one here would decide the torch version for everyone who installs LM7
 (this repo already has extras that disagree about torch — `litert` pins
-`<2.13`). Install it into the environment yourself. A target vLLM has no backend
-for — `apple`, `intel:npu`, `tenstorrent`, `qualcomm` — is refused rather than
-launched, because vLLM would otherwise fall back to whatever platform plugin it
-could load and serve happily from the wrong device.
+`<2.13`). Install it yourself. A target vLLM has no backend for —
+`intel:npu`, `tenstorrent`, `qualcomm` — is refused rather than launched,
+because vLLM would otherwise fall back to whatever platform plugin it could load
+and serve happily from the wrong device.
 
-> **Not validated.** The handover has never been run. vLLM does not install on
-> Apple Silicon and no GPU box was rented for this. `vllm_argv` is unit-tested;
-> `serve_with_vllm` is not. See [limitations](limitations.md#serving).
+### On Apple Silicon: vllm-metal
+
+vLLM has no macOS wheel on PyPI, but [vllm-metal](https://github.com/vllm-project/vllm-metal)
+is a **platform plugin** — not a fork — that adds Apple Silicon through MLX, so
+`vllm serve` is the same command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
+```
+
+It builds its own `~/.venv-vllm-metal` (native arm64 Python 3.12) holding vLLM
+plus the plugin. Two consequences LM7 handles rather than leaves to you:
+
+- **LM7 cannot import that vLLM**, because it is in a different environment
+  on purpose. So availability is not an import check: LM7 looks for an importable
+  `vllm`, then a `vllm` on `PATH`, then vllm-metal's default venv, and
+  `--dry-run` prints which one it found. An import-only check reports "not
+  installed" on a machine where `vllm serve` runs perfectly well.
+- **LM7 sets `VLLM_HOST_IP=127.0.0.1`** when the server is bound to loopback.
+  Without it, vLLM initializes its `gloo` process group against the host's LAN
+  address and **hangs on macOS** — no error, no timeout, startup simply stops
+  after `PyTorch device set to: mps`, with `distributed_init_method=tcp://192.168.x.x`
+  the only clue. Measured here: a hang of over ten minutes became a 130-second
+  startup. An explicit `VLLM_HOST_IP` is never overridden, and a server bound to
+  `0.0.0.0` is left alone, since a real address is required there and LM7 cannot
+  guess it.
+
+> **Validated on Apple Silicon, and nowhere else.** `lm7 model serve --target
+> apple --backend vllm` was run end to end on an M-series Mac against
+> `Qwen/Qwen3.5-0.8B` with vLLM 0.26.0 + vllm-metal 0.3.0: `/v1/models`, chat
+> completions, SSE streaming, and the official `openai` SDK. **The CUDA, ROCm and
+> TPU paths have still never been run** — no GPU box was rented for this. Note
+> also that vllm-metal supports a specific model list; `SmolLM2-135M` is not on
+> it, which is why this example uses Qwen3.5-0.8B (already in LM7's ladder).
 
 ## What has actually been run
 

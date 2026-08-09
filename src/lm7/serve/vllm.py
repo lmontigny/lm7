@@ -15,9 +15,11 @@ launcher, and it is documented as one in docs/serving.md.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from ..detection import resolve_target
 from ..errors import UnsupportedModelError
@@ -34,18 +36,47 @@ _VLLM_PLATFORMS = {
     "amd": "rocm",
     "cpu": "cpu",
     "tpu": "tpu",
+    # Apple Silicon through the vllm-metal platform plugin, which is a plugin
+    # rather than a fork -- `vllm serve` is the same command. Validated on an
+    # M-series Mac; see docs/serving.md.
+    "apple": "metal",
 }
 
+# Where vllm-metal's installer puts its environment. Checked because that
+# installer deliberately builds an isolated venv -- vLLM pins a specific
+# PyTorch, which is the same reason LM7 does not depend on vLLM -- so the
+# common case is vLLM present on the machine and absent from LM7's interpreter.
+_VLLM_METAL_VENV = "~/.venv-vllm-metal/bin/vllm"
+
 _NOT_INSTALLED = (
-    "vLLM is not installed. LM7 does not depend on it: vLLM pins a specific PyTorch, "
-    "and pinning one here would decide the torch version for everyone who installs LM7. "
-    "Install it into this environment yourself with 'uv pip install vllm' (or "
-    "'pip install vllm'), or drop --backend vllm to use LM7's own single-stream server."
+    "vLLM is not installed, or is not on PATH. LM7 does not depend on it: vLLM pins a "
+    "specific PyTorch, and pinning one here would decide the torch version for everyone "
+    "who installs LM7. Install it yourself -- on Apple Silicon that is the vllm-metal "
+    "plugin (see docs/serving.md), elsewhere 'uv pip install vllm' -- or drop "
+    "--backend vllm to use LM7's own single-stream server."
 )
 
 
+def vllm_executable() -> str | None:
+    """The ``vllm`` command LM7 would hand over to, or None.
+
+    Three places, in the order that matches how ``serve_with_vllm`` launches:
+    LM7's own interpreter, then PATH, then vllm-metal's default venv. Importable
+    is deliberately *not* the only test -- the handover is a subprocess, so what
+    matters is whether a command can be run, and on Apple Silicon vLLM normally
+    lives in its own environment where LM7 cannot import it at all.
+    """
+    if importlib.util.find_spec("vllm") is not None:
+        return sys.executable
+    found = shutil.which("vllm")
+    if found:
+        return found
+    candidate = Path(_VLLM_METAL_VENV).expanduser()
+    return str(candidate) if candidate.exists() else None
+
+
 def vllm_available() -> bool:
-    return importlib.util.find_spec("vllm") is not None
+    return vllm_executable() is not None
 
 
 def vllm_platform(target: TargetSpec) -> str:
@@ -64,9 +95,8 @@ def vllm_argv(config: ServeConfig) -> list[str]:
     """The ``vllm serve`` command line for ``config``.
 
     A pure function of the config, with no vLLM import anywhere in it, so the
-    translation is unit-testable on a machine where vLLM does not install -- which
-    is every machine this repo has -- and so the ``--dry-run`` output is something
-    a user can copy into a shell.
+    translation stays unit-testable on a machine where vLLM is not installed, and
+    so the ``--dry-run`` output is something a user can copy into a shell.
     """
     from ..huggingface import _model_id
 
@@ -100,25 +130,55 @@ def serve_with_vllm(config: ServeConfig) -> int:
     launcher that has already handed over should not be holding a loaded model in
     memory behind it.
 
-    The environment is inherited untouched. LM7 targets carry a device *ordinal*
-    only when detection supplied one, and a target string cannot express one at
-    all, so there is nothing here that could set ``CUDA_VISIBLE_DEVICES`` more
+    The device selection is left alone. LM7 targets carry a device *ordinal* only
+    when detection supplied one, and a target string cannot express one at all,
+    so there is nothing here that could set ``CUDA_VISIBLE_DEVICES`` more
     accurately than the caller already has -- and setting it from a detected
     ordinal would silently hide every other GPU from a tensor-parallel run.
+    ``VLLM_HOST_IP`` is the one exception; see :func:`vllm_environment`.
     """
-    if not vllm_available():
+    executable = vllm_executable()
+    if executable is None:
         raise UnsupportedModelError(_NOT_INSTALLED)
     argv = vllm_argv(config)
-    if shutil.which(argv[0]) is None:
-        # vLLM is importable but its console script is not on PATH, which is
-        # normal for a `pip install --target` layout or a venv that is not active.
+    if executable == sys.executable:
+        # Importable here, but the console script may not be on PATH -- normal
+        # for a `pip install --target` layout or an unactivated venv.
         argv = [sys.executable, "-m", "vllm.entrypoints.cli.main", *argv[1:]]
-    return subprocess.call(argv)
+    else:
+        argv = [executable, *argv[1:]]
+    return subprocess.call(argv, env=vllm_environment(config))
+
+
+def vllm_environment(config: ServeConfig) -> dict[str, str]:
+    """The environment vLLM is launched with, and the single thing LM7 changes.
+
+    vLLM initializes a ``gloo`` process group even for a single-worker server,
+    and picks the host's LAN address for it. On a Mac that **hangs**: startup
+    stops after "PyTorch device set to: mps" with no error, no timeout and no
+    further output, and the only clue is
+    ``distributed_init_method=tcp://192.168.x.x:...`` in the log. Setting
+    ``VLLM_HOST_IP`` to loopback fixes it -- measured here as a hang of over ten
+    minutes becoming a 130-second startup.
+
+    So LM7 sets it, but only when the server is being bound to loopback anyway
+    (where a LAN address is certainly wrong) and only when the caller has not set
+    it themselves. A multi-node vLLM deployment needs the real address, and that
+    caller has already said so.
+    """
+    environment = dict(os.environ)
+    if "VLLM_HOST_IP" in environment:
+        return environment
+    if config.host in ("127.0.0.1", "localhost", "::1"):
+        environment["VLLM_HOST_IP"] = "127.0.0.1"
+    return environment
 
 
 __all__ = [
     "serve_with_vllm",
     "vllm_argv",
     "vllm_available",
+    "vllm_environment",
+    "vllm_executable",
     "vllm_platform",
 ]

@@ -8,6 +8,7 @@ Transformers. The parser lives with its siblings; only the handler is here.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from ..detection import resolve_target
@@ -19,9 +20,9 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
     """What this invocation would do, without loading a model or binding a port.
 
     Backs ``--dry-run``, which exists because loading a model is the expensive
-    part of finding out that a target was misspelled -- and because the vLLM
-    handover cannot be exercised on any machine this project has, so printing
-    the argv it would run is the only check available for it.
+    part of finding out that a target was misspelled. For ``--backend vllm`` it
+    also answers the two questions that decide whether the handover will work at
+    all: which ``vllm`` LM7 found, and what it will change in the environment.
     """
     from ..huggingface import _model_id
 
@@ -35,11 +36,21 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         "port": config.port,
     }
     if config.backend == "vllm":
-        from .vllm import vllm_argv, vllm_available
+        from .vllm import vllm_argv, vllm_environment, vllm_executable
 
+        executable = vllm_executable()
         plan["runtime"] = "vllm"
-        plan["vllm_installed"] = vllm_available()
+        plan["vllm_installed"] = executable is not None
+        # Named because "not installed" is usually "installed in a different
+        # environment" -- vllm-metal builds its own venv on purpose.
+        plan["vllm_executable"] = executable
         plan["argv"] = vllm_argv(config)
+        overrides = {
+            name: value
+            for name, value in vllm_environment(config).items()
+            if os.environ.get(name) != value
+        }
+        plan["environment"] = overrides
     else:
         plan["runtime"] = "lm7"
         plan["dtype"] = config.dtype
@@ -125,9 +136,11 @@ def _format_plan(plan: dict[str, Any]) -> str:
     lines.append(f"{'address':<16}http://{plan['host']}:{plan['port']}")
     lines.append(f"{'max_model_len':<16}{plan['max_model_len']}")
     if plan["runtime"] == "vllm":
-        state = "installed" if plan["vllm_installed"] else "NOT INSTALLED"
+        state = plan["vllm_executable"] or "NOT FOUND"
         lines.append(f"{'vllm':<16}{state}")
         lines.append(f"{'command':<16}{' '.join(plan['argv'])}")
+        for name, value in plan["environment"].items():
+            lines.append(f"{'env':<16}{name}={value}")
     else:
         lines.append(f"{'endpoints':<16}{' '.join(plan['endpoints'])}")
     return "\n".join(lines)

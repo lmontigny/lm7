@@ -428,8 +428,11 @@ def test_an_explicit_dtype_reaches_vllm() -> None:
 
 
 def test_a_target_vllm_has_no_backend_for_is_refused_rather_than_launched() -> None:
-    with pytest.raises(UnsupportedModelError, match="vLLM has no backend"):
-        vllm_platform(parse_target("apple"))
+    """vLLM falls back to whatever platform plugin loads, so an unmapped target
+    would otherwise start a server on the wrong device and never say so."""
+    for unsupported in ("tenstorrent", "intel:npu", "qualcomm:sm8750"):
+        with pytest.raises(UnsupportedModelError, match="vLLM has no backend"):
+            vllm_platform(parse_target(unsupported))
 
 
 def test_a_target_vllm_supports_is_translated_to_its_platform_name() -> None:
@@ -442,15 +445,68 @@ def test_a_target_vllm_supports_is_translated_to_its_platform_name() -> None:
     assert vllm_platform(parse_target("amd")) == "rocm"
     assert vllm_platform(parse_target("cpu")) == "cpu"
     assert vllm_platform(parse_target("tpu")) == "tpu"
+    # Apple Silicon via the vllm-metal platform plugin — see docs/serving.md.
+    assert vllm_platform(parse_target("apple")) == "metal"
 
 
 def test_a_missing_vllm_names_the_install_command_rather_than_failing_opaquely(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(vllm_module, "vllm_available", lambda: False)
+    monkeypatch.setattr(vllm_module, "vllm_executable", lambda: None)
     config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
     with pytest.raises(UnsupportedModelError, match="pip install vllm"):
         vllm_module.serve_with_vllm(config)
+
+
+def test_vllm_is_looked_for_where_it_is_actually_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importable in LM7's interpreter is not the test that matters.
+
+    The handover is a subprocess, and on Apple Silicon vLLM normally lives in
+    vllm-metal's own venv -- deliberately isolated, because vLLM pins a torch
+    version. An import check alone reports "not installed" on a machine where
+    `vllm serve` runs perfectly well.
+    """
+    monkeypatch.setattr(vllm_module.importlib.util, "find_spec", lambda _: None)
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(vllm_module.Path, "exists", lambda _: False)
+    assert vllm_module.vllm_executable() is None
+    assert vllm_module.vllm_available() is False
+
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: "/somewhere/bin/vllm")
+    assert vllm_module.vllm_executable() == "/somewhere/bin/vllm"
+
+    monkeypatch.setattr(vllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(vllm_module.Path, "exists", lambda _: True)
+    assert vllm_module.vllm_executable().endswith(".venv-vllm-metal/bin/vllm")
+
+
+def test_a_loopback_server_pins_vllm_to_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vLLM's gloo init picks the LAN address and hangs on macOS otherwise.
+
+    No error, no timeout — startup simply stops after "PyTorch device set to:
+    mps". Measured here as a >10-minute hang becoming a 130-second startup.
+    """
+    monkeypatch.delenv("VLLM_HOST_IP", raising=False)
+    loopback = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(loopback)["VLLM_HOST_IP"] == "127.0.0.1"
+
+
+def test_a_server_bound_to_all_interfaces_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real address is required off-loopback, and LM7 cannot guess it."""
+    monkeypatch.delenv("VLLM_HOST_IP", raising=False)
+    exposed = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm", host="0.0.0.0")
+    assert "VLLM_HOST_IP" not in vllm_module.vllm_environment(exposed)
+
+
+def test_an_explicit_vllm_host_ip_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A multi-node deployment has already said what the address is."""
+    monkeypatch.setenv("VLLM_HOST_IP", "10.0.0.7")
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(config)["VLLM_HOST_IP"] == "10.0.0.7"
 
 
 # -- the plan -------------------------------------------------------------
@@ -468,3 +524,7 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     assert plan["runtime"] == "vllm"
     assert plan["argv"][:2] == ["vllm", "serve"]
     assert isinstance(plan["vllm_installed"], bool)
+    # "Not installed" is usually "installed in a different environment", so the
+    # plan names which vllm was found rather than only whether one was.
+    assert "vllm_executable" in plan
+    assert plan["environment"].get("VLLM_HOST_IP") == "127.0.0.1"
