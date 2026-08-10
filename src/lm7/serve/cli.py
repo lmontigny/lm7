@@ -102,6 +102,14 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
             "--ui-port is for --backend vllm, which owns its port and serves no browser "
             f"page. This server serves the chat page itself at http://{config.host}:{config.port}/."
         )
+    if config.vllm_args:
+        # Refused rather than ignored, like every other argument this server
+        # cannot honour: quietly dropping engine flags would start a server that
+        # is not the one that was asked for.
+        raise UnsupportedModelError(
+            "--vllm-arg is passed through to 'vllm serve' and means nothing to LM7's own "
+            "server. Add --backend vllm to hand the port over, or drop --vllm-arg."
+        )
 
     _require_serve_extra()
     from .engine import LM7ServeEngine

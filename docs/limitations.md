@@ -286,15 +286,23 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   The failure is invisible on CPU, where both dtypes resolve to FP32 — which is
   the general shape of this file: a path validated on one target is not
   validated. See [serving](serving.md#on-nvidia-rtx-4070-super-ada-sm89).
-- **`--backend vllm` is validated on Apple Silicon only.** LM7 translates its
+- **`--backend vllm` is validated on Apple Silicon and CUDA.** LM7 translates its
   flags into vLLM's own `vllm serve` argv and hands over the process. That
   handover was run end to end on an M-series Mac against `Qwen/Qwen3.5-0.8B`
   through the [vllm-metal](https://github.com/vllm-project/vllm-metal) platform
-  plugin — vLLM 0.26.0 + vllm-metal 0.3.0, chat, streaming, and the `openai` SDK.
-  **The CUDA, ROCm and TPU handovers have still never been run**, since no GPU
-  box was rented for it; for those, say "implemented", not "validated". vLLM's
-  own supported-model list applies once LM7 has handed over, and it is narrower
-  than LM7's — `SmolLM2-135M` is not on vllm-metal's, for instance.
+  plugin — vLLM 0.26.0 + vllm-metal 0.3.0, chat, streaming, and the `openai` SDK
+  — and on an RTX 4070 SUPER (`sm89`, WSL2) against Llama-3.2-1B-Instruct with
+  vLLM 0.26.0. **The ROCm and TPU handovers have still never been run**; for
+  those, say "implemented", not "validated". vLLM's own supported-model list
+  applies once LM7 has handed over, and it is narrower than LM7's —
+  `SmolLM2-135M` is not on vllm-metal's, for instance.
+- **A handover that starts is not a handover that is tuned.** CUDA needed two
+  LM7 fixes before it would start at all (`VLLM_WSL2_ENABLE_PIN_MEMORY` and
+  `--vllm-arg`, both in [serving](serving.md#--backend-vllm-hand-over-the-port)),
+  plus one workaround LM7 does not own: FlashInfer's startup JIT wants `nvcc` and
+  `ninja` and then rejects CUDA 13.3, so that box sets
+  `VLLM_USE_FLASHINFER_SAMPLER=0` in the environment. Nothing about vLLM's
+  throughput has been measured here, on any platform.
 
 ## Evaluated, not adopted
 

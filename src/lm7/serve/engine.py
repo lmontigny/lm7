@@ -118,6 +118,9 @@ class ServeConfig:
     quantize: str = "none"
     cors_origins: tuple[str, ...] = ("*",)
     api_key: str | None = None
+    # Appended verbatim to `vllm serve`, and meaningless for LM7's own server.
+    # See `serve/vllm.py` for why this exists instead of a flag per vLLM setting.
+    vllm_args: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +136,7 @@ class ServeConfig:
             "ui_port": self.ui_port,
             "quantize": self.quantize,
             "cors_origins": list(self.cors_origins),
+            "vllm_args": list(self.vllm_args),
             # Whether one is set, never which one: this dict backs --dry-run and
             # --json, and a key printed to a terminal is a key in a scrollback.
             "api_key": self.api_key is not None,
