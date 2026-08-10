@@ -1,4 +1,4 @@
-"""Engine, sampling and vLLM-launcher tests. No HTTP, no downloads, no FastAPI.
+"""Engine, sampling and launcher-backend tests. No HTTP, no downloads, no FastAPI.
 
 Everything here runs on a plain ``[dev]`` install, which is what the `quality`
 CI job has. The HTTP surface is exercised in ``test_serve_integration.py``,
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform
 import sys
 import time
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import lm7.serve.trtllm as trtllm_module
 import lm7.serve.vllm as vllm_module
 from lm7.cli import _build_parser, _cors_origins
 from lm7.errors import UnsupportedModelError
@@ -33,6 +35,7 @@ from lm7.serve.engine import (
     resolve_model_source,
     select_token,
 )
+from lm7.serve.trtllm import trtllm_argv, trtllm_supports
 from lm7.serve.validation import unsupported_fields
 from lm7.serve.vllm import vllm_argv, vllm_platform
 from lm7.targets import parse_target
@@ -635,6 +638,102 @@ def test_the_parser_collects_repeated_vllm_arguments() -> None:
         ]
     )
     assert args.vllm_args == ["--gpu-memory-utilization", "0.8"]
+# -- TensorRT-LLM handover ------------------------------------------------
+
+
+def test_the_trtllm_command_line_carries_the_lm7_flags() -> None:
+    config = ServeConfig(
+        model="hf://owner/model", target="nvidia", backend="trtllm", port=9001, max_model_len=2048
+    )
+    argv = trtllm_argv(config)
+    assert argv[:2] == ["trtllm-serve", "owner/model"]
+    assert argv[argv.index("--port") + 1] == "9001"
+    # trtllm-serve's own spelling of the cache length, underscored, not renamed.
+    assert argv[argv.index("--max_seq_len") + 1] == "2048"
+
+
+def test_lm7_does_not_choose_tensorrt_llms_own_backend() -> None:
+    """`--backend` means something different on each side of the handover.
+
+    LM7's selects the launcher; trtllm-serve's selects pytorch or the TensorRT
+    engine. Passing one through as the other would be a silent mistranslation,
+    so LM7 passes neither and TensorRT-LLM keeps its own default.
+    """
+    argv = trtllm_argv(ServeConfig(model="hf://owner/model", target="nvidia", backend="trtllm"))
+    assert "--backend" not in argv
+
+
+def test_a_target_tensorrt_llm_has_no_kernels_for_is_refused() -> None:
+    for unsupported in ("cpu", "apple", "tpu", "amd"):
+        with pytest.raises(UnsupportedModelError, match="NVIDIA GPUs only"):
+            trtllm_supports(parse_target(unsupported))
+
+
+def test_a_pre_ampere_nvidia_card_is_refused_by_name() -> None:
+    """TensorRT-LLM has no pre-Ampere kernels: it fails during engine build.
+
+    Refused here so the message names the card, rather than arriving as a CUDA
+    error minutes into a load.
+    """
+    with pytest.raises(UnsupportedModelError, match="Ampere"):
+        trtllm_supports(parse_target("nvidia:sm75"))
+    # sm80 is the boundary and is allowed; sm89 is the card this was run on.
+    trtllm_supports(parse_target("nvidia:sm80"))
+    trtllm_supports(parse_target("nvidia:sm89"))
+    # An unqualified `nvidia` has no architecture until it meets hardware, so
+    # gating on a missing value would refuse the ordinary case.
+    trtllm_supports(parse_target("nvidia"))
+
+
+def test_lm7_quantization_is_refused_rather_than_silently_dropped() -> None:
+    """`--quantize` quantizes LM7's own decode loop, which is not in this path."""
+    config = ServeConfig(
+        model="hf://owner/model", target="nvidia", backend="trtllm", quantize="fp8"
+    )
+    with pytest.raises(UnsupportedModelError, match="ModelOpt"):
+        trtllm_argv(config)
+
+
+def test_a_missing_tensorrt_llm_names_the_reason_rather_than_failing_opaquely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(trtllm_module, "trtllm_executable", lambda: None)
+    config = ServeConfig(model="hf://owner/model", target="nvidia", backend="trtllm")
+    with pytest.raises(UnsupportedModelError, match="a venv of its own"):
+        trtllm_module.serve_with_trtllm(config)
+
+
+def test_tensorrt_llm_is_looked_for_where_it_is_actually_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It cannot be installed beside LM7, so an import check is not the test.
+
+    TensorRT-LLM pins a torch, a transformers and a tensorrt that conflict with
+    every other environment in this repo, so the normal state of a working
+    machine is `trtllm-serve` runnable and `tensorrt_llm` unimportable from the
+    interpreter running `lm7`.
+    """
+    monkeypatch.setattr(trtllm_module.importlib.util, "find_spec", lambda _: None)
+    monkeypatch.setattr(trtllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(trtllm_module.Path, "exists", lambda _: False)
+    assert trtllm_module.trtllm_executable() is None
+    assert trtllm_module.trtllm_available() is False
+
+    monkeypatch.setattr(trtllm_module.shutil, "which", lambda _: "/somewhere/bin/trtllm-serve")
+    assert trtllm_module.trtllm_executable() == "/somewhere/bin/trtllm-serve"
+
+    monkeypatch.setattr(trtllm_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(trtllm_module.Path, "exists", lambda _: True)
+    # A path, not a suffix string: this suite runs on Windows too.
+    expected = Path(trtllm_module._TRTLLM_VENVS[0]).expanduser()
+    assert Path(trtllm_module.trtllm_executable()) == expected
+
+
+def test_tensorrt_llm_is_launched_with_an_unchanged_environment() -> None:
+    """The vLLM launcher pins VLLM_HOST_IP; this one changes nothing, and the
+    plan has to be able to say so for both."""
+    config = ServeConfig(model="hf://owner/model", target="nvidia", backend="trtllm")
+    assert trtllm_module.trtllm_environment(config) == dict(os.environ)
 
 
 # -- the plan -------------------------------------------------------------
@@ -651,11 +750,28 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     plan = serve_plan(ServeConfig(model="hf://owner/model", target="cpu", backend="vllm"))
     assert plan["runtime"] == "vllm"
     assert plan["argv"][:2] == ["vllm", "serve"]
-    assert isinstance(plan["vllm_installed"], bool)
+    assert isinstance(plan["runtime_installed"], bool)
     # "Not installed" is usually "installed in a different environment", so the
     # plan names which vllm was found rather than only whether one was.
-    assert "vllm_executable" in plan
+    assert "runtime_executable" in plan
     assert plan["environment"].get("VLLM_HOST_IP") == "127.0.0.1"
+
+
+def test_the_plan_shows_the_command_tensorrt_llm_would_be_given() -> None:
+    """The same keys as the vLLM plan, because both are handovers.
+
+    A launcher backend is described by which executable was found and what argv
+    it gets, whichever launcher it is -- so a reader (and `--dry-run`) learns
+    the same things about both.
+    """
+    plan = serve_plan(ServeConfig(model="hf://owner/model", target="nvidia", backend="trtllm"))
+    assert plan["runtime"] == "trtllm"
+    assert plan["argv"][:2] == ["trtllm-serve", "owner/model"]
+    assert isinstance(plan["runtime_installed"], bool)
+    assert "runtime_executable" in plan
+    # This launcher changes nothing in the environment, so there is nothing to
+    # report -- as opposed to the key being missing and leaving it unanswered.
+    assert plan["environment"] == {}
 
 
 # -- where the model comes from -------------------------------------------

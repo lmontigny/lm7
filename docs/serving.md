@@ -562,7 +562,8 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 `http://127.0.0.1:8201`.
 
 `--ui-port` is refused for LM7's own backend, which already serves the page at
-`/` — a second copy on another port would be a puzzle, not a feature.
+`/` — a second copy on another port would be a puzzle, not a feature. It works
+for every launcher backend, `--backend trtllm` included.
 
 > **Validated on Apple Silicon, and nowhere else.** `lm7 model serve --target
 > apple --backend vllm` was run end to end on an M-series Mac against
@@ -582,6 +583,75 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 > it bundles reject CUDA 13.3 — so the server was started with
 > `VLLM_USE_FLASHINFER_SAMPLER=0` in the environment, which LM7 passes through
 > and does not set. **ROCm and TPU have still never been run.**
+
+## `--backend trtllm`: the same handover, to TensorRT-LLM
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia --backend trtllm --port 8000
+```
+
+Same shape as `--backend vllm`, and deliberately so: LM7 translates its config
+into `trtllm-serve`'s own argv and hands over the process. Both are *launcher
+backends*, and everything the previous section says about not being in the
+request path applies here word for word.
+
+Sharing the shape is the point. `--dry-run` answers the same questions for
+either — which executable was found, what argv it gets, what changes in the
+environment — and `--ui-port` works the same way, because the plan is built once
+for both rather than per backend:
+
+```console
+$ lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+    --target nvidia --backend trtllm --max-model-len 2048 --dry-run
+model           HuggingFaceTB/SmolLM2-135M-Instruct
+target          nvidia:sm89
+runtime         trtllm
+address         http://127.0.0.1:8000
+max_model_len   2048
+trtllm          /home/you/.venv-trtllm/bin/trtllm-serve
+command         trtllm-serve HuggingFaceTB/SmolLM2-135M-Instruct --host 127.0.0.1 --port 8000 --max_seq_len 2048
+```
+
+Three translation decisions worth stating, because each is a place LM7 could
+have quietly done the wrong thing:
+
+- **`--max-model-len` becomes `--max_seq_len`.** The same quantity under each
+  side's own name. LM7 does not reinterpret it, and does not rename
+  `trtllm-serve`'s flags to look like its own — the printed command is the real
+  one, meant to be copied into a shell.
+- **LM7 does not pass `--backend` through.** The flag exists on both sides and
+  means different things: LM7's picks the launcher, `trtllm-serve`'s picks
+  between its PyTorch runtime and a TensorRT engine. Passing one as the other
+  would be a silent mistranslation, so LM7 passes neither and TensorRT-LLM keeps
+  its own default (on 1.2.x, the PyTorch runtime with in-flight batching — *not*
+  a prebuilt TensorRT engine).
+- **`--quantize` is refused, not ignored.** It quantizes weights in LM7's own
+  decode loop, which is not in this path at all. TensorRT-LLM quantizes at engine
+  build time from a checkpoint NVIDIA ModelOpt has already produced; serve one of
+  those instead.
+
+A non-NVIDIA target is refused, and so is a pre-Ampere NVIDIA card: TensorRT-LLM
+has no kernels below `sm80` and fails during engine construction rather than
+falling back, so the refusal names the card instead of arriving as a CUDA error
+several minutes into a load.
+
+### It needs its own environment
+
+TensorRT-LLM pins `torch`, `transformers` and `tensorrt` to versions that
+conflict with every other environment in this repo, so it cannot be an LM7 extra
+for exactly the reason vLLM cannot. Install it in a venv of its own and put that
+venv on `PATH`; LM7 looks for an importable `tensorrt_llm`, then `trtllm-serve`
+on `PATH`, then `~/.venv-trtllm/bin/trtllm-serve`. The install, the version set
+and what was measured are in [TensorRT-LLM](tensorrt-llm.md).
+
+**Handing over the process is load-bearing here**, not just tidy. TensorRT-LLM
+spawns MPI workers that re-execute the parent's command line; a launcher that
+drove the Python API in-process would have its workers re-run `python -m lm7`,
+hit argparse and `MPI_ABORT` the job *after* the model had loaded. `trtllm-serve`
+is its own entry point, so its workers re-execute it and the re-exec is harmless.
+[TensorRT-LLM](tensorrt-llm.md#why-this-is-a-launcher-and-not-an-in-process-runtime)
+has the whole story, including what the in-process version cost.
 
 ## What has actually been run
 

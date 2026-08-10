@@ -115,6 +115,7 @@ markers = [
     "zentorch: requires AMD's zentorch extension on an x86-64 CPU",
     "serve: requires the FastAPI/Uvicorn HTTP stack from the serve extra",
     "serve_load: requires the serve and hf extras, and downloads a tiny model",
+    "trtllm: requires trtllm-serve on PATH and an Ampere-or-newer NVIDIA GPU",
 ]
 
 [tool.ruff]

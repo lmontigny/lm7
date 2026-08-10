@@ -114,8 +114,9 @@ class ServeConfig:
     compile_prefill: bool = True
     host: str = "127.0.0.1"
     port: int = 8000
-    # Only meaningful with `--backend vllm`: LM7's own server already
-    # serves the chat page at `/`, while vLLM owns its port and ships none.
+    # Only meaningful with a launcher backend (`vllm`, `trtllm`): LM7's own
+    # server already serves the chat page at `/`, while a launched server owns
+    # its port and ships none.
     ui_port: int | None = None
     quantize: str = "none"
     cors_origins: tuple[str, ...] = ("*",)

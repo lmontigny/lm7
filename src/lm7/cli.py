@@ -553,7 +553,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help=(
             "backend selector for the compiled decode loop: auto, eager, or inductor. "
-            "'vllm' instead hands the port to vLLM, which must be installed separately"
+            "'vllm' and 'trtllm' instead hand the port to vLLM or TensorRT-LLM, each of "
+            "which must be installed separately"
         ),
     )
     serve_parser.add_argument(
@@ -595,8 +596,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "serve the chat page on this port. Only for --backend vllm, which hands "
-            "the API port to vLLM and vLLM ships no browser page; LM7's own server "
+            "serve the chat page on this port. Only for --backend vllm and --backend "
+            "trtllm, which own the API port and ship no browser page; LM7's own server "
             "already serves the page at /"
         ),
     )
