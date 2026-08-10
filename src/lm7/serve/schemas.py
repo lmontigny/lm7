@@ -160,12 +160,30 @@ class MetricsResponse(BaseModel):
     model: str
     target: str
     backend: str
+    # What the weights resolved to, not what `--dtype` asked for: `auto` is FP32
+    # on CPU, FP16 on NVIDIA, and BF16 on NVIDIA once a weight-only quantization
+    # is in play.
+    dtype: str
     requests: int
     prompt_tokens: int
     generated_tokens: int
     ttft_ms: float
     tpot_ms: float
     kv_cache_bytes: int
+    # Parameters and buffers, each counted once -- tied weights are a single
+    # allocation. The one memory figure that means the same thing on every
+    # target, and the only one a quantization can be checked against.
+    weights_bytes: int
+    # "device" for an accelerator's allocator, "process" for RSS on a CPU
+    # target. The two are not comparable, so the kind travels with the value
+    # rather than being guessed from `target` -- see
+    # `LM7ServeEngine.memory_snapshot` for what each does and does not count.
+    memory_kind: str
+    memory_bytes: int
+    # Only where the device has a capacity of its own: a discrete GPU has one,
+    # unified memory does not, and a CPU target's is the host's.
+    memory_total_bytes: int | None = None
+    memory_free_bytes: int | None = None
     max_model_len: int
     # False until the first request has compiled the graphs, which is why that
     # request is slow. A client can say "compiling" instead of looking hung.

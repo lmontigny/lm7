@@ -18,6 +18,7 @@ import json
 import platform
 import time
 from pathlib import Path
+from typing import Self
 
 import pytest
 import torch
@@ -916,3 +917,131 @@ def test_a_quantized_load_asks_for_the_quantized_compute_dtype(
         ServeConfig(model="hf://HuggingFaceTB/SmolLM2-135M-Instruct", quantize="int8")
     )
     assert requested["dtype"] is torch.bfloat16
+
+
+# -- what the page shows about memory and dtype ---------------------------
+
+
+class WeightedRunner(ScriptedRunner):
+    """A scripted runner that also owns a tiny model, a dtype and a device.
+
+    `ScriptedRunner` deliberately has none of those, which is how the engine's
+    "not available" paths stay covered; this is the other half.
+    """
+
+    def __init__(self, script: list[int], dtype: torch.dtype = torch.float16) -> None:
+        super().__init__(script)
+        self.dtype = dtype
+        self.device = torch.device("cpu")
+        embedding = torch.nn.Embedding(8, 4).to(dtype)
+        self.model = torch.nn.Module()
+        self.model.embedding = embedding
+        # Tied, as an `lm_head` sharing the embedding is on most small causal
+        # LMs: one allocation, and it must not be counted twice.
+        self.model.head = torch.nn.Linear(4, 8, bias=False).to(dtype)
+        self.model.head.weight = embedding.weight
+
+
+def _engine_with(runner: ScriptedRunner) -> LM7ServeEngine:
+    return LM7ServeEngine(
+        runner, FakeTokenizer(), ServeConfig(model="hf://owner/fake"), model_id="owner/fake"
+    )
+
+
+def test_the_reported_dtype_is_the_one_the_weights_are_in() -> None:
+    """Like `backend`, `--dtype auto` is a question and this is the answer.
+
+    `auto` resolves to FP32 on CPU, FP16 on NVIDIA, and BF16 on NVIDIA under a
+    weight-only quantization, so echoing the request back would tell a reader
+    nothing about what is loaded.
+    """
+    assert _engine_with(WeightedRunner([1], torch.bfloat16)).dtype == "bfloat16"
+
+
+def test_a_runner_without_a_dtype_says_so_rather_than_guessing() -> None:
+    assert _engine_with(ScriptedRunner([1])).dtype == "unknown"
+
+
+def test_weights_are_counted_once_even_when_tied() -> None:
+    """8x4 embedding in FP16 is 64 bytes, and the tied head adds nothing."""
+    assert _engine_with(WeightedRunner([1])).weights_bytes == 64
+
+
+class FakeQuantizedTensor(torch.Tensor):
+    """A tensor subclass shaped like TorchAO's, without needing TorchAO.
+
+    The trap this pins down: a quantized weight keeps its *logical* dtype, so
+    `numel() * element_size()` returns what the model used to weigh. TorchAO's
+    `Int8Tensor` really does report `dtype=torch.float32` and `element_size()==4`
+    over INT8 data.
+    """
+
+    qdata: torch.Tensor
+    scale: torch.Tensor
+
+    @staticmethod
+    def __new__(cls, qdata: torch.Tensor, scale: torch.Tensor) -> Self:
+        # float32 shell over int8 storage, which is the whole point.
+        tensor = torch.Tensor._make_wrapper_subclass(cls, qdata.shape, dtype=torch.float32)
+        tensor.qdata, tensor.scale = qdata, scale
+        return tensor
+
+    def __tensor_flatten__(self) -> tuple[list[str], None]:
+        return ["qdata", "scale"], None
+
+    @classmethod
+    def __torch_dispatch__(cls, func: object, types: object, args: object, kwargs: object) -> None:
+        # Required of a wrapper subclass, and never reached: nothing here does
+        # arithmetic on one, it only asks how big it is.
+        raise NotImplementedError
+
+
+def test_a_quantized_weight_is_counted_as_the_bytes_it_stores() -> None:
+    """Otherwise `--quantize` reports the size of the model it replaced.
+
+    Measured on the real thing: SmolLM2-135M under `--quantize int8` counts as
+    513 MiB the naive way and 137 MiB this way.
+    """
+    quantized = FakeQuantizedTensor(torch.zeros(64, 8, dtype=torch.int8), torch.zeros(64))
+    # The shell says 64*8 float32 = 2048 bytes; the storage is 512 int8 plus a
+    # 64-element float32 scale.
+    assert quantized.numel() * quantized.element_size() == 2048
+    from lm7.serve.engine import _tensor_bytes
+
+    assert _tensor_bytes(quantized) == 512 + 256
+
+
+def test_a_cpu_target_reports_process_memory_and_says_that_is_what_it_is() -> None:
+    """RSS is the whole interpreter, so the kind has to travel with the number.
+
+    A caller that read this as the model's footprint would be off by however
+    much PyTorch itself weighs, which is most of a gigabyte.
+    """
+    snapshot = _engine_with(WeightedRunner([1])).memory_snapshot()
+    assert snapshot["memory_kind"] == "process"
+    assert snapshot["memory_bytes"] > 0
+    # No device, so no capacity to quote -- and inventing the host's would imply
+    # a card that is not there.
+    assert snapshot["memory_total_bytes"] is None
+
+
+def test_the_metrics_snapshot_carries_all_of_it() -> None:
+    snapshot = _engine_with(WeightedRunner([1])).metrics_snapshot()
+    for field in ("dtype", "weights_bytes", "memory_kind", "memory_bytes"):
+        assert field in snapshot
+
+
+def test_the_page_labels_device_memory_apart_from_process_memory() -> None:
+    """ "gpu 2 GiB" and "rss 2 GiB" are not the same claim, so the page says which.
+
+    Device memory is this process's accelerator allocator -- smaller than
+    `nvidia-smi` shows, since it excludes the CUDA context and everything else
+    on the card. Process memory is RSS on a CPU target. A page that called both
+    "memory" would invite comparing them.
+    """
+    from lm7.serve.ui import PAGE
+
+    for field in ("dtype", "weights_bytes", "memory_kind", "memory_total_bytes"):
+        assert field in PAGE
+    assert "gpu ${used}" in PAGE
+    assert "rss ${used}" in PAGE
