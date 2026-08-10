@@ -23,6 +23,7 @@ file stays a index rather than a second, drifting description.
 | [#30](https://github.com/lmontigny/lm7/pull/30) | Add the Intel NPU as a target through the OpenVINO NPU plugin |
 | [#44](https://github.com/lmontigny/lm7/pull/44) | Add zentorch, AMD's ZenDNN compiler, as a CPU backend |
 | [#51](https://github.com/lmontigny/lm7/pull/51) | Add ExecuTorch QNN backend |
+| [#126](https://github.com/lmontigny/lm7/pull/126) | Make Arm Mali expressible as a target, without pretending it runs |
 
 ## Quantization
 
