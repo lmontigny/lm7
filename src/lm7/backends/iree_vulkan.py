@@ -12,7 +12,7 @@ import torch
 from ..errors import ArtifactLoadError, CompilationError
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
-SUPPORTED_TARGET_VENDORS = frozenset({"amd", "intel", "nvidia"})
+SUPPORTED_TARGET_VENDORS = frozenset({"amd", "arm", "intel", "nvidia"})
 _REQUIRED_MODULES = {
     "iree.compiler": "iree-base-compiler",
     "iree.runtime": "iree-base-runtime",

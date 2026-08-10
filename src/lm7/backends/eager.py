@@ -27,6 +27,15 @@ class EagerBackend:
                 f"PyTorch has no NPU device; {request.target} is reached through "
                 "backend='openvino'.",
             )
+        if request.target.vendor == "arm":
+            # torch_device() has no Arm GPU branch and falls through to the CPU,
+            # so claiming this target would report an eager CPU run as a Mali
+            # one. Mali is reached by exporting a Vulkan artifact instead.
+            return Support(
+                False,
+                f"PyTorch has no Arm GPU device; {request.target} is reached through "
+                "lm7.export(..., backend='iree_vulkan').",
+            )
         return Support(True, "Eager supports every detected local PyTorch device.", priority=0)
 
     def compile(

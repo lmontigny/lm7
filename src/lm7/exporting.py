@@ -269,7 +269,9 @@ def export(
             "Core ML artifacts currently require static shapes; export one artifact per shape."
         )
     if backend == "iree_vulkan" and resolved_target.vendor not in IREE_VULKAN_VENDORS:
-        raise BackendUnavailableError("IREE Vulkan artifacts target NVIDIA, AMD, or Intel GPUs.")
+        raise BackendUnavailableError(
+            "IREE Vulkan artifacts target NVIDIA, AMD, Intel, or Arm GPUs."
+        )
     if backend == "iree_vulkan" and (dynamic_shapes is not None or shape_profile is not None):
         raise BackendUnavailableError("IREE Vulkan artifacts currently require static shapes.")
     if backend == "onnxruntime" and resolved_target.vendor not in {"cpu", "nvidia"}:

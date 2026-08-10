@@ -42,8 +42,8 @@ The artifact contains `compiled_model.vmfb`, its checksum, and the source
 build host can produce the artifact without seeing a Vulkan device, while the
 deployment host must have a Vulkan 1.3-capable driver and `iree-base-runtime`.
 
-The LM7 target continues to describe hardware (`nvidia`, `amd`, or `intel`);
-`iree_vulkan` describes the compiler/runtime path. The initial backend does not
+The LM7 target continues to describe hardware (`nvidia`, `amd`, `intel`, or
+`arm`); `iree_vulkan` describes the compiler/runtime path. The backend does not
 accept CPU, Apple Metal, or TPU targets.
 
 ## Portability and tuning
@@ -65,11 +65,33 @@ artifact = lm7.export(
 )
 ```
 
-Only target names supported by the installed IREE compiler are valid. IREE
-3.11 accepts `ampere`; it does not accept `ada` or `sm_89`, so the portable
-default is the reliable choice for an RTX 4070-class deployment. A particular
-device can be selected at runtime with `options={"device_uri": "..."}`; this is
-recorded in the manifest and is not passed to the compiler.
+Only target names supported by the installed IREE compiler are valid. A
+particular device can be selected at runtime with `options={"device_uri":
+"..."}`; this is recorded in the manifest and is not passed to the compiler.
+
+### What IREE 3.11 actually accepts
+
+`--iree-vulkan-target` takes architecture code names and a *sparse* table of
+product names, and the two disagree about which parts exist. Compiling a
+`linalg.matmul` module with `iree-compile 3.11.0` (macOS arm64) gives:
+
+| | accepted | rejected |
+| --- | --- | --- |
+| NVIDIA | `ampere` | `ada`, `sm_89` |
+| AMD | `rdna3` | |
+| Qualcomm | `adreno` | |
+| Arm | `valhall`, `valhall1`–`valhall4`, `mali-g77`, `mali-g78`, `mali-g715` | `valhall5`, `bifrost`, `midgard`, `mali`, `arm`, `mali-g52`, `mali-g610`, `mali-g720`, `mali-g925` |
+
+Two things follow. The product table misses common parts — `mali-g610` ships in
+a great many MediaTek phones and SBCs and is not in it — so a product name is a
+worse bet than the generation. And `mali-g715` produces a **byte-identical VMFB
+to `valhall4`**, so the product names are aliases onto the generations rather
+than finer tuning.
+
+The portable default therefore stays the reliable choice everywhere, which is
+why LM7 does not derive this flag from the LM7 target. The flag is not inert —
+`valhall1`, `valhall4`, `ampere`, and the portable default all produced
+different VMFBs for the same input — it is just not something to guess at.
 
 ## Windows and WSL
 
@@ -93,13 +115,42 @@ python -c "import iree.runtime as rt; print(rt.get_driver('vulkan').query_availa
 python -c "from lm7.backends.iree_vulkan import query_vulkan_devices; print(query_vulkan_devices())"
 ```
 
+## Arm Mali
+
+`target="arm"`, `arm:valhall4`, and `arm:mali-g715` parse and export. **Nothing
+has executed on an Arm GPU.** Only the compile half is plumbed, and the
+paragraph above is a statement about `iree-compile`'s flag parser, not about
+Mali silicon.
+
+The missing half is the runtime. `load_artifact` goes through `iree.runtime` in
+Python, which a phone does not have, so reaching a Mali needs an NDK
+cross-compile of the IREE runtime with the Vulkan HAL driver — either
+`iree-run-module` or an IREE counterpart to `tools/android_runner`, the small
+C++ binary the ExecuTorch path pushes to the device. IREE publishes no prebuilt
+Android runtime, and this project owns no Mali hardware: its only handset is a
+Snapdragon 8 Elite whose GPU is an Adreno, reached today through LiteRT's
+OpenCL delegate. See [Android device testing](android-device-testing.md).
+
+An Arm target is `remote=True` for the same reason `qualcomm:sm8750` is: it
+describes deployment hardware the compiler host does not own. `torch_device()`
+maps an unrecognized vendor to the CPU, so the eager backend explicitly declines
+`arm` rather than reporting a host run under a Mali's name.
+
+Two cautions before anyone reads a first number off this path. The Vulkan 1.3
+floor in `load_vmfb` rules out older Mali generations. And the only mobile-GPU
+measurement this project has — LiteRT on the Adreno — was ~660x *slower* than
+the same phone's CPU delegate on a 3-layer MLP, because the graph was too small
+to amortise dispatch and shader compilation. The models big enough to repay a
+mobile GPU are the ones this backend cannot export yet.
+
 ## Current scope
 
 - Fixed input shapes only. Dynamic shape profiles are rejected.
 - Tensor inputs and tensor/tuple/list outputs only; Python scalars, dictionaries,
   caches, and model-specific output dataclasses are outside the initial ABI.
-- FP32 MLP compilation and native Windows execution are validated. FP16 is a
-  goal of the path but does not yet have the same checked hardware result.
+- FP32 MLP compilation and native Windows execution are validated on an RTX
+  4070 SUPER. FP16 is a goal of the path but does not yet have the same checked
+  hardware result, and no Arm GPU has executed an artifact at all.
 - Operator coverage is determined by `torch.export`, IREE Turbine, and IREE's
   Vulkan lowering. Unsupported graphs fail explicitly; LM7 does not fall back to
   PyTorch for an exported VMFB.

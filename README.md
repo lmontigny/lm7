@@ -95,6 +95,7 @@ is corrected in one table rather than redrawn.
 | AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `eager` (+ `iree_vulkan`) |
 | Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` (+ `coreml`) |
 | Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `eager` (+ `iree_vulkan`) |
+| Arm | GPU (Mali, Vulkan) | `arm`, `arm:mali-g715` | `iree_vulkan` (export only, **compiles but has never run on a device**) |
 | Intel | NPU (Core Ultra AI Boost) | `intel:npu` | `openvino` |
 | Google | TPU | `tpu` | `openxla`, `eager` |
 | Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` |
@@ -196,7 +197,7 @@ print(compiled.target, compiled.selected_backend)
 | `tensorrt` | Torch-TensorRT | TensorRT engine | JIT + **AOT** | nvidia | 90 |
 | `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel), intel:npu | 80 |
 | `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
-| `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel | export only |
+| `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel, arm | export only |
 | `litert` | LiteRT Torch + XNNPACK | persistent `.tflite` model | **AOT**, export only | cpu | export only |
 | `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | export only |
 | `qnn` | ExecuTorch + Qualcomm QNN | device-bound `.pte` for Snapdragon HTP | **AOT**, export only | qualcomm:sm8750 | export only |
