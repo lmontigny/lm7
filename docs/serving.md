@@ -158,6 +158,13 @@ unsloth/Llama-3.2-1B-Instruct · nvidia:sm89 · backend inductor · float16
 `memory_kind` on `/metrics` says which of the last two you are looking at, so a
 script does not have to infer it from the target.
 
+> **On Windows there is no memory figure at all.** It has neither `/proc` nor
+> the `resource` module, and a `psapi.GetProcessMemoryInfo` call written for it
+> returned 0 on the Windows CI runner, so it was removed rather than left in
+> looking like support. `memory_bytes` is 0 there and the page omits the field;
+> dtype, weights and KV cache are unaffected. Fixing it needs someone who can
+> actually run a Windows box, which this project does not have.
+
 > Neither memory figure is a leak detector. The device number moves with
 > whatever the allocator is holding at the moment of the request, and RSS on
 > Linux does not shrink just because Python freed something.
