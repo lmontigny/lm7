@@ -16,6 +16,12 @@ user-facing half.
 > 12 GiB) under WSL2 with SmolLM2-135M. Nothing here is a benchmark: see
 > [what was and was not measured](#what-was-and-was-not-measured).
 
+**The short version:** for one caller on a small model, LM7's own server with
+CUDA Graphs answers sooner and holds 17x less GPU memory. Past one caller it
+stops scaling at all, and TensorRT-LLM reaches 8x its aggregate throughput by
+eight streams. [The measurement](#against-the-inductor-path) is what that
+sentence rests on.
+
 ## Why this is a launcher, and not an in-process runtime
 
 The first revision of this work ([#110](https://github.com/lmontigny/lm7/pull/110))
@@ -243,22 +249,94 @@ Ctrl-C goes to the whole foreground process group — but it is why the integrat
 test starts the server in its own session and signals the group, and it is worth
 knowing before scripting around it.
 
+## Against the Inductor path
+
+The measurement that decides whether this backend is worth reaching for.
+[`benchmarks/serving_backends.py`](../benchmarks/serving_backends.py) drives
+**three arms from one client**, which is the only reason they are comparable:
+both servers answer the same OpenAI API, so the same code times both over the
+same loopback HTTP, against the same model, prompt and token budget.
+
+- **`inductor`** — LM7's own server, compiled prefill and KV-cache decode graphs.
+- **`cudagraphs`** — the same, plus `--compile-mode reduce-overhead`, which is
+  what asks Inductor to capture the decode step into a CUDA graph. **Leaving this
+  arm out would have stacked the comparison**, and it changes the answer: see
+  below.
+- **`trtllm`** — the handover.
+
+RTX 4070 SUPER (Ada `sm89`, 12 GiB) under WSL2, SmolLM2-135M-Instruct,
+`--max-model-len 2048`, 128 tokens greedy, median of 5 after warmup:
+
+| | `inductor` | `cudagraphs` | `trtllm` |
+| --- | --- | --- | --- |
+| startup to `/health` | 10.1 s | 10.0 s | 50.0 s |
+| first request (compile) | 19.4 s | 75.7 s | 1.1 s |
+| TTFT | 23.0 ms | **13.0 ms** | 50.4 ms |
+| inter-token | 16.6 ms | 6.97 ms | **5.76 ms** |
+| one stream | 60.2 tok/s | 143.5 tok/s | **173.5 tok/s** |
+| GPU held, over idle | **572 MiB** | 615 MiB | 10,268 MiB |
+
+**CUDA Graphs close most of the single-stream gap.** Against plain `inductor`
+TensorRT-LLM decodes 2.9x faster per token; against `cudagraphs` it is **1.21x**,
+and LM7 answers the *first* token nearly four times sooner (13.0 ms against
+50.4 ms) while holding **17x less memory**. On one stream, on a small model, the
+engine is not the reason to switch.
+
+### Concurrency is the reason to switch
+
+Aggregate tokens/s across N simultaneous streams, and the median and worst TTFT
+inside them:
+
+| N | `cudagraphs` | `trtllm` | `cudagraphs` TTFT (med / max) | `trtllm` TTFT (med / max) |
+| --- | --- | --- | --- | --- |
+| 1 | 143.5 | 173.5 | 13 ms | 50 ms |
+| 2 | 141.6 | 223.4 | 466 / 917 ms | 187 / 190 ms |
+| 4 | 138.4 | 538.9 | 1,401 / 2,787 ms | 114 / 116 ms |
+| 8 | 142.6 | **1,139.4** | 3,159 / 6,292 ms | **97 / 100 ms** |
+
+LM7's aggregate is **flat** — 143 tok/s at every N — and its worst TTFT grows
+linearly to 6.3 seconds. That is not a defect to fix: `compile_generation`
+allocates one static KV cache that every decode step mutates in place, so the
+server holds an `asyncio.Lock` and a second caller waits. The line is flat
+because the design says it will be.
+
+TensorRT-LLM scales close to linearly to **8.0x** LM7's aggregate at N=8, and its
+TTFT *falls* as concurrency rises — 50 ms alone, 97 ms across eight streams that
+each started immediately — because requests join a batch instead of a queue.
+
+**So the two are not competing at the same thing**, which is the useful result:
+LM7's server is the better answer for one caller on a small model, and it stops
+being an answer at all somewhere between one and two. That boundary is the whole
+argument for the handover, and it is now measured rather than asserted.
+
+> **Indicators, not a benchmark.** Wall clock from a Python client over loopback
+> HTTP, so every figure includes framing, the OpenAI schema and each server's
+> scheduler. One model, one card, one prompt length, one token budget. Nothing
+> here is comparable to [`benchmarks/decode.py`](../benchmarks/decode.py), which
+> drives the runner directly with no server in the way — see CLAUDE.md on not
+> mixing harnesses. Reproduce with:
+>
+> ```bash
+> python benchmarks/serving_backends.py --output artifacts/serving-backends.json
+> ```
+
 ## What is not done
 
-- **No comparison against the Inductor path.** TTFT, inter-token latency,
-  tokens/s, peak memory and batch scaling against `lm7.compile` is the
-  measurement that would justify choosing one over the other, and it needs a
-  harness driving both from one place. Not written. This remains the largest gap,
-  and it was the largest gap in the first revision too.
-- **No continuous batching exercised.** TensorRT-LLM's scheduler is running and
-  it is the reason to reach for this backend, but nothing here submits concurrent
-  requests, so nothing here measures it.
+- **The comparison is one model on one card.** SmolLM2-135M is 30 layers and
+  launch-bound, which is the case most favourable to a compiled decode loop; a
+  larger model spends proportionally more time in GEMMs and less in launches, so
+  the single-stream columns above should be expected to move. Nothing above 135M
+  has been compared, and neither has a second card.
+- **Continuous batching is exercised only up to 8 streams**, all of them the same
+  prompt and the same token budget arriving at the same instant. That is the
+  easiest possible batch: nothing here measures a mixed-length queue, arrivals
+  spread over time, or the point where the scheduler starts preempting. The
+  scaling above should be read as "it batches", not as a throughput ceiling.
 - **No quantization.** `--quantize` is refused rather than passed through:
   TensorRT-LLM quantizes at engine build time from an NVIDIA ModelOpt checkpoint,
   which is a different mechanism from LM7's weight-only path. Serving a
   pre-quantized checkpoint is untried.
-- **One card, one model, one GPU.** No tensor parallelism, no `--tp_size`
-  passthrough, and nothing above SmolLM2-135M.
+- **One GPU.** No tensor parallelism and no multi-card run of any kind.
 - **Only three flags are translated**, and the rest go through verbatim.
   `--host`, `--port` and `--max-model-len` are the ones LM7 spells; everything
   else — `--max_batch_size`, `--tp_size`, `--extra_llm_api_options` — reaches
@@ -273,5 +351,6 @@ knowing before scripting around it.
 
 - `src/lm7/serve/trtllm.py` — the launcher
 - `src/lm7/serve/cli.py` — `LAUNCHER_BACKENDS`, the layer shared with vLLM
+- `benchmarks/serving_backends.py` — the three-arm comparison above
 - `tests/test_serve.py` — the translation and the refusals, no GPU needed
 - `tests/test_trtllm_serve_integration.py` — a real server, `-m trtllm`

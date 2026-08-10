@@ -318,12 +318,22 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   integration tests, and `--trtllm-arg=--free_gpu_memory_fraction` cutting the
   paged cache from 9.06 GiB to 2.52 GiB. Only `--host`, `--port` and
   `--max-model-len` are *modelled*; everything else passes through verbatim, so
-  LM7 makes no claim about what it does. **Nothing measures the thing the
-  backend is for**: continuous batching is running but no concurrent request was
-  ever submitted, and there is still no comparison against the Inductor path —
-  which was the largest gap in the first revision of that PR and remains it.
-  Multi-GPU, quantized checkpoints, and anything above 135M are unrun. See
-  [TensorRT-LLM](tensorrt-llm.md).
+  LM7 makes no claim about what it does. Multi-GPU, quantized checkpoints, and
+  anything above 135M are unrun. See [TensorRT-LLM](tensorrt-llm.md).
+- **The Inductor comparison exists now, and it is one model on one card.**
+  [`benchmarks/serving_backends.py`](../benchmarks/serving_backends.py) drives
+  LM7's own server, the same server with CUDA Graphs, and the TensorRT-LLM
+  handover from one client over the same HTTP. On SmolLM2-135M at `sm89`,
+  TensorRT-LLM decodes 1.21x faster per token than `--compile-mode
+  reduce-overhead` — **not** the 2.9x it beats plain Inductor by — while LM7
+  answers the first token 3.9x sooner and holds 17x less GPU memory; past one
+  stream LM7 is flat by design and TensorRT-LLM reaches 8x its aggregate at
+  eight. **What that does not cover**: a launch-bound 135M model is the case most
+  favourable to a compiled decode loop, and all eight streams share one prompt,
+  one length and one arrival instant, which is the easiest batch a scheduler can
+  be given. No mixed-length queue, no arrival spread, nothing larger, no second
+  card. These are loopback wall-clock indicators; there is still no serving
+  benchmark in this repo.
 
 ## Evaluated, not adopted
 

@@ -839,9 +839,29 @@ timings, are in [TensorRT-LLM](tensorrt-llm.md).
 
 **Both launchers now start on this card**, which is the useful thing to know
 about the shared layer: `--dry-run`, `--ui-port` and the refusals come from one
-implementation, and each backend has now put a real server on the port. What
-neither has is a throughput measurement — see
-[limitations](limitations.md#serving).
+implementation, and each backend has now put a real server on the port. vLLM
+still has no throughput measurement here; TensorRT-LLM does — see below.
+
+### When the single-stream server stops being the right answer
+
+[`benchmarks/serving_backends.py`](../benchmarks/serving_backends.py) drives
+this server and the TensorRT-LLM handover from one client, over the same HTTP,
+so the two are comparable. On an RTX 4070 SUPER with SmolLM2-135M, the answer
+has a clear shape:
+
+| | this server, `reduce-overhead` | `--backend trtllm` |
+| --- | --- | --- |
+| time to first token | **13 ms** | 50 ms |
+| one stream | 143 tok/s | 174 tok/s |
+| **eight streams, aggregate** | 143 tok/s | **1,139 tok/s** |
+| worst TTFT at eight streams | 6.3 s | **0.10 s** |
+| GPU held, over idle | **615 MiB** | 10,268 MiB |
+
+For one caller this server is the better answer — sooner to the first token, 17x
+less memory, and within 1.21x per token. It stops being an answer somewhere
+between one caller and two, and the flat line is the `asyncio.Lock` described
+above doing exactly what it says. Full table, method and caveats in
+[TensorRT-LLM](tensorrt-llm.md#against-the-inductor-path).
 
 The two needed different amounts of help to get there, and the difference is
 instructive. vLLM needed two changes *inside* LM7 (`VLLM_WSL2_ENABLE_PIN_MEMORY`
