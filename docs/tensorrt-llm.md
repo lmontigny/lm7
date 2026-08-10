@@ -222,20 +222,20 @@ warm. The portable suite is 688 passed, 86 skipped.
 
 | | |
 | --- | --- |
-| cold start (launch → `/health` 200) | ~125 s |
-| TTFT, median of 5 | 62.5 ms |
-| inter-token latency, median | 7.3 ms |
-| single-stream rate | ~136 tokens/s |
+| cold start (launch → `/health` 200) | ~50 s warm, ~125 s on a fresh box |
 | GPU memory held | 11.9 GiB of 12 GiB |
 
-> **These are indicators, not benchmarks, and they are weaker than the numbers
-> the first revision reported.** They are wall-clock from a Python client over
-> HTTP on loopback, so they include framing, the OpenAI schema and the scheduler
-> — the in-process revision measured around the runtime's own stream and got
-> 105 ms TTFT and 1.27 ms inter-token on an H100, which is a *different quantity
-> on different hardware* and must not be compared with the table above. There is
-> still no serving benchmark in this repo. The completions here were 7-8 tokens
-> long, so the inter-token median is over very few gaps.
+**Latency is not quoted here**, because quoting it twice is how a document ends
+up disagreeing with itself. Every timing lives in
+[against the Inductor path](#against-the-inductor-path), measured by one harness
+against 128-token completions. An earlier revision of this page reported 62.5 ms
+TTFT and 7.3 ms inter-token from an ad-hoc script on 7–8 token answers; those
+were too few gaps to take a median of, and the harness supersedes them.
+
+> The first revision of this PR measured 105 ms TTFT and 1.27 ms inter-token on
+> an H100 *around the runtime's own stream* rather than over HTTP. That is a
+> different quantity on different hardware and must not be compared with
+> anything on this page.
 
 The cold start is dominated by TensorRT-LLM's own startup, not by anything LM7
 does; the first launch on a fresh box is slower still, because FlashInfer
