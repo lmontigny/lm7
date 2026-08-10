@@ -53,16 +53,11 @@ clarify .compile limitation, moE graph break?!
 risc-v
 LiteRT
 arm mali via SPRI-V to Vulkan IR, arm-M, arm-A...
-lm7.serve()  <-- see chatGPT chat details
-    ├── vLLM
-    ├── SGLang
-    └── TensorRT-LLM
 use Modal coins
 multi-gpu?
 multi-node
 inference benchmarks -> show perf vs w/o lm7
 intel Arc gpu
-vllm serve Qwen/Qwen2.5-1.5B-Instruct
 
 
 
@@ -75,5 +70,11 @@ add tenstorrent support (open source compiler llvm/mlir)
 add ONNX Runtime backend
 add AMD Zentorch backend
 nvidia H100, B100, B200 for perf validation 1 gpu
+lm7.serve()  <-- see chatGPT chat details
+    ├── vLLM
+    ├── SGLang
+    └── TensorRT-LLM
+vllm serve Qwen/Qwen2.5-1.5B-Instruct
+
 
 
