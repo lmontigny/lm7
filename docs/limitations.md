@@ -269,16 +269,23 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   scripted runner and a fake tokenizer. It proves the path works, not that
   output is right: the model has random weights, so no test in CI checks that a
   served answer is correct.
-- **Validated on three targets and two models.** Apple M-series `cpu:arm64` and
-  `apple:metal` with SmolLM2-135M-Instruct, and `nvidia:sm89` (RTX 4070 SUPER,
-  WSL2) with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct — driven by `curl`
-  and by the official `openai` Python SDK: both endpoints, both buffered and
-  streamed, greedy output byte-identical to `model.generate`, and `int8`, `fp8`
-  and `nvfp4` served on the GPU. **`intel:npu` and `tpu` have served nothing**,
-  nothing above 1B has, and there is no serving benchmark in this repo — so no
-  claim about serving latency or throughput can be sourced from it. `/metrics`
-  TTFT and TPOT are compile-polluted until several requests have run, because the
-  graphs compile inside the first one.
+- **Validated on four targets and two models.** Apple M-series `cpu:arm64` and
+  `apple:metal` with SmolLM2-135M-Instruct; `nvidia:sm89` (RTX 4070 SUPER, WSL2)
+  with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct; and `cpu:x86_64` (Intel
+  Coffee Lake, AVX2) with SmolLM2-135M-Instruct — driven by `curl` and by the
+  official `openai` Python SDK: both endpoints, both buffered and streamed,
+  greedy output byte-identical to `model.generate`, `int8` served on both CPU
+  targets, and `fp8` and `nvfp4` on the GPU. **`intel:npu` and `tpu` have served
+  nothing**, nothing above 1B has, and there is no serving benchmark in this repo
+  — so no claim about serving latency or throughput can be sourced from it.
+  `/metrics` TTFT and TPOT are compile-polluted until several requests have run,
+  because the graphs compile inside the first one.
+- **A CPU target is two different machines.** `cpu:arm64` and `cpu:x86_64` are
+  one LM7 target family and unrelated vector units, and a serving number does not
+  cross between them: INT8 was 2.44x smaller and useful on Apple, and on an
+  AVX2-without-VNNI Intel part it served correctly at no speed benefit at all.
+  `--dtype auto` also means FP32 on either, so the same `--max-model-len` buys a
+  KV cache twice the size of the FP16 one a GPU allocates.
 - **A quantized serve was silently wrong on NVIDIA until it was run there.**
   `LM7ServeEngine.load` resolved `--dtype auto` without passing the quantization
   mode, so INT8 and FP8 weights were served under FP16 compute instead of BF16;
