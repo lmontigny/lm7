@@ -82,6 +82,21 @@ jobs:
           python -c "import torch; print('torch:', torch.__version__)"
           python -c "import importlib.metadata as m; print('executorch:', m.version('executorch'))"
 
+      # This runner is the only machine in CI that can populate the AArch64 half
+      # of detection.py's ISA vocabulary (asimd, sve, bf16, i8mm): the source is
+      # /proc/cpuinfo, and macOS has none, so Apple Silicon always reports an
+      # empty list. Nothing here asserts -- it reports what Arm part GitHub
+      # hands us and what LM7 makes of it, which is what docs/cpu.md needs
+      # before any claim about a server Arm CPU can be written down. Two things
+      # worth reading in the log: whether `isa_extensions` is non-empty, and
+      # what the device is named, since /proc/cpuinfo on AArch64 carries no
+      # "model name" and detect_cpu_target falls back to platform.processor().
+      - name: Report the CPU LM7 detects
+        run: |
+          sed -n '1,/^$/p' /proc/cpuinfo
+          python -m lm7 doctor
+          python -m lm7 doctor --json
+
       - name: Export a .pte and validate it against eager on ARM64
         run: python -m pytest tests/test_executorch_integration.py -q
 
