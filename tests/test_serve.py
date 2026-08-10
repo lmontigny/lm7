@@ -18,7 +18,6 @@ import json
 import platform
 import time
 from pathlib import Path
-from typing import Self
 
 import pytest
 import torch
@@ -979,8 +978,9 @@ class FakeQuantizedTensor(torch.Tensor):
     qdata: torch.Tensor
     scale: torch.Tensor
 
+    # PYI034 wants `Self`, which is 3.11+; this repo supports 3.10.
     @staticmethod
-    def __new__(cls, qdata: torch.Tensor, scale: torch.Tensor) -> Self:
+    def __new__(cls, qdata: torch.Tensor, scale: torch.Tensor) -> FakeQuantizedTensor:  # noqa: PYI034
         # float32 shell over int8 storage, which is the whole point.
         tensor = torch.Tensor._make_wrapper_subclass(cls, qdata.shape, dtype=torch.float32)
         tensor.qdata, tensor.scale = qdata, scale
@@ -1016,6 +1016,10 @@ def test_a_cpu_target_reports_process_memory_and_says_that_is_what_it_is() -> No
 
     A caller that read this as the model's footprint would be off by however
     much PyTorch itself weighs, which is most of a gigabyte.
+
+    The positive assertion is the point on Windows in particular: it has neither
+    `/proc` nor the `resource` module, and this returned 0 there until a `psapi`
+    call was added. CI is the only place that path runs.
     """
     snapshot = _engine_with(WeightedRunner([1])).memory_snapshot()
     assert snapshot["memory_kind"] == "process"

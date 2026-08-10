@@ -780,19 +780,29 @@ def _tensor_bytes(tensor: torch.Tensor) -> int:
 def _resident_bytes() -> int:
     """Resident set size of this process, or 0 where it cannot be read.
 
-    ``/proc`` first because it is exact and current on Linux, which is where a
-    CPU server usually runs. ``getrusage`` is the portable fallback and reports
-    the *peak*, not the current value -- and in kilobytes on Linux against bytes
-    on macOS, a difference that has to be handled rather than averaged over.
-    Zero means "not available", which a client should render as unknown rather
-    than as an empty server.
+    One number, three ways to ask for it, because the platforms genuinely do not
+    agree and averaging over the difference would report kilobytes as bytes on
+    one of them:
+
+    - ``/proc/self/statm`` on Linux: exact, current, and no import.
+    - ``GetProcessMemoryInfo`` on Windows, which has neither ``/proc`` nor the
+      ``resource`` module, so without this the field would silently vanish on
+      the one platform where nothing else can supply it.
+    - ``getrusage`` elsewhere -- macOS and the BSDs. Note it reports the *peak*
+      rather than the current value, and in bytes on macOS against kilobytes on
+      Linux.
+
+    Zero means "not available", which the chat page renders as no field at all
+    rather than as a server using no memory.
     """
     try:
         with open("/proc/self/statm", encoding="ascii") as handle:
             pages = int(handle.read().split()[1])
         return pages * os.sysconf("SC_PAGE_SIZE")
-    except (OSError, IndexError, ValueError):
+    except (OSError, IndexError, ValueError, AttributeError):
         pass
+    if sys.platform == "win32":
+        return _windows_resident_bytes()
     try:
         import resource
 
@@ -800,6 +810,51 @@ def _resident_bytes() -> int:
         return int(peak if sys.platform == "darwin" else peak * 1024)
     except (ImportError, ValueError):
         return 0
+
+
+def _windows_resident_bytes() -> int:
+    """The Windows working set, through ``psapi``.
+
+    Reached only on Windows, and kept in its own function so the ``ctypes``
+    structure is not built on platforms that will never call it.
+    ``WorkingSetSize`` is the closest analogue to RSS: pages this process
+    currently has resident.
+
+    ``windll`` is fetched with ``getattr`` and ``DWORD`` spelled as its
+    underlying ``c_ulong`` rather than imported from ``ctypes.wintypes``,
+    because both of those exist only on Windows: importing them at all would
+    fail everywhere else, and guarding on ``sys.platform`` instead just moves
+    the problem to a type checker, which then reads the whole body as dead code.
+    A missing ``windll`` is the same answer as a failed call -- unavailable.
+    """
+    import ctypes
+
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return 0
+
+    class _MemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.c_ulong),
+            ("PageFaultCount", ctypes.c_ulong),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    counters = _MemoryCounters()
+    counters.cb = ctypes.sizeof(_MemoryCounters)
+    try:
+        handle = windll.kernel32.GetCurrentProcess()
+        ok = windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+    except (AttributeError, OSError):
+        return 0
+    return int(counters.WorkingSetSize) if ok else 0
 
 
 def _message_field(message: Any, name: str) -> str:
