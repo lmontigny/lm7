@@ -4,7 +4,7 @@
 toolchains allow; this is what has actually run on physical hardware. CPU and
 Apple Silicon (MPS) are the only targets with CI — MPS on GitHub's `macos-26`
 arm64 runner; everything else below was exercised by hand, once, on one part
-of its kind.
+of its kind, unless its row says otherwise.
 
 | Target | Hardware | Exercised |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ of its kind.
 | `nvidia:sm90` | H100 80GB HBM3 (Hopper), single card, cloud-rented | The first datacenter part, and the first NVIDIA GPU here that is neither a gaming nor a workstation card. Detection and backend selection unmodified; Inductor measured against eager on two causal LMs across batch 1–4096, plus vision/encoder/hand-written workloads. Peak VRAM never exceeds 4.8% of the card, and the Inductor speedup inverts past batch 1024. Also carries the FP8 per-row activation quantization measurements. See [NVIDIA H100](nvidia-h100.md) and [quantization](quantization.md#fp8-granularity-on-h100). |
 | `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified, plus a 106-cell TensorRT sweep across four model families, precisions, batch sizes and dynamic shapes. See [NVIDIA Blackwell](nvidia-blackwell.md) and [TensorRT validation](tensorrt-validation.md). |
 | `cpu` (AMD) | AMD EPYC 7B13 (Zen 3) | `zentorch` and CPU baselines. See [AMD CPU](amd-cpu.md). |
+| `cpu:aarch64` (Arm) | Arm Neoverse N2 (Azure Cobalt 100, 4 vCPU) | GitHub's `ubuntu-24.04-arm` runner, so this one is CI rather than a hand run: the ExecuTorch export suite on every commit, plus the detection this repo's only Linux Arm host can prove — `bf16`, `i8mm`, `sve2` reported, and the core named from its part number. **No latency has been measured on it**, and a 4-vCPU shared runner is not the machine to measure one on. See [CPU inference](cpu.md#on-aarch64-the-kernel-prints-less). |
 | `cpu`, `apple` (Apple Silicon) | M3 Pro, M4, M4 Pro | TVM, MPS compile (also in CI), an OpenVINO cross-check, ExecuTorch Core ML export and execution, `lm7 model serve` on both `cpu` and `apple`, and the `--backend vllm` handover through the vllm-metal plugin. See [Apple Silicon](apple-mps.md), [Core ML](coreml.md), [serving](serving.md). |
 | `tpu` | TPU v6e (Trillium), single chip | See [Google TPU](google-tpu.md). |
 | `qualcomm:sm8750` | Snapdragon 8 Elite, physical device (cloud-rented) | ExecuTorch export and QNN. See [Android device testing](android-device-testing.md). |

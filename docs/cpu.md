@@ -53,6 +53,43 @@ Two things this does *not* mean:
   `/proc/cpuinfo`, so on a host without `/proc` the list is empty and the core
   counts fall back to what Python can see. Treat empty as unknown.
 
+### On AArch64, the kernel prints less
+
+Everything above is an x86 host. An Arm one fills in less of the table, because
+`/proc/cpuinfo` carries less. Captured on the `ubuntu-24.04-arm` CI runner
+(Azure Cobalt 100, Arm Neoverse N2, 4 vCPU, 15.6 GiB):
+
+```
+Detected targets (1):
+  cpu:aarch64: Arm Neoverse N2, 15.6 GiB
+```
+
+- **The target string is `cpu:aarch64`, not `cpu:arm64`.** Both come from
+  `platform.machine()`, which says `arm64` on macOS and `aarch64` on Linux — so
+  the same core can arrive under either name depending on the OS. The CPU
+  architecture is a free-form qualifier that no backend dispatches on, so this
+  is one target family with two spellings rather than two code paths.
+- **The name is reconstructed rather than read.** AArch64 publishes no
+  `model name` — it prints numeric `CPU implementer` and `CPU part` identifiers,
+  which LM7 maps back to a core name. That table covers Arm's own Neoverse
+  server cores, which is where Graviton, Azure Cobalt, Grace and Ampere Altra
+  all land, since those vendors ship Neoverse designs. An implementer or part
+  outside it degrades to the vendor and the raw part number, or to nothing,
+  rather than guessing.
+- **`vendor_id` and `physical_cores` are absent, and stay absent.** AArch64
+  prints no `vendor_id`, `physical id` or `core id` at all. Neoverse server
+  cores run one thread per core, so `logical_cores` *is* the physical count on
+  the parts LM7 is likely to meet — but that is not architecturally guaranteed,
+  so LM7 reports nothing instead of assuming it. Reading
+  `/sys/devices/system/cpu/*/topology/` would answer it properly; nothing does
+  yet.
+- **`isa_extensions` populates.** `bf16` and `i8mm` are both present on this
+  part — the Arm analogues of `amx_bf16` and `amx_int8`, and the reason the
+  section below has an unanswered Arm half. The SVE forms of the same
+  instructions (`svebf16`, `svei8mm`) are on the kernel's `Features` line but
+  are deliberately not recorded, because nothing here has established whether
+  oneDNN reaches for those or the NEON variants.
+
 ### What consulting the AMX flags would be worth
 
 Measured on an Intel Xeon Platinum 8559C (Emerald Rapids, 8 physical cores, 8
@@ -105,6 +142,15 @@ Two things to know before repeating this:
   1.9 absolute in eager and roughly 0.4 under Inductor. That is a
   [quantization](quantization.md)-shaped decision, with the validation that
   implies, rather than a free switch.
+
+**None of this has been repeated on Arm**, and the benchmark cannot be pointed
+at it unmodified: `benchmarks/cpu_amx.py` decides whether the matrix unit was
+reached by looking for a BRGEMM kernel and an `avx10_1_512_amx` ISA string in
+oneDNN's verbose output, both of which are x86 names. A Neoverse part reports
+`bf16` and `i8mm` (above), so the same question exists there and the same
+"reported, not consulted" answer applies — but "a dtype policy has to be
+per-host" currently rests on one ISA, and the Arm half is unmeasured rather
+than measured and found similar.
 
 ## Validate CPU and GPU locally
 

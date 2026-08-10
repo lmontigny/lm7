@@ -340,11 +340,19 @@ flags\t\t: fpu vme de pse tsc msr avx avx2 f16c avx512f avx512bw avx512vl avx512
 # AArch64 prints "Features", not "flags", and names nothing the x86 vocabulary
 # knows. Graviton and Apple Silicon are both LM7 targets, so the parser has to
 # come back with a vector ISA here rather than an empty tuple.
+#
+# Captured verbatim from the ubuntu-24.04-arm CI runner (Azure Cobalt 100), so
+# this is a real kernel's output rather than a plausible one: implementer 0x41
+# part 0xd49 is an Arm Neoverse N2, and it carries the bf16 and i8mm flags that
+# decide the CPU dtype question on Arm the way the AMX trio does on x86.
 AARCH64_CPUINFO = """processor\t: 0
-BogoMIPS\t: 2100.00
-Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp asimddp sve sve2 bf16 i8mm
+BogoMIPS\t: 2000.00
+Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16
 CPU implementer\t: 0x41
 CPU architecture: 8
+CPU variant\t: 0x0
+CPU part\t: 0xd49
+CPU revision\t: 0
 """
 
 
@@ -377,11 +385,51 @@ def test_cpu_info_reads_the_aarch64_features_line():
     info = parse_cpu_info(AARCH64_CPUINFO)
 
     assert info["isa_extensions"] == ("asimd", "asimddp", "asimdhp", "bf16", "i8mm", "sve", "sve2")
-    # AArch64 publishes no vendor_id or model name, and no topology fields, so
-    # those degrade rather than inventing a value.
+    # The SVE forms of the same instructions -- svebf16, svei8mm -- are on the
+    # Features line above and deliberately not recorded: nothing here has
+    # established whether oneDNN reaches for them or the NEON variants.
+    assert "svebf16" not in info["isa_extensions"]
+    # AArch64 publishes no vendor_id and no topology fields, so those degrade
+    # rather than inventing a value.
     assert info["vendor_id"] is None
     assert info["physical_cores"] is None
     assert info["logical_cores"] == 1
+
+
+def test_cpu_info_names_an_arm_core_from_its_part_number():
+    # Without this the name is platform.machine() -- the string "aarch64",
+    # which identifies no chip and cannot be looked up.
+    assert parse_cpu_info(AARCH64_CPUINFO)["model_name"] == "Arm Neoverse N2"
+
+
+def test_cpu_info_names_the_arm_vendor_when_the_part_is_unknown():
+    # A part number this table does not carry still beats "aarch64": the vendor
+    # is named and the raw identifier is preserved for looking up.
+    cpuinfo = "processor\t: 0\nCPU implementer\t: 0xc0\nCPU part\t: 0xac3\n"
+
+    assert parse_cpu_info(cpuinfo)["model_name"] == "Ampere 0xac3"
+
+
+def test_cpu_info_reads_a_part_number_only_as_the_implementer_that_issued_it():
+    # 0xd49 is a Neoverse N2 only because implementer 0x41 is Arm itself.
+    # Another vendor's designs number their own parts.
+    cpuinfo = "processor\t: 0\nCPU implementer\t: 0x61\nCPU part\t: 0xd49\n"
+
+    assert parse_cpu_info(cpuinfo)["model_name"] == "Apple 0xd49"
+
+
+@pytest.mark.parametrize(
+    "cpuinfo",
+    [
+        # An implementer outside the table, and the pre-5.x kernels that print
+        # an implementer without a part: no name is better than a wrong one.
+        "processor\t: 0\nCPU implementer\t: 0x99\nCPU part\t: 0xd49\n",
+        "processor\t: 0\nCPU implementer\t: 0x41\n",
+        "processor\t: 0\nFeatures\t: fp asimd\n",
+    ],
+)
+def test_cpu_info_declines_to_name_an_unidentifiable_arm_cpu(cpuinfo):
+    assert parse_cpu_info(cpuinfo)["model_name"] is None
 
 
 def test_total_memory_is_read_in_bytes():
