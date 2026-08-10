@@ -777,3 +777,49 @@ def test_serving_a_local_directory_unquantized_is_not_blocked_by_that(tmp_path: 
     with pytest.raises(Exception) as caught:
         LM7ServeEngine.load(config)
     assert "not available for a local directory" not in str(caught.value)
+
+
+def test_a_quantized_load_asks_for_the_quantized_compute_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`dtype="auto"` means BF16 once a weight-only mode is in play, not FP16.
+
+    The two differ only on NVIDIA -- on CPU both resolve to FP32 -- and the gate
+    refuses an *explicit* `--dtype float16` alongside `--quantize`, so `auto`
+    resolved without the mode is the one way into a combination nothing rejects.
+    Served that way on an RTX 4070 SUPER (Ada `sm89`), INT8 weights under FP16
+    compute produced NaN logits: every token was an argmax over NaN, and
+    SmolLM2-135M-Instruct -- whose EOS is not token 0 -- ran to its full budget
+    and returned an empty string with `finish_reason: "length"` and no error.
+
+    Checked here rather than in `test_serve_load_integration.py` because it needs
+    an NVIDIA target, which CI has nowhere; the target is faked and only the
+    dtype handed to `from_pretrained` is asserted.
+    """
+    import lm7.generation
+    import lm7.huggingface
+    import lm7.serve.engine as engine_module
+
+    requested: dict[str, object] = {}
+
+    class FakeTransformers:
+        class AutoTokenizer:
+            @staticmethod
+            def from_pretrained(model_id: str) -> FakeTokenizer:
+                return FakeTokenizer()
+
+        class AutoModelForCausalLM:
+            @staticmethod
+            def from_pretrained(model_id: str, dtype: torch.dtype) -> object:
+                requested["dtype"] = dtype
+                return type("FakeModel", (), {"eval": lambda self: self})()
+
+    monkeypatch.setattr(engine_module, "resolve_target", lambda _: parse_target("nvidia:sm89"))
+    monkeypatch.setattr(engine_module, "_load_transformers", lambda: FakeTransformers)
+    monkeypatch.setattr(lm7.huggingface, "_apply_quantization", lambda *_: (0.0, 0))
+    monkeypatch.setattr(lm7.generation, "compile_generation", lambda *_, **__: ScriptedRunner([1]))
+
+    LM7ServeEngine.load(
+        ServeConfig(model="hf://HuggingFaceTB/SmolLM2-135M-Instruct", quantize="int8")
+    )
+    assert requested["dtype"] is torch.bfloat16
