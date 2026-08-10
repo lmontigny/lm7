@@ -40,7 +40,10 @@ result = lm7.load_artifact("model-vulkan.lm7")(example)
 The artifact contains `compiled_model.vmfb`, its checksum, and the source
 `ExportedProgram`. IREE is loaded only on the first invocation. Consequently a
 build host can produce the artifact without seeing a Vulkan device, while the
-deployment host must have a Vulkan 1.3-capable driver and `iree-base-runtime`.
+deployment host must have `iree-base-runtime` and a driver meeting IREE's
+baseline — Vulkan 1.3 with a compute queue and the `timelineSemaphore`,
+`scalarBlockLayout`, and `synchronization2` features. See [Arm Mali](#arm-mali)
+for why that is checked on the device rather than assumed.
 
 The LM7 target continues to describe hardware (`nvidia`, `amd`, `intel`, or
 `arm`); `iree_vulkan` describes the compiler/runtime path. The backend does not
@@ -122,6 +125,25 @@ has executed on an Arm GPU.** Only the compile half is plumbed, and the
 paragraph above is a statement about `iree-compile`'s flag parser, not about
 Mali silicon.
 
+Mali is nonetheless the most interesting destination on this backend, because
+it is one of the two architectures IREE's Vulkan path is aimed at. IREE's own
+[support matrix](https://iree.dev/guides/deployment-configurations/gpu-vulkan/)
+rates it:
+
+| GPU vendor | category | performance | focus architecture |
+| --- | --- | --- | --- |
+| Arm Mali | mobile | good | Valhall+ |
+| AMD | desktop/server | good | RDNA+ |
+| Qualcomm Adreno | mobile | reasonable | 640+ |
+| NVIDIA | desktop/server | reasonable | Turing+ |
+
+That is IREE's claim, not a measurement — this project has run none of it. But
+it is upstream's stated priority, and it lines up exactly with what the compiler
+accepts: `valhall1`–`valhall4` compile and `bifrost`/`midgard` do not, because
+"Valhall+" is where the focus starts. It also means the one card LM7 *has*
+validated this backend on, an RTX 4070 SUPER, sits in the weaker half of the
+matrix.
+
 The missing half is the runtime. `load_artifact` goes through `iree.runtime` in
 Python, which a phone does not have, so reaching a Mali needs an NDK
 cross-compile of the IREE runtime with the Vulkan HAL driver — either
@@ -131,17 +153,33 @@ Android runtime, and this project owns no Mali hardware: its only handset is a
 Snapdragon 8 Elite whose GPU is an Adreno, reached today through LiteRT's
 OpenCL delegate. See [Android device testing](android-device-testing.md).
 
+`iree-run-module --dump_devices` is worth cross-compiling first regardless: it
+is upstream's own device-side compatibility check, and it answers the question
+below before any artifact is involved.
+
 An Arm target is `remote=True` for the same reason `qualcomm:sm8750` is: it
 describes deployment hardware the compiler host does not own. `torch_device()`
 maps an unrecognized vendor to the CPU, so the eager backend explicitly declines
 `arm` rather than reporting a host run under a Mali's name.
 
-Two cautions before anyone reads a first number off this path. The Vulkan 1.3
-floor in `load_vmfb` rules out older Mali generations. And the only mobile-GPU
-measurement this project has — LiteRT on the Adreno — was ~660x *slower* than
-the same phone's CPU delegate on a 3-layer MLP, because the graph was too small
-to amortise dispatch and shader compilation. The models big enough to repay a
-mobile GPU are the ones this backend cannot export yet.
+Two cautions before anyone reads a first number off this path.
+
+**The device baseline is narrower than "Vulkan 1.3".** IREE requires 1.3 *plus*
+a compute queue and the `timelineSemaphore`, `scalarBlockLayout`, and
+`synchronization2` device features, and upstream warns that the Android version
+alone does not settle it — the driver does. So a phone is qualified by running
+`vulkaninfo` or `iree-run-module --dump_devices` on it, not by reading its spec
+sheet. Older Mali generations are out, which is a second reason `arm:bifrost`
+parses as hardware but is not a compiler target.
+
+**A small graph will lose to the CPU.** The only mobile-GPU measurement this
+project has — LiteRT on the Adreno — was ~660x *slower* than the same phone's
+CPU delegate on a 3-layer MLP, because the graph was too small to amortise
+dispatch and shader compilation. That is a property of the workload rather than
+of IREE's Mali codegen, and it survives a "good" rating in the matrix above: the
+models big enough to repay a mobile GPU are the ones this backend cannot export
+yet. A first Mali number taken on an MLP would measure dispatch overhead and
+nothing else.
 
 ## Current scope
 
