@@ -55,6 +55,12 @@ file stays a index rather than a second, drifting description.
 | [#54](https://github.com/lmontigny/lm7/pull/54) | Add artifact inspection command |
 | [#112](https://github.com/lmontigny/lm7/pull/112) | Add separate compiled prefill and KV-cache decode graphs |
 | [#116](https://github.com/lmontigny/lm7/pull/116) | Add `lm7 model serve`: an OpenAI-compatible endpoint over the compiled decode loop |
+| [#118](https://github.com/lmontigny/lm7/pull/118) | Add a built-in chat page, and give serving its own README section |
+| [#120](https://github.com/lmontigny/lm7/pull/120) | Serve a model from a local directory, not only from the Hub |
+| [#121](https://github.com/lmontigny/lm7/pull/121) | Add CORS, bearer auth, quantization and a cache-length alias to serve |
+| [#122](https://github.com/lmontigny/lm7/pull/122) | Ask for whatever fits, so a growing conversation stops hitting a wall |
+| [#124](https://github.com/lmontigny/lm7/pull/124) | Refuse --quantize on a local directory by name, not by leaking a path |
+| [#128](https://github.com/lmontigny/lm7/pull/128) | Serve quantized weights in the dtype they were quantized for |
 
 ## On-device validation
 
@@ -63,6 +69,7 @@ file stays a index rather than a second, drifting description.
 | [#49](https://github.com/lmontigny/lm7/pull/49) | Validate exported artifacts on a real Android device, up to SmolLM2-135M |
 | [#53](https://github.com/lmontigny/lm7/pull/53) | Run SmolLM2-135M on the device, and add the runner that makes it possible |
 | [#55](https://github.com/lmontigny/lm7/pull/55) | Validate the LiteRT export on the device, CPU and Adreno GPU |
+| [#123](https://github.com/lmontigny/lm7/pull/123) | Validate the vLLM handover on Apple Silicon through vllm-metal |
 
 ## Model coverage and measurement
 
@@ -97,6 +104,7 @@ file stays a index rather than a second, drifting description.
 | [#26](https://github.com/lmontigny/lm7/pull/26) | Add sparse MoE (Mixtral) model to TorchBench CI |
 | [#52](https://github.com/lmontigny/lm7/pull/52) | Run the ExecuTorch export on ARM64 in CI |
 | [#117](https://github.com/lmontigny/lm7/pull/117) | Stop downgrading torch under ExecuTorch, which broke the Core ML CI job |
+| [#125](https://github.com/lmontigny/lm7/pull/125) | Make CI load a real model, so the serve load path stops being untested |
 
 ## Evaluations that did not become backends
 
@@ -115,3 +123,5 @@ file stays a index rather than a second, drifting description.
 | [#29](https://github.com/lmontigny/lm7/pull/29) | Add tested model coverage section to README |
 | [#45](https://github.com/lmontigny/lm7/pull/45) | Document TorchInductor compile options |
 | [#46](https://github.com/lmontigny/lm7/pull/46) | Document what is actually different about AMD CPUs |
+| [#119](https://github.com/lmontigny/lm7/pull/119) | Draft an external one-page summary of LM7, and correct the README's CI claim |
+| [#127](https://github.com/lmontigny/lm7/pull/127) | Record that Mali is what IREE's Vulkan path is actually aimed at |
