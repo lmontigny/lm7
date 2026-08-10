@@ -589,6 +589,58 @@ _ARM_ISA_FLAGS = frozenset({"asimd", "asimdhp", "asimddp", "bf16", "i8mm", "sve"
 
 _RECORDED_ISA_FLAGS = _X86_ISA_FLAGS | _ARM_ISA_FLAGS
 
+# AArch64 prints no "model name" at all -- the kernel publishes the numeric
+# "CPU implementer" and "CPU part" identifiers instead. Without these two tables
+# a host that says "AMD EPYC 7B13" on x86 says "aarch64" on Arm, which names no
+# chip and cannot be looked up. The implementers are the ones whose parts LM7
+# might meet; the parts are Arm's own server cores, which is where Graviton,
+# Azure Cobalt, Grace and Ampere Altra all land, because those vendors ship
+# Neoverse cores rather than their own designs.
+_ARM_IMPLEMENTERS = {
+    "0x41": "Arm",
+    "0x42": "Broadcom",
+    "0x43": "Cavium",
+    "0x48": "HiSilicon",
+    "0x4e": "NVIDIA",
+    "0x50": "Ampere",
+    "0x51": "Qualcomm",
+    "0x53": "Samsung",
+    "0x56": "Marvell",
+    "0x61": "Apple",
+    "0xc0": "Ampere",
+}
+
+_ARM_PARTS = {
+    "0xd0c": "Neoverse N1",
+    "0xd40": "Neoverse V1",
+    "0xd49": "Neoverse N2",
+    "0xd4f": "Neoverse V2",
+    "0xd84": "Neoverse V3",
+    "0xd8e": "Neoverse N3",
+}
+
+
+def _arm_model_name(fields: dict[str, str]) -> str | None:
+    """Name an AArch64 CPU from the identifiers the kernel does print.
+
+    Degrades in two steps rather than guessing: a known Arm core gets its
+    marketing name, a known implementer with an unrecognised part gets the
+    vendor and the raw part number -- still something to look up -- and an
+    implementer this does not know returns None, leaving the caller's existing
+    fallback in place.
+    """
+    implementer = fields.get("CPU implementer", "").strip().lower()
+    part = fields.get("CPU part", "").strip().lower()
+    if not implementer or not part:
+        return None
+    vendor = _ARM_IMPLEMENTERS.get(implementer)
+    if vendor is None:
+        return None
+    # Only implementer 0x41 is Arm itself, so only there does a part number mean
+    # a Neoverse core; another vendor's 0xd49 would be its own design.
+    core = _ARM_PARTS.get(part) if implementer == "0x41" else None
+    return f"{vendor} {core}" if core else f"{vendor} {part}"
+
 
 def detect_cpu_target() -> DeviceInfo:
     """The host CPU, described well enough to compile and quantize for it.
@@ -651,7 +703,7 @@ def parse_cpu_info(text: str) -> dict[str, Any]:
             continue
         logical_cores += 1
         vendor_id = vendor_id or fields.get("vendor_id")
-        model_name = model_name or fields.get("model name")
+        model_name = model_name or fields.get("model name") or _arm_model_name(fields)
         # "flags" on x86, "Features" on AArch64; the two never co-occur.
         flags.update(fields.get("flags", fields.get("Features", "")).split())
         socket = fields.get("physical id")
