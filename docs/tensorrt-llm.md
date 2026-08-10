@@ -187,8 +187,19 @@ for handing the port over.
 
 It also means the launched server takes essentially the whole card: 11.9 GiB of
 this 12 GiB GPU, for a 135M model. `--free_gpu_memory_fraction` is TensorRT-LLM's
-flag to turn that down, and LM7 does not translate it — see
-[what is not done](#what-is-not-done).
+flag to turn that down, and LM7 does not model it — it passes it through:
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia --backend trtllm --max-model-len 2048 \
+  --trtllm-arg=--free_gpu_memory_fraction --trtllm-arg 0.25
+```
+
+Measured on this card, that turns the 9.06 GiB / 422,048-token cache into
+**2.52 GiB / 117,216 tokens**, and the server's total footprint from 11.9 GiB
+into **4.2 GiB**, still answering correctly. `--trtllm-arg` is repeatable and
+appended last, so it wins over anything LM7 translated — the same escape hatch,
+with the same rules, as `--vllm-arg` beside it.
 
 ## What was and was not measured
 
@@ -199,8 +210,9 @@ What ran end to end: `lm7 model serve --backend trtllm` came up, `/v1/models`
 listed the model as `owned_by: tensorrt_llm`, a chat completion answered *"The
 capital of France is Paris."*, and an SSE stream reassembled. The integration
 suite — which builds its server from `serve_plan`'s own argv rather than a
-hand-written command line — is **4 passed in 120 s**, including startup. The
-portable suite is 678 passed, 86 skipped.
+hand-written command line — is **4 passed**, including startup: 120 s on the
+first run of the day, 54 s once FlashInfer's kernel cache and the page cache are
+warm. The portable suite is 688 passed, 86 skipped.
 
 | | |
 | --- | --- |
@@ -247,12 +259,13 @@ knowing before scripting around it.
   pre-quantized checkpoint is untried.
 - **One card, one model, one GPU.** No tensor parallelism, no `--tp_size`
   passthrough, and nothing above SmolLM2-135M.
-- **Only three flags are translated.** `--host`, `--port` and `--max-model-len`.
-  Everything else TensorRT-LLM can do — `--free_gpu_memory_fraction` (which is
-  what you want when a 135M model takes 11.9 GiB), `--max_batch_size`,
-  `--tp_size`, `--extra_llm_api_options` — has no LM7 spelling, so reaching it
-  means running `trtllm-serve` directly. Widening that translation is the
-  obvious next step, and each flag added is a claim LM7 then has to keep true.
+- **Only three flags are translated**, and the rest go through verbatim.
+  `--host`, `--port` and `--max-model-len` are the ones LM7 spells; everything
+  else — `--max_batch_size`, `--tp_size`, `--extra_llm_api_options` — reaches
+  TensorRT-LLM through `--trtllm-arg` rather than an LM7 flag, deliberately, for
+  the reason `--vllm-arg` exists: mirroring a vendor CLI would make LM7 a second,
+  always-stale copy of it. What is genuinely not done is *modelling* any of them,
+  so LM7 makes no claim about what they do.
 - **Not in CI.** GitHub's GPU runners are gated to Team/Enterprise organizations,
   and this needs both an Ampere-or-newer GPU and an environment of its own.
 

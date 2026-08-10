@@ -638,6 +638,8 @@ def test_the_parser_collects_repeated_vllm_arguments() -> None:
         ]
     )
     assert args.vllm_args == ["--gpu-memory-utilization", "0.8"]
+
+
 # -- TensorRT-LLM handover ------------------------------------------------
 
 
@@ -728,6 +730,71 @@ def test_tensorrt_llm_is_looked_for_where_it_is_actually_installed(
     # A path, not a suffix string: this suite runs on Windows too.
     expected = Path(trtllm_module._TRTLLM_VENVS[0]).expanduser()
     assert Path(trtllm_module.trtllm_executable()) == expected
+
+
+def test_trtllm_passthrough_arguments_are_appended_last() -> None:
+    """The escape hatch that keeps this a launcher, same as --vllm-arg.
+
+    On a desktop card the flag that matters is `--free_gpu_memory_fraction`:
+    TensorRT-LLM sizes its paged cache from free memory and took 11.9 GiB of a
+    12 GiB GPU for a 135M model, and LM7 models no flag for it.
+    """
+    config = ServeConfig(
+        model="hf://owner/model",
+        target="nvidia",
+        backend="trtllm",
+        max_model_len=4096,
+        trtllm_args=("--free_gpu_memory_fraction", "0.5", "--max_seq_len", "512"),
+    )
+    argv = trtllm_argv(config)
+    assert argv[-4:] == ["--free_gpu_memory_fraction", "0.5", "--max_seq_len", "512"]
+    # Spelled twice, and the caller's occurrence is the last one.
+    assert argv.index("--max_seq_len") < argv.index("--free_gpu_memory_fraction")
+
+
+def test_each_launcher_refuses_the_other_ones_passthrough() -> None:
+    """Refused rather than dropped, and this is the case a shared branch broke.
+
+    Both launchers return from `serve_model` before LM7's own server is reached,
+    so a check that lived only on that path silently ignored a --vllm-arg handed
+    to --backend trtllm. The two CLIs share no spelling, so passing one to the
+    other could only ever produce an argv that does not parse.
+    """
+    from lm7.serve.cli import serve_model
+
+    vllm_arg_on_trtllm = ServeConfig(
+        model="hf://owner/model", target="nvidia", backend="trtllm", vllm_args=("--enforce-eager",)
+    )
+    with pytest.raises(UnsupportedModelError, match="--vllm-arg"):
+        serve_model(vllm_arg_on_trtllm)
+
+    trtllm_arg_on_vllm = ServeConfig(
+        model="hf://owner/model", target="nvidia", backend="vllm", trtllm_args=("--tp_size", "2")
+    )
+    with pytest.raises(UnsupportedModelError, match="--trtllm-arg"):
+        serve_model(trtllm_arg_on_vllm)
+
+    # And on LM7's own server, which is where the vLLM check already lived.
+    own_server = ServeConfig(model="hf://owner/model", target="cpu", trtllm_args=("--tp_size", "2"))
+    with pytest.raises(UnsupportedModelError, match="--trtllm-arg"):
+        serve_model(own_server)
+
+
+def test_the_parser_collects_repeated_trtllm_arguments() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "model",
+            "serve",
+            "hf://owner/model",
+            "--backend",
+            "trtllm",
+            "--trtllm-arg=--free_gpu_memory_fraction",
+            "--trtllm-arg",
+            "0.5",
+        ]
+    )
+    assert args.trtllm_args == ["--free_gpu_memory_fraction", "0.5"]
 
 
 def test_tensorrt_llm_is_launched_with_an_unchanged_environment() -> None:

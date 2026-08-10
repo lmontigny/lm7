@@ -615,6 +615,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     serve_parser.add_argument(
+        "--trtllm-arg",
+        dest="trtllm_args",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help=(
+            "the same passthrough for 'trtllm-serve'; repeatable, appended last, and "
+            "only for --backend trtllm. TensorRT-LLM sizes its paged cache from free "
+            "GPU memory, so this is how a desktop card gets it back: "
+            "--trtllm-arg=--free_gpu_memory_fraction --trtllm-arg 0.5"
+        ),
+    )
+    serve_parser.add_argument(
         "--cors-origins",
         default="*",
         help=(
@@ -808,6 +821,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cors_origins=_cors_origins(args.cors_origins),
                     api_key=args.api_key,
                     vllm_args=tuple(args.vllm_args),
+                    trtllm_args=tuple(args.trtllm_args),
                 ),
                 dry_run=args.dry_run,
                 as_json=args.json,

@@ -312,13 +312,13 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   throughput has been measured here, on any platform. The same is true of
   TensorRT-LLM below: both launchers now start on this card, and neither has had
   its throughput measured.
-- **`--backend trtllm` is one model on one card, and translates three flags.**
-  The handover was run end to end on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) under
-  WSL2 against TensorRT-LLM 1.2.1 and `SmolLM2-135M-Instruct` — server up, chat,
-  streaming, four integration tests. Only `--host`, `--port` and
-  `--max-model-len` are translated; `--free_gpu_memory_fraction`,
-  `--max_batch_size`, `--tp_size` and the rest have no LM7 spelling, so a caller
-  who needs them runs `trtllm-serve` directly. **Nothing measures the thing the
+- **`--backend trtllm` is one model on one card.** The handover was run end to
+  end on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) under WSL2 against TensorRT-LLM
+  1.2.1 and `SmolLM2-135M-Instruct` — server up, chat, streaming, four
+  integration tests, and `--trtllm-arg=--free_gpu_memory_fraction` cutting the
+  paged cache from 9.06 GiB to 2.52 GiB. Only `--host`, `--port` and
+  `--max-model-len` are *modelled*; everything else passes through verbatim, so
+  LM7 makes no claim about what it does. **Nothing measures the thing the
   backend is for**: continuous batching is running but no concurrent request was
   ever submitted, and there is still no comparison against the Inductor path —
   which was the largest gap in the first revision of that PR and remains it.

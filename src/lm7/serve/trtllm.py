@@ -142,6 +142,14 @@ def trtllm_argv(config: ServeConfig) -> list[str]:
     # confusingly in one command line. Leaving it off means TensorRT-LLM picks
     # its own default, which on 1.2.x is `pytorch` -- what an unmodified
     # `trtllm-serve` would do. See docs/serving.md.
+    #
+    # Last, so a passthrough wins over anything LM7 translated above, exactly as
+    # --vllm-arg does for the other launcher. Without it a caller who needs one
+    # flag LM7 does not model cannot use --backend trtllm at all -- and on a
+    # desktop card the flag they need is --free_gpu_memory_fraction, since
+    # TensorRT-LLM sizes its paged cache from free memory and takes nearly the
+    # whole GPU by default.
+    argv += list(config.trtllm_args)
     return argv
 
 

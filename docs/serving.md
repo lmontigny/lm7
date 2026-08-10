@@ -631,6 +631,22 @@ have quietly done the wrong thing:
   build time from a checkpoint NVIDIA ModelOpt has already produced; serve one of
   those instead.
 
+Everything else reaches TensorRT-LLM through **`--trtllm-arg`**, the same
+verbatim passthrough `--vllm-arg` provides for the other launcher — repeatable,
+appended last so it beats anything LM7 translated. On a desktop card it is the
+flag you will actually want, since TensorRT-LLM sizes its paged cache from free
+GPU memory:
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target nvidia \
+  --backend trtllm --trtllm-arg=--free_gpu_memory_fraction --trtllm-arg 0.25
+```
+
+Each passthrough belongs to one launcher and is **refused** by the other, and by
+LM7's own server — the two CLIs share no spelling (`--max-model-len` against
+`--max_seq_len`), so handing vLLM's flags to `trtllm-serve` could only produce an
+argv that does not parse.
+
 A non-NVIDIA target is refused, and so is a pre-Ampere NVIDIA card: TensorRT-LLM
 has no kernels below `sm80` and fails during engine construction rather than
 falling back, so the refusal names the card instead of arriving as a CUDA error

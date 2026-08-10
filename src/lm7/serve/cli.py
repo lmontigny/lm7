@@ -118,6 +118,7 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
     if config.backend in LAUNCHER_BACKENDS:
         # Nothing of LM7 is in the request path past this line -- see
         # serve/vllm.py and serve/trtllm.py.
+        _refuse_foreign_passthrough(config)
         if config.ui_port is not None:
             # A static page on its own port, so LM7 hands out one HTML file and
             # the browser then talks to the launched server directly. Both vLLM
@@ -138,14 +139,7 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
             "which own their port and serve no browser page. This server serves the chat page "
             f"itself at http://{config.host}:{config.port}/."
         )
-    if config.vllm_args:
-        # Refused rather than ignored, like every other argument this server
-        # cannot honour: quietly dropping engine flags would start a server that
-        # is not the one that was asked for.
-        raise UnsupportedModelError(
-            "--vllm-arg is passed through to 'vllm serve' and means nothing to LM7's own "
-            "server. Add --backend vllm to hand the port over, or drop --vllm-arg."
-        )
+    _refuse_foreign_passthrough(config)
 
     _require_serve_extra()
     from .engine import LM7ServeEngine
@@ -165,6 +159,31 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
     print("lm7: the first request compiles the prefill and decode graphs and will be slower.")
     run_server(config, engine)
     return 0
+
+
+# Each launcher's verbatim passthrough, and the backend it belongs to. The two
+# CLIs share no spelling, so handing vLLM's flags to trtllm-serve (or the
+# reverse) could only ever produce an argv that does not parse.
+_PASSTHROUGH = {"vllm": ("vllm_args", "--vllm-arg"), "trtllm": ("trtllm_args", "--trtllm-arg")}
+
+
+def _refuse_foreign_passthrough(config: ServeConfig) -> None:
+    """Refuse a passthrough aimed at a backend other than the one selected.
+
+    Refused rather than ignored, like every other argument this command cannot
+    honour: quietly dropping engine flags would start a server that is not the
+    one that was asked for -- and the flags most likely to be passed this way are
+    the ones that decide how much of the GPU it takes.
+    """
+    for backend, (field, flag) in _PASSTHROUGH.items():
+        if config.backend == backend or not getattr(config, field):
+            continue
+        target = f"'{backend} serve'" if backend == "vllm" else "'trtllm-serve'"
+        raise UnsupportedModelError(
+            f"{flag} is passed through to {target} verbatim, and this is "
+            f"--backend {config.backend}. Add --backend {backend} to hand the port over, "
+            f"or drop {flag}."
+        )
 
 
 def _serve_with_launcher(config: ServeConfig) -> int:
