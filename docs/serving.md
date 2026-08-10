@@ -562,7 +562,8 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 `http://127.0.0.1:8201`.
 
 `--ui-port` is refused for LM7's own backend, which already serves the page at
-`/` — a second copy on another port would be a puzzle, not a feature.
+`/` — a second copy on another port would be a puzzle, not a feature. It works
+for every launcher backend, `--backend trtllm` included.
 
 > **Validated on Apple Silicon, and nowhere else.** `lm7 model serve --target
 > apple --backend vllm` was run end to end on an M-series Mac against
@@ -582,6 +583,91 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 > it bundles reject CUDA 13.3 — so the server was started with
 > `VLLM_USE_FLASHINFER_SAMPLER=0` in the environment, which LM7 passes through
 > and does not set. **ROCm and TPU have still never been run.**
+
+## `--backend trtllm`: the same handover, to TensorRT-LLM
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target nvidia --backend trtllm --port 8000
+```
+
+Same shape as `--backend vllm`, and deliberately so: LM7 translates its config
+into `trtllm-serve`'s own argv and hands over the process. Both are *launcher
+backends*, and everything the previous section says about not being in the
+request path applies here word for word.
+
+Sharing the shape is the point. `--dry-run` answers the same questions for
+either — which executable was found, what argv it gets, what changes in the
+environment — and `--ui-port` works the same way, because the plan is built once
+for both rather than per backend:
+
+```console
+$ lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+    --target nvidia --backend trtllm --max-model-len 2048 --dry-run
+model           HuggingFaceTB/SmolLM2-135M-Instruct
+target          nvidia:sm89
+runtime         trtllm
+address         http://127.0.0.1:8000
+max_model_len   2048
+trtllm          /home/you/.venv-trtllm/bin/trtllm-serve
+command         trtllm-serve HuggingFaceTB/SmolLM2-135M-Instruct --host 127.0.0.1 --port 8000 --max_seq_len 2048
+```
+
+Three translation decisions worth stating, because each is a place LM7 could
+have quietly done the wrong thing:
+
+- **`--max-model-len` becomes `--max_seq_len`.** The same quantity under each
+  side's own name. LM7 does not reinterpret it, and does not rename
+  `trtllm-serve`'s flags to look like its own — the printed command is the real
+  one, meant to be copied into a shell.
+- **LM7 does not pass `--backend` through.** The flag exists on both sides and
+  means different things: LM7's picks the launcher, `trtllm-serve`'s picks
+  between its PyTorch runtime and a TensorRT engine. Passing one as the other
+  would be a silent mistranslation, so LM7 passes neither and TensorRT-LLM keeps
+  its own default (on 1.2.x, the PyTorch runtime with in-flight batching — *not*
+  a prebuilt TensorRT engine).
+- **`--quantize` is refused, not ignored.** It quantizes weights in LM7's own
+  decode loop, which is not in this path at all. TensorRT-LLM quantizes at engine
+  build time from a checkpoint NVIDIA ModelOpt has already produced; serve one of
+  those instead.
+
+Everything else reaches TensorRT-LLM through **`--trtllm-arg`**, the same
+verbatim passthrough `--vllm-arg` provides for the other launcher — repeatable,
+appended last so it beats anything LM7 translated. On a desktop card it is the
+flag you will actually want, since TensorRT-LLM sizes its paged cache from free
+GPU memory:
+
+```bash
+lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target nvidia \
+  --backend trtllm --trtllm-arg=--free_gpu_memory_fraction --trtllm-arg 0.25
+```
+
+Each passthrough belongs to one launcher and is **refused** by the other, and by
+LM7's own server — the two CLIs share no spelling (`--max-model-len` against
+`--max_seq_len`), so handing vLLM's flags to `trtllm-serve` could only produce an
+argv that does not parse.
+
+A non-NVIDIA target is refused, and so is a pre-Ampere NVIDIA card: TensorRT-LLM
+has no kernels below `sm80` and fails during engine construction rather than
+falling back, so the refusal names the card instead of arriving as a CUDA error
+several minutes into a load.
+
+### It needs its own environment
+
+TensorRT-LLM pins `torch`, `transformers` and `tensorrt` to versions that
+conflict with every other environment in this repo, so it cannot be an LM7 extra
+for exactly the reason vLLM cannot. Install it in a venv of its own and put that
+venv on `PATH`; LM7 looks for an importable `tensorrt_llm`, then `trtllm-serve`
+on `PATH`, then `~/.venv-trtllm/bin/trtllm-serve`. The install, the version set
+and what was measured are in [TensorRT-LLM](tensorrt-llm.md).
+
+**Handing over the process is load-bearing here**, not just tidy. TensorRT-LLM
+spawns MPI workers that re-execute the parent's command line; a launcher that
+drove the Python API in-process would have its workers re-run `python -m lm7`,
+hit argparse and `MPI_ABORT` the job *after* the model had loaded. `trtllm-serve`
+is its own entry point, so its workers re-execute it and the re-exec is harmless.
+[TensorRT-LLM](tensorrt-llm.md#why-this-is-a-launcher-and-not-an-in-process-runtime)
+has the whole story, including what the in-process version cost.
 
 ## What has actually been run
 
@@ -736,19 +822,75 @@ loopback, and they are here to show which order of magnitude a flag moves things
 by. No serving benchmark exists in this repo, and no claim about serving
 performance should be sourced from it.
 
+### The TensorRT-LLM handover, on the same card
+
+`--backend trtllm` was run end to end on that same RTX 4070 SUPER under WSL2,
+against TensorRT-LLM 1.2.1 and `SmolLM2-135M-Instruct`: the server came up from
+LM7's own argv, `/v1/models` listed the model as `owned_by: tensorrt_llm`, a
+chat completion answered correctly, and an SSE stream reassembled. Four
+integration tests pass in 120 s, startup included.
+
+Cold start was ~125 s and the launched server held 11.9 GiB of the 12 GiB card
+for a 135M model, because TensorRT-LLM sizes its paged cache from free memory —
+422,048 tokens of it, against the 2049 that `--max-model-len` bounds a single
+request to. The install needed six things beyond `pip install tensorrt-llm`
+before it would run at all outside NVIDIA's container. Both stories, and the
+timings, are in [TensorRT-LLM](tensorrt-llm.md).
+
+**Both launchers now start on this card**, which is the useful thing to know
+about the shared layer: `--dry-run`, `--ui-port` and the refusals come from one
+implementation, and each backend has now put a real server on the port. vLLM
+still has no throughput measurement here; TensorRT-LLM does — see below.
+
+### When the single-stream server stops being the right answer
+
+[`benchmarks/serving_backends.py`](../benchmarks/serving_backends.py) drives
+this server and the TensorRT-LLM handover from one client, over the same HTTP,
+so the two are comparable. On an RTX 4070 SUPER with SmolLM2-135M, the answer
+has a clear shape:
+
+| | this server, `reduce-overhead` | `--backend trtllm` |
+| --- | --- | --- |
+| time to first token | **13 ms** | 50 ms |
+| one stream | 143 tok/s | 174 tok/s |
+| **eight streams, aggregate** | 143 tok/s | **1,139 tok/s** |
+| worst TTFT at eight streams | 6.3 s | **0.10 s** |
+| GPU held, over idle | **615 MiB** | 10,268 MiB |
+
+For one caller this server is the better answer — sooner to the first token, 17x
+less memory, and within 1.21x per token. It stops being an answer somewhere
+between one caller and two, and the flat line is the `asyncio.Lock` described
+above doing exactly what it says. Full table, method and caveats in
+[TensorRT-LLM](tensorrt-llm.md#against-the-inductor-path).
+
+The two needed different amounts of help to get there, and the difference is
+instructive. vLLM needed two changes *inside* LM7 (`VLLM_WSL2_ENABLE_PIN_MEMORY`
+and `--vllm-arg`) because its failures were things a launcher could fix.
+TensorRT-LLM needed none, and instead needed six things fixed in its own
+environment before it would import — which is why LM7 sets nothing for it and
+documents the environment as a prerequisite.
+
 ## Tests
 
 ```bash
 python -m pytest tests/test_serve.py               # portable; no extra needed
 python -m pytest -m serve                          # HTTP surface; needs [serve]
 python -m pytest -m serve_load                     # a real model; needs [serve,hf]
+python -m pytest -m trtllm                         # a real trtllm-serve and a GPU
 ```
 
 `tests/test_serve.py` drives the engine against a scripted runner and a
 fake tokenizer — stop sequences, EOS, capacity refusal, cancellation, sampling,
-the lock — and runs on a plain `[dev]` install. `tests/test_serve_integration.py`
-checks the wire format an OpenAI client actually sees, and is in CI's
-`serve` job.
+the lock — and runs on a plain `[dev]` install. It also covers both launchers'
+whole contribution: the argv they build and what they refuse, with neither vLLM
+nor TensorRT-LLM installed. `tests/test_serve_integration.py` checks the wire
+format an OpenAI client actually sees, and is in CI's `serve` job.
+
+`tests/test_trtllm_serve_integration.py` is the one that cannot be faked: it
+launches a real `trtllm-serve` **from `serve_plan`'s own argv** and talks to it
+over HTTP, so what is checked is the command LM7 would actually run rather than
+a hand-written one that could pass while `lm7 model serve` was broken. It needs
+an Ampere-or-newer GPU and TensorRT-LLM's own environment, so it is not in CI.
 
 ### The load path needs a real model to test at all
 

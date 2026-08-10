@@ -553,7 +553,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help=(
             "backend selector for the compiled decode loop: auto, eager, or inductor. "
-            "'vllm' instead hands the port to vLLM, which must be installed separately"
+            "'vllm' and 'trtllm' instead hand the port to vLLM or TensorRT-LLM, each of "
+            "which must be installed separately"
         ),
     )
     serve_parser.add_argument(
@@ -595,8 +596,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "serve the chat page on this port. Only for --backend vllm, which hands "
-            "the API port to vLLM and vLLM ships no browser page; LM7's own server "
+            "serve the chat page on this port. Only for --backend vllm and --backend "
+            "trtllm, which own the API port and ship no browser page; LM7's own server "
             "already serves the page at /"
         ),
     )
@@ -611,6 +612,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "appended last so it wins over anything LM7 translated. Only for "
             "--backend vllm, since LM7 deliberately does not mirror vLLM's engine "
             "flags: --vllm-arg=--gpu-memory-utilization --vllm-arg 0.8"
+        ),
+    )
+    serve_parser.add_argument(
+        "--trtllm-arg",
+        dest="trtllm_args",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help=(
+            "the same passthrough for 'trtllm-serve'; repeatable, appended last, and "
+            "only for --backend trtllm. TensorRT-LLM sizes its paged cache from free "
+            "GPU memory, so this is how a desktop card gets it back: "
+            "--trtllm-arg=--free_gpu_memory_fraction --trtllm-arg 0.5"
         ),
     )
     serve_parser.add_argument(
@@ -807,6 +821,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cors_origins=_cors_origins(args.cors_origins),
                     api_key=args.api_key,
                     vllm_args=tuple(args.vllm_args),
+                    trtllm_args=tuple(args.trtllm_args),
                 ),
                 dry_run=args.dry_run,
                 as_json=args.json,

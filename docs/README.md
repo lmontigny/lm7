@@ -70,7 +70,11 @@ This index covers everything else.
   KV-cache decode path, as `lm7 model generate` drives it through Transformers.
 - [Serving](serving.md) — `lm7 model serve`: an OpenAI-compatible HTTP endpoint and a built-in chat page
   over the compiled decode loop. Single-stream by design, with `--backend vllm`
-  as the handover when throughput matters.
+  and `--backend trtllm` as the handovers when throughput matters.
+- [TensorRT-LLM](tensorrt-llm.md) — `--backend trtllm`, why it is a launcher
+  rather than an in-process runtime, and what that cost to find out. Measured
+  against the Inductor path on an RTX 4070 SUPER: better alone, 8x by eight
+  streams.
 - [Prefill and KV-cache decode](kv-cache-decode.md) — `lm7.compile_generation`:
   two separately compiled graphs, one device-resident cache, and per-phase
   compile counters. Measured on an H100.

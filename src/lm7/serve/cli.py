@@ -9,20 +9,56 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 
 from ..detection import resolve_target
 from ..errors import UnsupportedModelError
 from .engine import ServeConfig, resolve_model_source
 
+# The backends that are a *handover* rather than a server. LM7 translates the
+# config into someone else's argv, hands over the process, and is not in the
+# request path afterwards; what differs between them is only which module does
+# the translating. Keeping them in one tuple is what makes `--dry-run`, the
+# chat page and the refusals below identical for every launcher instead of
+# per-backend special cases -- see docs/serving.md.
+LAUNCHER_BACKENDS = ("vllm", "trtllm")
+
+# argv, environment, executable: the three functions a launcher module provides.
+Launcher = tuple[
+    Callable[[ServeConfig], list[str]],
+    Callable[[ServeConfig], dict[str, str]],
+    Callable[[], str | None],
+]
+
+
+def _launcher(backend: str) -> Launcher:
+    """The three functions that define a handover backend.
+
+    Imported on demand rather than at module scope so that a ``--dry-run`` for
+    one launcher never imports the other's module, and so that neither is
+    imported at all for LM7's own server.
+    """
+    if backend == "vllm":
+        from .vllm import vllm_argv, vllm_environment, vllm_executable
+
+        return vllm_argv, vllm_environment, vllm_executable
+    if backend == "trtllm":
+        from .trtllm import trtllm_argv, trtllm_environment, trtllm_executable
+
+        return trtllm_argv, trtllm_environment, trtllm_executable
+    raise UnsupportedModelError(
+        f"{backend!r} is not a launcher backend; expected one of {', '.join(LAUNCHER_BACKENDS)}."
+    )
+
 
 def serve_plan(config: ServeConfig) -> dict[str, Any]:
     """What this invocation would do, without loading a model or binding a port.
 
     Backs ``--dry-run``, which exists because loading a model is the expensive
-    part of finding out that a target was misspelled. For ``--backend vllm`` it
+    part of finding out that a target was misspelled. For a launcher backend it
     also answers the two questions that decide whether the handover will work at
-    all: which ``vllm`` LM7 found, and what it will change in the environment.
+    all: which executable LM7 found, and what it will change in the environment.
     """
     target = resolve_target(config.target)
     plan: dict[str, Any] = {
@@ -33,20 +69,20 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         "host": config.host,
         "port": config.port,
     }
-    if config.backend == "vllm":
-        from .vllm import vllm_argv, vllm_environment, vllm_executable
+    if config.backend in LAUNCHER_BACKENDS:
+        argv_for, environment_for, executable_for = _launcher(config.backend)
 
-        executable = vllm_executable()
-        plan["runtime"] = "vllm"
-        plan["vllm_installed"] = executable is not None
+        executable = executable_for()
+        plan["runtime"] = config.backend
+        plan["runtime_installed"] = executable is not None
         # Named because "not installed" is usually "installed in a different
-        # environment" -- vllm-metal builds its own venv on purpose.
-        plan["vllm_executable"] = executable
-        plan["argv"] = vllm_argv(config)
+        # environment" -- vllm-metal and TensorRT-LLM both need their own venv.
+        plan["runtime_executable"] = executable
+        plan["argv"] = argv_for(config)
         plan["ui_port"] = config.ui_port
         overrides = {
             name: value
-            for name, value in vllm_environment(config).items()
+            for name, value in environment_for(config).items()
             if os.environ.get(name) != value
         }
         plan["environment"] = overrides
@@ -79,37 +115,31 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
         print(json.dumps(plan, indent=2) if as_json else _format_plan(plan))
         return 0
 
-    if config.backend == "vllm":
-        # Nothing of LM7 is in the request path past this line -- see serve/vllm.py.
-        from .vllm import serve_with_vllm
-
+    if config.backend in LAUNCHER_BACKENDS:
+        # Nothing of LM7 is in the request path past this line -- see
+        # serve/vllm.py and serve/trtllm.py.
+        _refuse_foreign_passthrough(config)
         if config.ui_port is not None:
             # A static page on its own port, so LM7 hands out one HTML file and
-            # the browser then talks to vLLM directly. vLLM answers
-            # `access-control-allow-origin: *` by default, so this needs no flag
-            # -- but a server started with a narrowed --allowed-origins would
-            # have to include this one.
+            # the browser then talks to the launched server directly. Both vLLM
+            # and trtllm-serve answer `access-control-allow-origin: *` by
+            # default, so this needs no flag -- but a server started with
+            # narrowed origins would have to include this one.
             from .ui import serve_page
 
             api = f"http://{config.host}:{config.port}"
             serve_page(config.ui_port, api, host=config.host)
             print(f"lm7: chat page on http://{config.host}:{config.ui_port} (talking to {api})")
-        print(f"lm7: handing {plan['model']} to vLLM on {config.host}:{config.port}")
-        return serve_with_vllm(config)
+        print(f"lm7: handing {plan['model']} to {config.backend} on {config.host}:{config.port}")
+        return _serve_with_launcher(config)
 
     if config.ui_port is not None:
         raise UnsupportedModelError(
-            "--ui-port is for --backend vllm, which owns its port and serves no browser "
-            f"page. This server serves the chat page itself at http://{config.host}:{config.port}/."
+            f"--ui-port is for {' and '.join('--backend ' + name for name in LAUNCHER_BACKENDS)}, "
+            "which own their port and serve no browser page. This server serves the chat page "
+            f"itself at http://{config.host}:{config.port}/."
         )
-    if config.vllm_args:
-        # Refused rather than ignored, like every other argument this server
-        # cannot honour: quietly dropping engine flags would start a server that
-        # is not the one that was asked for.
-        raise UnsupportedModelError(
-            "--vllm-arg is passed through to 'vllm serve' and means nothing to LM7's own "
-            "server. Add --backend vllm to hand the port over, or drop --vllm-arg."
-        )
+    _refuse_foreign_passthrough(config)
 
     _require_serve_extra()
     from .engine import LM7ServeEngine
@@ -129,6 +159,54 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
     print("lm7: the first request compiles the prefill and decode graphs and will be slower.")
     run_server(config, engine)
     return 0
+
+
+# Each launcher's verbatim passthrough, and the backend it belongs to. The two
+# CLIs share no spelling, so handing vLLM's flags to trtllm-serve (or the
+# reverse) could only ever produce an argv that does not parse.
+_PASSTHROUGH = {"vllm": ("vllm_args", "--vllm-arg"), "trtllm": ("trtllm_args", "--trtllm-arg")}
+
+
+def _refuse_foreign_passthrough(config: ServeConfig) -> None:
+    """Refuse a passthrough aimed at a backend other than the one selected.
+
+    Refused rather than ignored, like every other argument this command cannot
+    honour: quietly dropping engine flags would start a server that is not the
+    one that was asked for -- and the flags most likely to be passed this way are
+    the ones that decide how much of the GPU it takes.
+    """
+    for backend, (field, flag) in _PASSTHROUGH.items():
+        if config.backend == backend or not getattr(config, field):
+            continue
+        target = f"'{backend} serve'" if backend == "vllm" else "'trtllm-serve'"
+        raise UnsupportedModelError(
+            f"{flag} is passed through to {target} verbatim, and this is "
+            f"--backend {config.backend}. Add --backend {backend} to hand the port over, "
+            f"or drop {flag}."
+        )
+
+
+def _serve_with_launcher(config: ServeConfig) -> int:
+    """Hand the process to the launcher named by ``config.backend``.
+
+    Separate from :func:`_launcher` because launching is the one thing that is
+    genuinely not shared: each of these replaces this process's work and returns
+    the other server's exit code, so there is nothing left here to generalize.
+    """
+    if config.backend == "vllm":
+        from .vllm import serve_with_vllm
+
+        return serve_with_vllm(config)
+    if config.backend == "trtllm":
+        from .trtllm import serve_with_trtllm
+
+        return serve_with_trtllm(config)
+    # Not reachable through `serve_model`, which checks LAUNCHER_BACKENDS first.
+    # Explicit anyway so that adding a name to that tuple without adding it here
+    # raises instead of silently launching the wrong server.
+    raise UnsupportedModelError(
+        f"{config.backend!r} is listed as a launcher backend but has no launcher."
+    )
 
 
 def _require_serve_extra() -> None:
@@ -163,9 +241,9 @@ def _format_plan(plan: dict[str, Any]) -> str:
     lines.append(f"{'runtime':<16}{plan['runtime']}")
     lines.append(f"{'address':<16}http://{plan['host']}:{plan['port']}")
     lines.append(f"{'max_model_len':<16}{plan['max_model_len']}")
-    if plan["runtime"] == "vllm":
-        state = plan["vllm_executable"] or "NOT FOUND"
-        lines.append(f"{'vllm':<16}{state}")
+    if plan["runtime"] in LAUNCHER_BACKENDS:
+        state = plan["runtime_executable"] or "NOT FOUND"
+        lines.append(f"{plan['runtime']:<16}{state}")
         lines.append(f"{'command':<16}{' '.join(plan['argv'])}")
         for name, value in plan["environment"].items():
             lines.append(f"{'env':<16}{name}={value}")

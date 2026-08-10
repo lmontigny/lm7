@@ -114,8 +114,9 @@ class ServeConfig:
     compile_prefill: bool = True
     host: str = "127.0.0.1"
     port: int = 8000
-    # Only meaningful with `--backend vllm`: LM7's own server already
-    # serves the chat page at `/`, while vLLM owns its port and ships none.
+    # Only meaningful with a launcher backend (`vllm`, `trtllm`): LM7's own
+    # server already serves the chat page at `/`, while a launched server owns
+    # its port and ships none.
     ui_port: int | None = None
     quantize: str = "none"
     cors_origins: tuple[str, ...] = ("*",)
@@ -123,6 +124,11 @@ class ServeConfig:
     # Appended verbatim to `vllm serve`, and meaningless for LM7's own server.
     # See `serve/vllm.py` for why this exists instead of a flag per vLLM setting.
     vllm_args: tuple[str, ...] = ()
+    # The same escape hatch for `trtllm-serve`, kept as a separate field rather
+    # than one shared list: the two CLIs spell nothing alike (`--max-model-len`
+    # against `--max_seq_len`), so a single list would be silently wrong for
+    # whichever launcher it was not written for.
+    trtllm_args: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +145,7 @@ class ServeConfig:
             "quantize": self.quantize,
             "cors_origins": list(self.cors_origins),
             "vllm_args": list(self.vllm_args),
+            "trtllm_args": list(self.trtllm_args),
             # Whether one is set, never which one: this dict backs --dry-run and
             # --json, and a key printed to a terminal is a key in a scrollback.
             "api_key": self.api_key is not None,
