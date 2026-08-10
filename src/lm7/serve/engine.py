@@ -311,11 +311,17 @@ class LM7ServeEngine:
 
         model_id = resolve_model_source(config.model)
         target = resolve_target(config.target)
-        dtype = _resolve_dtype(config.dtype, target)
         # Gated before the download, not after: every quantization refusal here
         # is a property of the target, backend and dtype, so finding out costs
         # nothing and finding out late costs a multi-gigabyte checkpoint.
         quantization = normalize_quantization(config.quantize)
+        # `quantization` is what makes `dtype="auto"` mean BF16 on NVIDIA rather
+        # than the FP16 an unquantized model gets. Resolving without it served
+        # INT8 weights under FP16 compute, whose logits are NaN -- so every token
+        # was an argmax over NaN, and a chat model whose EOS is not token 0 ran to
+        # its full budget and returned an empty string with `finish_reason:
+        # "length"` and no error. Measured on an RTX 4070 SUPER (Ada `sm89`).
+        dtype = _resolve_dtype(config.dtype, target, quantization)
         if quantization != "none" and not config.model.startswith("hf://"):
             # The per-model gate is keyed by Hub id, and a directory does not
             # carry one -- transformers 5.x's `save_pretrained` writes no

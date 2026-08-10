@@ -499,6 +499,8 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 
 ## What has actually been run
 
+### Apple M-series
+
 Apple M-series, `SmolLM2-135M-Instruct`, transformers 5.14.1 / torch 2.13.0,
 driven with `curl` and with the official `openai` Python SDK 2.53.0. Both
 `--target cpu` (`cpu:arm64`) and `--target auto` (`apple:metal`, resolving to
@@ -529,8 +531,9 @@ SmolLM2-135M-Instruct: 210 modules converted, model storage 538 MB → 220 MB
 (2.44x), and a served request answered correctly by the quantized model. Both
 refusals were checked the same way — `--target apple --quantize int8` on the
 vendor gate, `--backend eager --quantize int8` on the backend gate, each firing
-before the checkpoint downloads. `fp8` and `nvfp4` remain unserved: they need an
-`sm90` and an `sm120` card respectively.
+before the checkpoint downloads. `fp8` and `nvfp4` are unreachable from an
+M-series machine — they are gated to NVIDIA — and were served later on
+[`sm89`](#on-nvidia-rtx-4070-super-ada-sm89).
 
 The **local-directory form** was run the same way, on `cpu:arm64`: the same
 checkpoint written out with `save_pretrained` and served as `./local-smollm2`,
@@ -549,12 +552,67 @@ first request and `backend=inductor` after it, as it does for a Hub model.
 > — credit to [#115](https://github.com/lmontigny/lm7/pull/115), which found it
 > independently.
 
-Not run: `nvidia`, `intel:npu`, `tpu`, any model above 135M, and the vLLM
-handover. **No timing here is a measurement.** The KV cache is allocated at
-startup and the graphs compile inside the first request, so `/metrics` TTFT and
-TPOT are compile-polluted until several requests have run. No serving benchmark
-exists in this repo, and no claim about serving performance should be sourced
-from it.
+### On NVIDIA (RTX 4070 SUPER, Ada `sm89`)
+
+The same surface, on the local dev GPU — an RTX 4070 SUPER (Ada `sm89`, 12 GiB)
+under WSL2, driver 595.45.03 / CUDA 13.2, torch 2.13.0+cu130, transformers
+5.14.1, fastapi 0.141.1 / uvicorn 0.52.1, `openai` SDK 2.53.0. `--target nvidia`
+resolves to `nvidia:sm89` and `backend=auto` becomes `inductor` after the first
+request, exactly as it does on Metal. Driven with `curl`, `httpx` and the
+`openai` SDK against `SmolLM2-135M-Instruct` and `unsloth/Llama-3.2-1B-Instruct`:
+
+- `/health`, `/metrics`, `/v1/models`; the chat page at `/` (14 KB, no external
+  reference, absent from `/openapi.json`)
+- chat completions and `/v1/completions`, buffered and streamed, through `curl`
+  and through the SDK
+- **greedy output byte-identical to `model.generate`** on the same GPU, for both
+  models, on two prompts each
+- `/health` answered in 1.9–12.1 ms (median 2.7) while a generation was running
+- two overlapping generations serialized rather than interleaving — 0.15 s and
+  0.32 s, wall clock 0.32 s — and both returned the same greedy answer
+- a client hanging up mid-SSE stopped the generation, which was still counted in
+  `/metrics`, and the next request was served normally
+- 400 on `n=4`, on `logprobs`, and on an oversized `max_tokens` (naming the 993
+  that would have fit); 422 on an empty `messages`; 200 on the SDK's defaults
+- the deployment flags, checked the same way as on `cpu:arm64` above, including
+  `GET /` returning 401 while a key is set
+
+`steady_frames` stayed **0** across every request of every run above, which is
+the claim the two-graph split exists to support. `prefill_lengths` climbed with
+the number of distinct prompt lengths, as designed — and on this box that is
+expensive: the first request compiled for **~100 s** and each new prompt length
+cost roughly **80 s** more, against a warm request of 0.13–0.45 s.
+`--no-compile-prefill` brought the first request to 11.4 s and a second, unseen
+prompt length to 0.54 s, which makes it the flag to reach for while iterating.
+
+**Both quantized modes NVIDIA gates now serve**, from `--dtype auto`:
+`--quantize int8` and `--quantize fp8` on SmolLM2-135M-Instruct, and
+`--quantize nvfp4` on Llama-3.2-1B-Instruct — the per-model gate refuses NVFP4
+for SmolLM2, so that pairing is the one the validated list allows. `fp8` needs
+`sm89`, which this card is; weight-only `nvfp4` carries no capability floor
+(only `nvfp4-dynamic` requires `sm100`, and `--quantize` does not offer it).
+
+> **INT8 and FP8 did not work until this change**, and failed silently rather
+> than loudly. `LM7ServeEngine.load` resolved its dtype without telling
+> `_resolve_dtype` which quantization was coming, so `--dtype auto` on NVIDIA
+> gave the FP16 an *unquantized* model gets instead of the BF16
+> `_QUANTIZED_COMPUTE_DTYPE` mandates. INT8 weights under FP16 compute produce
+> NaN logits, so every token was an argmax over NaN — token 0, which is
+> `<|endoftext|>` and *not* SmolLM2-Instruct's EOS. The server therefore ran to
+> its full budget and returned **HTTP 200 with an empty string** and
+> `finish_reason: "length"`. The gate refuses an explicit `--dtype float16`
+> alongside `--quantize`, so `auto` was the only way in. It never showed on CPU,
+> where quantized and unquantized `auto` are both FP32 — which is why the
+> `cpu:arm64` validation above missed it. Fixed in `serve/engine.py`, with a
+> portable regression test in `tests/test_serve.py`.
+
+Not run on NVIDIA: the vLLM handover, and anything above 1B. Still unrun
+anywhere: `intel:npu` and `tpu`. **No timing here is a measurement.** The KV
+cache is allocated at startup and the graphs compile inside the first request,
+so `/metrics` TTFT and TPOT are compile-polluted until several requests have
+run; the figures above are wall clock from a client on loopback, quoted to show
+which order of magnitude a flag moves things by. No serving benchmark exists in
+this repo, and no claim about serving performance should be sourced from it.
 
 ## Tests
 

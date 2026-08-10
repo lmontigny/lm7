@@ -269,14 +269,23 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   scripted runner and a fake tokenizer. It proves the path works, not that
   output is right: the model has random weights, so no test in CI checks that a
   served answer is correct.
-- **Validated on two targets and one model.** Apple M-series `cpu:arm64` and
-  `apple:metal` with SmolLM2-135M-Instruct, driven by `curl` and by the official
-  `openai` Python SDK: both endpoints, both buffered and streamed, greedy output
-  byte-identical to `model.generate`. **`nvidia`, `intel:npu` and `tpu` have
-  served nothing**, no model above 135M has, and there is no serving benchmark in
-  this repo — so no claim about serving latency or throughput can be sourced from
-  it. `/metrics` TTFT and TPOT are compile-polluted until several requests have
-  run, because the graphs compile inside the first one.
+- **Validated on three targets and two models.** Apple M-series `cpu:arm64` and
+  `apple:metal` with SmolLM2-135M-Instruct, and `nvidia:sm89` (RTX 4070 SUPER,
+  WSL2) with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct — driven by `curl`
+  and by the official `openai` Python SDK: both endpoints, both buffered and
+  streamed, greedy output byte-identical to `model.generate`, and `int8`, `fp8`
+  and `nvfp4` served on the GPU. **`intel:npu` and `tpu` have served nothing**,
+  nothing above 1B has, and there is no serving benchmark in this repo — so no
+  claim about serving latency or throughput can be sourced from it. `/metrics`
+  TTFT and TPOT are compile-polluted until several requests have run, because the
+  graphs compile inside the first one.
+- **A quantized serve was silently wrong on NVIDIA until it was run there.**
+  `LM7ServeEngine.load` resolved `--dtype auto` without passing the quantization
+  mode, so INT8 and FP8 weights were served under FP16 compute instead of BF16;
+  the logits were NaN and the endpoint returned HTTP 200 with an empty string.
+  The failure is invisible on CPU, where both dtypes resolve to FP32 — which is
+  the general shape of this file: a path validated on one target is not
+  validated. See [serving](serving.md#on-nvidia-rtx-4070-super-ada-sm89).
 - **`--backend vllm` is validated on Apple Silicon only.** LM7 translates its
   flags into vLLM's own `vllm serve` argv and hands over the process. That
   handover was run end to end on an M-series Mac against `Qwen/Qwen3.5-0.8B`
