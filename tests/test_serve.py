@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform
 import time
 from pathlib import Path
 
@@ -541,6 +542,98 @@ def test_an_explicit_vllm_host_ip_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VLLM_HOST_IP", "10.0.0.7")
     config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
     assert vllm_module.vllm_environment(config)["VLLM_HOST_IP"] == "10.0.0.7"
+
+
+def _kernel(release: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report ``release`` as the kernel version, whatever this machine runs."""
+    uname = platform.uname()
+    monkeypatch.setattr(
+        vllm_module.platform, "uname", lambda: uname._replace(release=release), raising=True
+    )
+
+
+def test_a_modern_wsl2_kernel_gets_pinned_memory_switched_back_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without it, vLLM 0.26+ dies with `RuntimeError: UVA is not available`.
+
+    vLLM turns pinned memory off whenever it detects WSL, and its CUDA worker
+    allocates a UVA buffer that needs it, so startup fails before a model loads.
+    Measured on WSL2 6.18.33.2 with an RTX 4070 SUPER.
+    """
+    monkeypatch.delenv("VLLM_WSL2_ENABLE_PIN_MEMORY", raising=False)
+    _kernel("6.18.33.2-microsoft-standard-WSL2", monkeypatch)
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(config)["VLLM_WSL2_ENABLE_PIN_MEMORY"] == "1"
+
+
+def test_an_old_wsl2_kernel_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Below 4.19.121 the default is a real limitation, not a cautious one."""
+    monkeypatch.delenv("VLLM_WSL2_ENABLE_PIN_MEMORY", raising=False)
+    _kernel("4.19.104-microsoft-standard", monkeypatch)
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert "VLLM_WSL2_ENABLE_PIN_MEMORY" not in vllm_module.vllm_environment(config)
+
+
+def test_a_kernel_that_is_not_wsl_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_WSL2_ENABLE_PIN_MEMORY", raising=False)
+    _kernel("6.8.0-51-generic", monkeypatch)
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert "VLLM_WSL2_ENABLE_PIN_MEMORY" not in vllm_module.vllm_environment(config)
+
+
+def test_an_explicit_pin_memory_setting_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Including switching it off, which is the reason to read it at all."""
+    monkeypatch.setenv("VLLM_WSL2_ENABLE_PIN_MEMORY", "0")
+    _kernel("6.18.33.2-microsoft-standard-WSL2", monkeypatch)
+    config = ServeConfig(model="hf://owner/model", target="cpu", backend="vllm")
+    assert vllm_module.vllm_environment(config)["VLLM_WSL2_ENABLE_PIN_MEMORY"] == "0"
+
+
+def test_passthrough_arguments_reach_vllm_last(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Last, so a caller spelling a flag out beats what LM7 translated.
+
+    `--gpu-memory-utilization` is the case that motivated this: vLLM's default
+    asks for more of a 12 GiB card than a desktop leaves free, and LM7 models no
+    flag for it.
+    """
+    config = ServeConfig(
+        model="hf://owner/model",
+        target="cpu",
+        backend="vllm",
+        max_model_len=4096,
+        vllm_args=("--gpu-memory-utilization", "0.8", "--max-model-len", "2048"),
+    )
+    argv = vllm_argv(config)
+    assert argv[-4:] == ["--gpu-memory-utilization", "0.8", "--max-model-len", "2048"]
+    # Spelled twice, and argparse takes the last -- which is the caller's.
+    assert argv.index("--max-model-len") < argv.index("--gpu-memory-utilization")
+
+
+def test_passthrough_arguments_are_refused_by_lm7s_own_server() -> None:
+    """Ignoring them would start a server that is not the one asked for."""
+    from lm7.serve.cli import serve_model
+
+    config = ServeConfig(model="hf://owner/model", target="cpu", vllm_args=("--enforce-eager",))
+    with pytest.raises(UnsupportedModelError, match="--vllm-arg"):
+        serve_model(config)
+
+
+def test_the_parser_collects_repeated_vllm_arguments() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "model",
+            "serve",
+            "hf://owner/model",
+            "--backend",
+            "vllm",
+            "--vllm-arg=--gpu-memory-utilization",
+            "--vllm-arg",
+            "0.8",
+        ]
+    )
+    assert args.vllm_args == ["--gpu-memory-utilization", "0.8"]
 
 
 # -- the plan -------------------------------------------------------------

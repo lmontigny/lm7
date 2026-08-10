@@ -447,6 +447,36 @@ plus the plugin. Two consequences LM7 handles rather than leaves to you:
   startup. An explicit `VLLM_HOST_IP` is never overridden, and a server bound to
   `0.0.0.0` is left alone, since a real address is required there and LM7 cannot
   guess it.
+- **LM7 sets `VLLM_WSL2_ENABLE_PIN_MEMORY=1`** on WSL2 kernels at or above
+  4.19.121. vLLM turns pinned memory off whenever it detects WSL, and since 0.26
+  its CUDA worker allocates a UVA buffer that requires it, so `vllm serve` dies
+  with `RuntimeError: UVA is not available` before any model loads. vLLM's own
+  gate says pinned memory *works* on those kernels and is merely off by default,
+  so LM7 turns it back on. Below that version the default is a real limitation
+  rather than a cautious one, and LM7 leaves it alone — as it does an explicit
+  setting, in either direction.
+
+### Flags LM7 does not model
+
+`vllm serve` has hundreds of engine flags. LM7 translates the handful that mean
+the same thing on both sides — the model, host, port, `--max-model-len`,
+`--dtype` — and mirroring the rest would make it a second, always-stale copy of
+vLLM's CLI. `--vllm-arg` is the escape hatch:
+
+```bash
+lm7 model serve hf://owner/model --target nvidia --backend vllm \
+  --vllm-arg=--gpu-memory-utilization --vllm-arg 0.8
+```
+
+Repeatable, one argument each, and appended **last** so a flag spelled out this
+way beats whatever LM7 translated — argparse takes the final occurrence, and a
+caller who names a flag means it. With LM7's own backend it is refused rather
+than dropped, since a server started while ignoring engine arguments is not the
+server that was asked for.
+
+The motivating case is the one above: vLLM asks for 92% of the card by default,
+which is more than a 12 GiB desktop GPU has free once a display server is
+attached, and it exits rather than shrinking.
 
 ### A browser page for the vLLM path
 
@@ -492,10 +522,20 @@ preflight included. If you narrow it with vLLM's own `--allowed-origins`, includ
 > apple --backend vllm` was run end to end on an M-series Mac against
 > `Qwen/Qwen3.5-0.8B` with vLLM 0.26.0 + vllm-metal 0.3.0: `/v1/models`, chat
 > completions, SSE streaming, the official `openai` SDK, and `--ui-port`'s page
-> driving all three cross-origin. **The CUDA, ROCm and
-> TPU paths have still never been run** — no GPU box was rented for this. Note
-> also that vllm-metal supports a specific model list; `SmolLM2-135M` is not on
-> it, which is why this example uses Qwen3.5-0.8B (already in LM7's ladder).
+> driving all three cross-origin. Note also that vllm-metal supports a specific
+> model list; `SmolLM2-135M` is not on it, which is why this example uses
+> Qwen3.5-0.8B (already in LM7's ladder).
+>
+> **CUDA has since been run too**, on an RTX 4070 SUPER (Ada `sm89`) under WSL2
+> with vLLM 0.26.0 against `unsloth/Llama-3.2-1B-Instruct`: the handover, the
+> chat page on `--ui-port`, `/v1/models`, and a chat completion, with `n=4`
+> answering 200 where LM7's own server refuses it. Two things had to be fixed
+> for it to start at all — `VLLM_WSL2_ENABLE_PIN_MEMORY` and `--vllm-arg`, both
+> above. One remains outside LM7: on this box FlashInfer JIT-compiles its sampler
+> at startup, wants `nvcc` and `ninja`, and then fails because the CCCL headers
+> it bundles reject CUDA 13.3 — so the server was started with
+> `VLLM_USE_FLASHINFER_SAMPLER=0` in the environment, which LM7 passes through
+> and does not set. **ROCm and TPU have still never been run.**
 
 ## What has actually been run
 

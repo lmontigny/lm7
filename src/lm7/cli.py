@@ -601,6 +601,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     serve_parser.add_argument(
+        "--vllm-arg",
+        dest="vllm_args",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help=(
+            "pass one argument through to 'vllm serve' verbatim; repeatable, and "
+            "appended last so it wins over anything LM7 translated. Only for "
+            "--backend vllm, since LM7 deliberately does not mirror vLLM's engine "
+            "flags: --vllm-arg=--gpu-memory-utilization --vllm-arg 0.8"
+        ),
+    )
+    serve_parser.add_argument(
         "--cors-origins",
         default="*",
         help=(
@@ -793,6 +806,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     quantize=args.quantize,
                     cors_origins=_cors_origins(args.cors_origins),
                     api_key=args.api_key,
+                    vllm_args=tuple(args.vllm_args),
                 ),
                 dry_run=args.dry_run,
                 as_json=args.json,

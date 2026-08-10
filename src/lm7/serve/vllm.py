@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,14 @@ def vllm_argv(config: ServeConfig) -> list[str]:
         argv += ["--dtype", config.dtype]
     # No `--device`: vLLM's platform comes from which build is installed, and a
     # specific card comes from the environment -- see `serve_with_vllm`.
+    #
+    # Last, so a passthrough wins over anything LM7 translated above -- argparse
+    # takes the final occurrence, and a caller spelling a flag out explicitly
+    # means it. This is the escape hatch that keeps LM7 a launcher: vLLM has
+    # hundreds of engine flags and mirroring them would make LM7 a second, always
+    # stale copy of vLLM's CLI, but without any way through, a machine that needs
+    # one flag LM7 does not model cannot use --backend vllm at all.
+    argv += list(config.vllm_args)
     return argv
 
 
@@ -151,27 +160,61 @@ def serve_with_vllm(config: ServeConfig) -> int:
 
 
 def vllm_environment(config: ServeConfig) -> dict[str, str]:
-    """The environment vLLM is launched with, and the single thing LM7 changes.
+    """The environment vLLM is launched with, and the two things LM7 changes.
 
-    vLLM initializes a ``gloo`` process group even for a single-worker server,
-    and picks the host's LAN address for it. On a Mac that **hangs**: startup
-    stops after "PyTorch device set to: mps" with no error, no timeout and no
-    further output, and the only clue is
-    ``distributed_init_method=tcp://192.168.x.x:...`` in the log. Setting
-    ``VLLM_HOST_IP`` to loopback fixes it -- measured here as a hang of over ten
-    minutes becoming a 130-second startup.
+    Both are the same shape: a default that is right for the machine vLLM is
+    usually deployed on and wrong for the one someone is running LM7 from, where
+    the symptom is a startup that never finishes and a log that does not say why.
+    Neither is ever overridden when the caller has set it themselves.
 
-    So LM7 sets it, but only when the server is being bound to loopback anyway
-    (where a LAN address is certainly wrong) and only when the caller has not set
-    it themselves. A multi-node vLLM deployment needs the real address, and that
+    ``VLLM_HOST_IP`` -- vLLM initializes a ``gloo`` process group even for a
+    single-worker server, and picks the host's LAN address for it. On a Mac that
+    **hangs**: startup stops after "PyTorch device set to: mps" with no error, no
+    timeout and no further output, and the only clue is
+    ``distributed_init_method=tcp://192.168.x.x:...`` in the log. Setting it to
+    loopback turned a hang of over ten minutes into a 130-second startup. LM7
+    sets it only when the server is bound to loopback anyway, where a LAN address
+    is certainly wrong; a multi-node deployment needs the real address, and that
     caller has already said so.
+
+    ``VLLM_WSL2_ENABLE_PIN_MEMORY`` -- vLLM disables pinned memory whenever it
+    detects WSL, and since 0.26 the CUDA worker allocates a UVA buffer that
+    requires it, so startup dies with ``RuntimeError: UVA is not available``
+    before any model loads. vLLM's own gate says pinned memory works on WSL2
+    kernels at or above 4.19.121 and is merely off by default, so LM7 turns it
+    back on for exactly those kernels. Below that version the default is a real
+    limitation rather than a conservative one, and LM7 leaves it alone.
     """
     environment = dict(os.environ)
-    if "VLLM_HOST_IP" in environment:
-        return environment
-    if config.host in ("127.0.0.1", "localhost", "::1"):
+    if "VLLM_HOST_IP" not in environment and config.host in ("127.0.0.1", "localhost", "::1"):
         environment["VLLM_HOST_IP"] = "127.0.0.1"
+    if "VLLM_WSL2_ENABLE_PIN_MEMORY" not in environment and _wsl2_supports_pinned_memory():
+        environment["VLLM_WSL2_ENABLE_PIN_MEMORY"] = "1"
     return environment
+
+
+# The first WSL2 kernel with pinned-memory support for CUDA, which is the
+# version vLLM's own check uses.
+_WSL2_PINNED_MEMORY_KERNEL = (4, 19, 121)
+
+
+def _wsl2_supports_pinned_memory() -> bool:
+    """Whether this is a WSL2 kernel new enough for CUDA pinned memory.
+
+    Read from the kernel release rather than asked of vLLM, because LM7 builds
+    this environment for ``--dry-run`` too, on machines where vLLM is installed
+    in an interpreter LM7 cannot import.
+    """
+    release = platform.uname().release
+    if "microsoft" not in release.lower():
+        return False
+    try:
+        version = tuple(int(part) for part in release.split("-")[0].split(".")[:3])
+    except ValueError:
+        # An unparseable release is not evidence of a new kernel, and guessing
+        # wrong here re-enables something vLLM turned off for a reason.
+        return False
+    return version >= _WSL2_PINNED_MEMORY_KERNEL
 
 
 __all__ = [
