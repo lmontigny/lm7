@@ -646,13 +646,49 @@ for SmolLM2, so that pairing is the one the validated list allows. `fp8` needs
 > `cpu:arm64` validation above missed it. Fixed in `serve/engine.py`, with a
 > portable regression test in `tests/test_serve.py`.
 
-Not run on NVIDIA: the vLLM handover, and anything above 1B. Still unrun
-anywhere: `intel:npu` and `tpu`. **No timing here is a measurement.** The KV
-cache is allocated at startup and the graphs compile inside the first request,
-so `/metrics` TTFT and TPOT are compile-polluted until several requests have
-run; the figures above are wall clock from a client on loopback, quoted to show
-which order of magnitude a flag moves things by. No serving benchmark exists in
-this repo, and no claim about serving performance should be sourced from it.
+### On x86-64 CPU (Intel Coffee Lake, AVX2)
+
+The `cpu:arm64` runs above are Apple's vector unit; this is the other one. An
+Intel i7-8086K (Coffee Lake, 12 threads, **AVX2 and no VNNI**) under WSL2, torch
+2.13.0+cu130, transformers 5.14.1, SmolLM2-135M-Instruct, `--target cpu`
+resolving to `cpu:x86_64` and `backend=auto` becoming `inductor`:
+
+- `/health`, `/metrics`, `/v1/models`, and the chat page at `/`
+- chat completions and `/v1/completions`, buffered and streamed
+- **greedy output byte-identical to `model.generate`** on two prompts, against an
+  FP32 eager reference on the same machine
+- 400 on `n=4` and on an oversized `max_tokens` (naming the 481 that would have
+  fit), 422 on an empty `messages`
+- `steady_frames` 0, `prefill_lengths` 1
+- **`--quantize int8` served correctly**, which had only been run on `cpu:arm64`
+
+Two things this target makes visible that the others do not:
+
+- **The KV cache is twice the size of the same setting on a GPU.** 23.6 MB at
+  `--max-model-len 512` against 11.8 MB on `nvidia:sm89`, because `--dtype auto`
+  is FP32 on CPU and FP16 on NVIDIA. Worth knowing before sizing a cache from a
+  number read off a GPU run.
+- **INT8 buys nothing here.** Warm requests were 0.53 s unquantized and
+  0.44–0.76 s across three INT8 samples — noise, not a speedup. This CPU has AVX2
+  and no VNNI, which is exactly the case
+  [quantization](quantization.md) says INT8 latency does not transfer out of.
+  The point of running it was that the quantized path *works*, not that it is
+  fast.
+
+Compiling the first request took ~2m10–2m17s, against ~100 s for the same model
+on the 4070.
+
+Not run: the vLLM CPU handover, `--api-key`/`--cors-origins` on this target
+(they are transport middleware and target-independent), and anything above 135M.
+
+Still unrun anywhere: `intel:npu` and `tpu`, and the ROCm and TPU vLLM handovers.
+Nothing above 1B has been served on any target. **No timing on this page is a
+measurement.** The KV cache is allocated at startup and the graphs compile inside
+the first request, so `/metrics` TTFT and TPOT are compile-polluted until several
+requests have run; the figures quoted throughout are wall clock from a client on
+loopback, and they are here to show which order of magnitude a flag moves things
+by. No serving benchmark exists in this repo, and no claim about serving
+performance should be sourced from it.
 
 ## Tests
 
