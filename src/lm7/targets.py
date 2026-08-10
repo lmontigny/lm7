@@ -47,12 +47,19 @@ _VENDORS = {
     "tenstorrent",
     "aws",
     "qualcomm",
+    "arm",
 }
 
 # Tenstorrent qualifiers split into an architecture generation and a board
 # model, so `tenstorrent:blackhole` pins the silicon and `tenstorrent:p150`
 # pins the card.
 _TENSTORRENT_ARCHITECTURES = frozenset({"wormhole", "blackhole"})
+
+# Arm GPU qualifiers split the same way: a shader-core generation, or a product
+# name. Arm ships exactly two product prefixes, so an unrecognized qualifier is
+# a typo rather than a part LM7 has not heard of yet.
+_ARM_ARCHITECTURES = ("valhall", "bifrost", "midgard")
+_ARM_PRODUCT_PREFIXES = ("mali-", "immortalis-")
 
 
 def parse_target(value: str | TargetSpec) -> TargetSpec:
@@ -88,6 +95,20 @@ def parse_target(value: str | TargetSpec) -> TargetSpec:
             architecture="v79",
             model="sm8750",
             remote=True,
+        )
+    if vendor == "arm":
+        # An Arm GPU is never a torch device -- Mali is reached through Vulkan
+        # and SPIR-V -- so this always describes deployment hardware the
+        # compiler host does not own, exactly like qualcomm:sm8750.
+        if qualifier is None:
+            return TargetSpec("arm", "gpu", remote=True)
+        if qualifier.startswith(_ARM_ARCHITECTURES):
+            return TargetSpec("arm", "gpu", architecture=qualifier, remote=True)
+        if qualifier.startswith(_ARM_PRODUCT_PREFIXES):
+            return TargetSpec("arm", "gpu", model=qualifier, remote=True)
+        raise TargetNotFoundError(
+            f"Unsupported Arm GPU target {value!r}; expected a shader-core generation "
+            f"({', '.join(_ARM_ARCHITECTURES)}) or a product name such as 'arm:mali-g715'."
         )
     if vendor == "tpu":
         return TargetSpec("tpu", "accelerator", model=qualifier)

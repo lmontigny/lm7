@@ -9,6 +9,7 @@ import torch
 import lm7
 from lm7.backends import iree_vulkan, registry
 from lm7.backends.base import BackendInfo, CompileRequest
+from lm7.backends.eager import EagerBackend
 from lm7.backends.iree_vulkan import IREEVulkanBackend
 from lm7.errors import ArtifactLoadError, BackendUnavailableError, CompilationError
 from lm7.targets import parse_target
@@ -307,7 +308,7 @@ def test_corrupt_vmfb_fails_checksum_validation(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("target", ["cpu", "apple:metal", "tpu:v5e"])
 def test_export_rejects_non_vulkan_gpu_targets(target, tmp_path):
-    with pytest.raises(BackendUnavailableError, match="NVIDIA, AMD, or Intel"):
+    with pytest.raises(BackendUnavailableError, match="NVIDIA, AMD, Intel, or Arm"):
         lm7.export(
             model(),
             args=(torch.randn(2, 4),),
@@ -315,6 +316,54 @@ def test_export_rejects_non_vulkan_gpu_targets(target, tmp_path):
             backend="iree_vulkan",
             output=tmp_path / "model.lm7",
         )
+
+
+@pytest.mark.parametrize("target", ["arm", "arm:valhall4", "arm:mali-g715"])
+def test_export_accepts_arm_gpu_targets(monkeypatch, tmp_path, target):
+    """The vendor gate lets Mali through, and the target skips local detection.
+
+    This proves the plumbing only. No Arm GPU has executed an LM7 VMFB -- the
+    runtime half needs an NDK cross-compile of IREE. See docs/iree-vulkan.md.
+    """
+    source = model()
+    backend = registry.get("iree_vulkan")
+    monkeypatch.setattr(backend, "probe", available_probe)
+    monkeypatch.setattr(
+        backend,
+        "compile_exported",
+        lambda _exported, path, *, options: (Path(path).write_bytes(b"vmfb"), Path(path))[1],
+    )
+    monkeypatch.setattr(backend, "load_vmfb", lambda path, **_kwargs: source)
+
+    artifact = lm7.export(
+        source,
+        args=(torch.randn(2, 4),),
+        target=target,
+        backend="iree_vulkan",
+        output=tmp_path / "model.lm7",
+        options={"vulkan_target": "valhall4"},
+    )
+
+    assert artifact.manifest.target["vendor"] == "arm"
+    assert artifact.manifest.target["remote"] is True
+    assert artifact.manifest.runtime_requirements["vulkan_target"] == "valhall4"
+
+
+def test_nothing_quietly_runs_an_arm_target_on_the_host():
+    """torch_device() maps an unknown vendor to the CPU, so an eager backend
+    that claimed arm would report a host run as a Mali one."""
+    request = CompileRequest(
+        model=model(),
+        target=parse_target("arm:mali-g715"),
+        mode="lazy",
+        transfers="automatic",
+        fallback="error",
+    )
+
+    support = EagerBackend().supports(request)
+
+    assert not support.supported
+    assert "iree_vulkan" in support.reason
 
 
 def test_export_rejects_dynamic_shapes(tmp_path):
