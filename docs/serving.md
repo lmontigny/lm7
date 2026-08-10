@@ -123,6 +123,52 @@ convenience rather than part of the API contract. The conversation lives in the
 page: LM7's engine is one static KV cache with no notion of a session, so each
 turn resends the transcript exactly as an OpenAI client would.
 
+### What it costs: dtype, weights and memory
+
+The header line says what is loaded and what it is occupying, because the two
+questions anyone asks of a local server are "will this fit" and "did my flag do
+anything":
+
+```
+unsloth/Llama-3.2-1B-Instruct · nvidia:sm89 · backend inductor · float16
+  · 2048 ctx · kv 64 MiB · weights 2.30 GiB · gpu 2.37 GiB of 11.99 GiB
+```
+
+- **`float16`** is what the weights *are*, read off the runner — not what
+  `--dtype` asked for. Same rule as `backend`: `auto` is a question, and it
+  answers FP32 on CPU, FP16 on NVIDIA, and BF16 on NVIDIA once a weight-only
+  quantization is in play. A server showing `auto` would be telling you nothing.
+- **`weights`** is parameters plus buffers, each counted once — tied weights are
+  a single allocation, which most small causal LMs have. It is the one memory
+  figure that means the same thing on every target, and the only one that shows
+  what a `--quantize` bought: SmolLM2-135M reports 513 MiB unquantized and
+  **210 MiB** under `--quantize int8`, matching the 220 MB
+  [recorded independently](#apple-m-series) when INT8 was first served.
+- **`gpu 2.37 GiB of 11.99 GiB`** is the accelerator's allocator. It counts live
+  tensors *this process* allocated: not the several hundred MB of CUDA context,
+  not the caching allocator's reserved-but-unused blocks, and nothing another
+  process holds — so it is always **smaller than `nvidia-smi`** for the same
+  PID. On the run above, `nvidia-smi` said 3630 MiB against this 2.37 GiB.
+- **`rss 1.53 GiB`** replaces it on a CPU target, where there is no allocator to
+  ask. That is the whole interpreter, and PyTorch is most of a gigabyte before
+  any model loads, so it is an upper bound on the server rather than a measure
+  of the model — which is why the page never calls both of these "memory". Read
+  `weights` for the model.
+
+`memory_kind` on `/metrics` says which of the last two you are looking at, so a
+script does not have to infer it from the target.
+
+> **On Windows there is no memory figure at all.** It has neither `/proc` nor
+> the `resource` module, and a `psapi.GetProcessMemoryInfo` call written for it
+> returned 0 on the Windows CI runner, so it was removed rather than left in
+> looking like support. `memory_bytes` is 0 there and the page omits the field;
+> dtype, weights and KV cache are unaffected. Fixing it needs someone who can
+> actually run a Windows box, which this project does not have.
+
+> Neither memory figure is a leak detector. The device number moves with
+> whatever the allocator is holding at the moment of the request, and RSS on
+> Linux does not shrink just because Python freed something.
+
 ### The status line
 
 Above the input, the page says what the server is doing — because "slow" and
@@ -198,7 +244,7 @@ that depends on tools will report an error rather than degrade.
 | --- | --- |
 | `GET /` | the built-in chat page (not in the OpenAPI schema) |
 | `GET /health` | model, target, and the backend that compiled the decode graph |
-| `GET /metrics` | request/token counts, TTFT, TPOT, KV cache bytes, and the compile state: `warm`, `prefill_lengths`, `steady_frames` |
+| `GET /metrics` | request/token counts, TTFT, TPOT, [dtype and memory](#what-it-costs-dtype-weights-and-memory), and the compile state: `warm`, `prefill_lengths`, `steady_frames` |
 | `GET /v1/models` | the one model this server holds |
 | `POST /v1/chat/completions` | `stream: true` or `false` |
 | `POST /v1/completions` | the pre-chat endpoint, same engine |

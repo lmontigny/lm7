@@ -62,6 +62,7 @@ file stays a index rather than a second, drifting description.
 | [#124](https://github.com/lmontigny/lm7/pull/124) | Refuse --quantize on a local directory by name, not by leaking a path |
 | [#128](https://github.com/lmontigny/lm7/pull/128) | Serve quantized weights in the dtype they were quantized for |
 | [#130](https://github.com/lmontigny/lm7/pull/130) | Make the vLLM handover start on CUDA, where it never had |
+| [#132](https://github.com/lmontigny/lm7/pull/132) | Say what the model is made of, and what it is occupying |
 
 ## On-device validation
 

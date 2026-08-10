@@ -16,6 +16,8 @@ This is a local single-user server; it does not batch, and a second caller waits
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -585,6 +587,94 @@ class LM7ServeEngine:
         return int(getattr(self.runner, "cache_bytes", 0))
 
     @property
+    def dtype(self) -> str:
+        """What the weights actually are, not what was asked for.
+
+        Same rule as :attr:`backend`: ``--dtype auto`` is a question, and it
+        resolves differently per target -- FP32 on CPU, FP16 on NVIDIA, and BF16
+        on NVIDIA again once a weight-only quantization is in play. Read off the
+        runner, so a quantized model reports the compute dtype its weights were
+        converted for rather than the string a caller typed.
+        """
+        dtype = getattr(self.runner, "dtype", None)
+        # `torch.float16` prints as "torch.float16"; the prefix is noise on a
+        # page that has already said what this is.
+        return str(dtype).removeprefix("torch.") if dtype is not None else "unknown"
+
+    @property
+    def weights_bytes(self) -> int:
+        """Bytes of parameters and buffers the model actually holds.
+
+        Exact and device-independent -- it is the tensors, counted -- which makes
+        it the one memory figure that means the same thing on every target, and
+        the only one that shows what a ``--quantize`` bought. Buffers are
+        included because a rotary cache is real memory even though it is not a
+        parameter.
+        """
+        model = getattr(self.runner, "model", None)
+        if model is None:
+            return 0
+        seen: set[int] = set()
+        total = 0
+        for tensor in (*model.parameters(), *model.buffers()):
+            # Tied weights -- an `lm_head` sharing the embedding, which is most
+            # small causal LMs -- are one allocation and must be counted once.
+            if id(tensor) in seen:
+                continue
+            seen.add(id(tensor))
+            total += _tensor_bytes(tensor)
+        return total
+
+    def memory_snapshot(self) -> dict[str, Any]:
+        """How much memory this server is using, and which kind of number it is.
+
+        The two are not comparable, so the kind travels with the value rather
+        than being inferred from the target by whoever reads it:
+
+        ``device`` -- an accelerator's allocator, which is what a caller sharing
+        a GPU wants. It counts live tensors *this process* allocated: not the
+        several hundred MB of CUDA context, not the caching allocator's reserved
+        but unused blocks, and nothing another process holds. It is therefore
+        always smaller than what ``nvidia-smi`` shows for this PID.
+
+        ``process`` -- resident set size, on a CPU target where there is no
+        allocator to ask. It is the whole interpreter, and PyTorch itself is
+        most of a gigabyte before any model loads, so it is an upper bound on
+        the server rather than a measure of the model. :attr:`weights_bytes` is
+        the number to read for that.
+
+        ``total`` is the device's capacity where one exists, so a page can say
+        "of 12 GiB" instead of a bare figure nobody can size.
+        """
+        device = getattr(self.runner, "device", None)
+        kind = getattr(device, "type", "cpu")
+        if kind == "cuda" and torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info(device)
+            return {
+                "memory_kind": "device",
+                "memory_bytes": int(torch.cuda.memory_allocated(device)),
+                "memory_total_bytes": int(total),
+                # Not `total - allocated`: the difference is whatever else is on
+                # the card, and on a desktop GPU that is a display server.
+                "memory_free_bytes": int(free),
+            }
+        if kind == "mps" and hasattr(torch, "mps"):
+            return {
+                "memory_kind": "device",
+                "memory_bytes": int(torch.mps.current_allocated_memory()),
+                # Unified memory: there is no separate capacity to report, and
+                # quoting the host's would imply a card that does not exist.
+                "memory_total_bytes": None,
+                "memory_free_bytes": None,
+            }
+        return {
+            "memory_kind": "process",
+            "memory_bytes": _resident_bytes(),
+            "memory_total_bytes": None,
+            "memory_free_bytes": None,
+        }
+
+    @property
     def warm(self) -> bool:
         """Whether the compile cost has been paid.
 
@@ -621,9 +711,12 @@ class LM7ServeEngine:
             "model": self.model_id,
             "target": self.target,
             "backend": self.backend,
+            "dtype": self.dtype,
             "kv_cache_bytes": self.kv_cache_bytes,
+            "weights_bytes": self.weights_bytes,
             "max_model_len": self.max_model_len,
             "warm": self.warm,
+            **self.memory_snapshot(),
             **self.graph_stats(),
             **self.metrics.to_dict(),
         }
@@ -653,6 +746,71 @@ class LM7ServeEngine:
         if isinstance(eos, int):
             return token_id == eos
         return token_id in set(eos)
+
+
+def _tensor_bytes(tensor: torch.Tensor) -> int:
+    """What one tensor really occupies, quantized or not.
+
+    ``numel() * element_size()`` is the obvious answer and it is wrong for every
+    quantized weight LM7 produces. TorchAO's wrappers keep the *logical* dtype:
+    an ``Int8Tensor`` holding INT8 data still reports ``dtype=torch.float32``
+    and ``element_size()==4``, so the naive product returns the dequantized size
+    and a quantized model looks exactly as large as the one it replaced.
+    ``untyped_storage().nbytes()`` is no better -- it describes the wrapper.
+
+    The data lives in the inner tensors a subclass names in
+    ``__tensor_flatten__``, so this recurses into those and falls back to the
+    product only for plain tensors. On SmolLM2-135M under ``--quantize int8``
+    that is 513 MiB reported the naive way against 210 MiB counted this way --
+    and 210 MiB is the figure docs/serving.md recorded independently, from
+    ``_apply_quantization``, when INT8 was first served on Apple.
+    """
+    flatten = getattr(tensor, "__tensor_flatten__", None)
+    if flatten is not None:
+        try:
+            names, _ = flatten()
+            return sum(_tensor_bytes(getattr(tensor, name)) for name in names)
+        except (AttributeError, TypeError, ValueError):
+            # An unfamiliar subclass is still a tensor; the product at least
+            # bounds it rather than reporting nothing.
+            pass
+    return int(tensor.numel() * tensor.element_size())
+
+
+def _resident_bytes() -> int:
+    """Resident set size of this process, or 0 where it cannot be read.
+
+    Two ways to ask, because the platforms do not agree and averaging over the
+    difference would report kilobytes as bytes on one of them:
+
+    - ``/proc/self/statm`` on Linux: exact, current, and no import.
+    - ``getrusage`` elsewhere -- macOS and the BSDs. Note it reports the *peak*
+      rather than the current value, and in bytes on macOS against kilobytes on
+      Linux.
+
+    **Windows has neither, and reports nothing.** A ``psapi.GetProcessMemoryInfo``
+    call through ``ctypes`` was written for it and returned 0 on the Windows CI
+    runner, so it was removed rather than left in looking like support: this
+    project's rule is that unrun is unvalidated, and a path CI shows returning
+    zero is worse than an honest gap. The chat page renders 0 as no memory field
+    at all, so a Windows server shows its dtype, weights and KV cache and omits
+    the line -- which is the correct outcome, just not the complete one.
+
+    Zero therefore means "not available", never "using no memory".
+    """
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            pages = int(handle.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, IndexError, ValueError, AttributeError):
+        pass
+    try:
+        import resource
+
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(peak if sys.platform == "darwin" else peak * 1024)
+    except (ImportError, ValueError):
+        return 0
 
 
 def _message_field(message: Any, name: str) -> str:

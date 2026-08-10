@@ -311,6 +311,23 @@ def test_the_chat_page_reads_the_compile_state() -> None:
         assert field in PAGE
 
 
+def test_metrics_carry_the_dtype_and_memory_the_page_shows() -> None:
+    """On the wire, not just in the snapshot: the response model has to pass them.
+
+    A field the engine computes and Pydantic drops is invisible to the page,
+    which is exactly how it would go unnoticed.
+    """
+    with client([1, EOS]) as http:
+        body = http.get("/metrics").json()
+    assert isinstance(body["dtype"], str)
+    assert body["memory_kind"] in ("device", "process")
+    assert isinstance(body["memory_bytes"], int)
+    assert isinstance(body["weights_bytes"], int)
+    # Optional, and null rather than absent where there is no device capacity
+    # to quote -- a client should be able to test the key, not its presence.
+    assert "memory_total_bytes" in body
+
+
 def test_metrics_count_what_actually_ran() -> None:
     with client([1, 2, 3, EOS]) as http:
         assert http.get("/metrics").json()["requests"] == 0

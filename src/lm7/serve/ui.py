@@ -198,7 +198,10 @@ async function refreshHeader() {
     meta.innerHTML =
       `<code>${escapeHtml(metrics.model)}</code> &middot; ${escapeHtml(metrics.target)}` +
       ` &middot; backend ${escapeHtml(metrics.backend)}` +
-      ` &middot; ${maxModelLen} ctx &middot; kv ${mib} MiB`;
+      (metrics.dtype ? ` &middot; ${escapeHtml(metrics.dtype)}` : "") +
+      ` &middot; ${maxModelLen} ctx &middot; kv ${mib} MiB` +
+      (metrics.weights_bytes ? ` &middot; weights ${gib(metrics.weights_bytes)}` : "") +
+      memoryLabel(metrics);
     if (!busy) {
       // A token that triggers a compile is the one regression the split into
       // separate prefill and decode graphs exists to prevent, so it outranks
@@ -214,6 +217,28 @@ async function refreshHeader() {
       }
     }
   }
+}
+
+function gib(bytes) {
+  // MiB below a gigabyte, because "0.2 GiB" for a 135M model reads as nothing.
+  return bytes >= 1073741824
+    ? `${(bytes / 1073741824).toFixed(2)} GiB`
+    : `${(bytes / 1048576).toFixed(0)} MiB`;
+}
+
+function memoryLabel(metrics) {
+  // Named for what it is, never just "memory". A device figure is this
+  // process's allocator on the accelerator -- less than nvidia-smi shows,
+  // which excludes the CUDA context and anything else on the card. A process
+  // figure is RSS on a CPU target, which is the whole interpreter and mostly
+  // PyTorch itself. Calling both "memory" would invite comparing them.
+  if (!metrics.memory_bytes) return "";
+  const used = gib(metrics.memory_bytes);
+  if (metrics.memory_kind === "device") {
+    const total = metrics.memory_total_bytes;
+    return total ? ` &middot; gpu ${used} of ${gib(total)}` : ` &middot; gpu ${used}`;
+  }
+  return ` &middot; rss ${used}`;
 }
 
 function escapeHtml(text) {
