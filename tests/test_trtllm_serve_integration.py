@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import time
@@ -72,7 +73,11 @@ def server() -> Iterator[str]:
     log = open(  # noqa: SIM115 - closed in the finally below, after the process
         os.environ.get("LM7_TRTLLM_LOG", os.devnull), "w"
     )
-    process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    # Its own process group, because TensorRT-LLM spawns MPI workers that hold
+    # the GPU: terminating only the parent leaves a worker owning several GiB of
+    # paged KV cache, and the next test to want a GPU finds none. Observed here,
+    # not theorized -- see docs/tensorrt-llm.md.
+    process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     base = f"http://127.0.0.1:{port}"
     try:
         deadline = time.monotonic() + STARTUP_TIMEOUT
@@ -92,13 +97,24 @@ def server() -> Iterator[str]:
             pytest.fail(f"trtllm-serve did not answer within {STARTUP_TIMEOUT:.0f}s")
         yield base
     finally:
-        process.terminate()
+        _terminate_group(process)
+        log.close()
+
+
+def _terminate_group(process: subprocess.Popen[bytes]) -> None:
+    """Signal the whole group, so no MPI worker outlives the run holding the GPU."""
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), signal_number)
+        except (ProcessLookupError, PermissionError):  # pragma: no cover - already gone
+            return
         try:
             process.wait(timeout=60)
-        except subprocess.TimeoutExpired:  # pragma: no cover - only on a wedged server
-            process.kill()
-            process.wait(timeout=30)
-        log.close()
+            return
+        except subprocess.TimeoutExpired:  # pragma: no cover - escalates to SIGKILL
+            continue
 
 
 def _post(base: str, path: str, body: dict[str, object]) -> dict[str, object]:

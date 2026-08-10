@@ -119,8 +119,13 @@ def trtllm_argv(config: ServeConfig) -> list[str]:
         )
     argv = [
         "trtllm-serve",
-        # A local directory hands over as cleanly as a Hub id: trtllm-serve takes
-        # either in this positional slot, exactly as `vllm serve` does.
+        # `trtllm-serve` is a command *group* on 1.2.x, not a command: the model
+        # goes under `serve`, beside `disaggregated` and the MPI worker entry
+        # points. Older releases took the model directly, so this word is a
+        # version dependency and not decoration.
+        "serve",
+        # A local directory hands over as cleanly as a Hub id: it takes either in
+        # this positional slot, exactly as `vllm serve` does.
         resolve_model_source(config.model),
         "--host",
         config.host,
@@ -132,10 +137,11 @@ def trtllm_argv(config: ServeConfig) -> list[str]:
         "--max_seq_len",
         str(config.max_model_len),
     ]
-    # No --backend: that flag is *TensorRT-LLM's* runtime selector (pytorch or
-    # the TensorRT engine), not LM7's, and the two would collide confusingly in
-    # one command line. Leaving it off means TensorRT-LLM picks its own default,
-    # which is what an unmodified `trtllm-serve` would do. See docs/serving.md.
+    # No --backend: that flag is *TensorRT-LLM's* runtime selector (`pytorch`,
+    # `tensorrt` or `_autodeploy`), not LM7's, and the two would collide
+    # confusingly in one command line. Leaving it off means TensorRT-LLM picks
+    # its own default, which on 1.2.x is `pytorch` -- what an unmodified
+    # `trtllm-serve` would do. See docs/serving.md.
     return argv
 
 
@@ -174,7 +180,8 @@ def serve_with_trtllm(config: ServeConfig) -> int:
     argv = trtllm_argv(config)
     if executable == sys.executable:
         # Importable here, but the console script may not be on PATH -- normal
-        # for an unactivated venv.
+        # for an unactivated venv. The module is the same entry point, so it
+        # keeps the `serve` subcommand that argv[1] already carries.
         argv = [sys.executable, "-m", "tensorrt_llm.commands.serve", *argv[1:]]
     else:
         argv = [executable, *argv[1:]]

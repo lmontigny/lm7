@@ -806,19 +806,55 @@ loopback, and they are here to show which order of magnitude a flag moves things
 by. No serving benchmark exists in this repo, and no claim about serving
 performance should be sourced from it.
 
+### The TensorRT-LLM handover, on the same card
+
+`--backend trtllm` was run end to end on that same RTX 4070 SUPER under WSL2,
+against TensorRT-LLM 1.2.1 and `SmolLM2-135M-Instruct`: the server came up from
+LM7's own argv, `/v1/models` listed the model as `owned_by: tensorrt_llm`, a
+chat completion answered correctly, and an SSE stream reassembled. Four
+integration tests pass in 120 s, startup included.
+
+Cold start was ~125 s and the launched server held 11.9 GiB of the 12 GiB card
+for a 135M model, because TensorRT-LLM sizes its paged cache from free memory —
+422,048 tokens of it, against the 2049 that `--max-model-len` bounds a single
+request to. The install needed six things beyond `pip install tensorrt-llm`
+before it would run at all outside NVIDIA's container. Both stories, and the
+timings, are in [TensorRT-LLM](tensorrt-llm.md).
+
+**Both launchers now start on this card**, which is the useful thing to know
+about the shared layer: `--dry-run`, `--ui-port` and the refusals come from one
+implementation, and each backend has now put a real server on the port. What
+neither has is a throughput measurement — see
+[limitations](limitations.md#serving).
+
+The two needed different amounts of help to get there, and the difference is
+instructive. vLLM needed two changes *inside* LM7 (`VLLM_WSL2_ENABLE_PIN_MEMORY`
+and `--vllm-arg`) because its failures were things a launcher could fix.
+TensorRT-LLM needed none, and instead needed six things fixed in its own
+environment before it would import — which is why LM7 sets nothing for it and
+documents the environment as a prerequisite.
+
 ## Tests
 
 ```bash
 python -m pytest tests/test_serve.py               # portable; no extra needed
 python -m pytest -m serve                          # HTTP surface; needs [serve]
 python -m pytest -m serve_load                     # a real model; needs [serve,hf]
+python -m pytest -m trtllm                         # a real trtllm-serve and a GPU
 ```
 
 `tests/test_serve.py` drives the engine against a scripted runner and a
 fake tokenizer — stop sequences, EOS, capacity refusal, cancellation, sampling,
-the lock — and runs on a plain `[dev]` install. `tests/test_serve_integration.py`
-checks the wire format an OpenAI client actually sees, and is in CI's
-`serve` job.
+the lock — and runs on a plain `[dev]` install. It also covers both launchers'
+whole contribution: the argv they build and what they refuse, with neither vLLM
+nor TensorRT-LLM installed. `tests/test_serve_integration.py` checks the wire
+format an OpenAI client actually sees, and is in CI's `serve` job.
+
+`tests/test_trtllm_serve_integration.py` is the one that cannot be faked: it
+launches a real `trtllm-serve` **from `serve_plan`'s own argv** and talks to it
+over HTTP, so what is checked is the command LM7 would actually run rather than
+a hand-written one that could pass while `lm7 model serve` was broken. It needs
+an Ampere-or-newer GPU and TensorRT-LLM's own environment, so it is not in CI.
 
 ### The load path needs a real model to test at all
 

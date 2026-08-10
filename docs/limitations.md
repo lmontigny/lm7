@@ -309,7 +309,21 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   plus one workaround LM7 does not own: FlashInfer's startup JIT wants `nvcc` and
   `ninja` and then rejects CUDA 13.3, so that box sets
   `VLLM_USE_FLASHINFER_SAMPLER=0` in the environment. Nothing about vLLM's
-  throughput has been measured here, on any platform.
+  throughput has been measured here, on any platform. The same is true of
+  TensorRT-LLM below: both launchers now start on this card, and neither has had
+  its throughput measured.
+- **`--backend trtllm` is one model on one card, and translates three flags.**
+  The handover was run end to end on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) under
+  WSL2 against TensorRT-LLM 1.2.1 and `SmolLM2-135M-Instruct` — server up, chat,
+  streaming, four integration tests. Only `--host`, `--port` and
+  `--max-model-len` are translated; `--free_gpu_memory_fraction`,
+  `--max_batch_size`, `--tp_size` and the rest have no LM7 spelling, so a caller
+  who needs them runs `trtllm-serve` directly. **Nothing measures the thing the
+  backend is for**: continuous batching is running but no concurrent request was
+  ever submitted, and there is still no comparison against the Inductor path —
+  which was the largest gap in the first revision of that PR and remains it.
+  Multi-GPU, quantized checkpoints, and anything above 135M are unrun. See
+  [TensorRT-LLM](tensorrt-llm.md).
 
 ## Evaluated, not adopted
 

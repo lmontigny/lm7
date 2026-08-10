@@ -646,7 +646,8 @@ def test_the_trtllm_command_line_carries_the_lm7_flags() -> None:
         model="hf://owner/model", target="nvidia", backend="trtllm", port=9001, max_model_len=2048
     )
     argv = trtllm_argv(config)
-    assert argv[:2] == ["trtllm-serve", "owner/model"]
+    # `serve` is a subcommand on 1.2.x, not decoration: trtllm-serve is a group.
+    assert argv[:3] == ["trtllm-serve", "serve", "owner/model"]
     assert argv[argv.index("--port") + 1] == "9001"
     # trtllm-serve's own spelling of the cache length, underscored, not renamed.
     assert argv[argv.index("--max_seq_len") + 1] == "2048"
@@ -766,7 +767,7 @@ def test_the_plan_shows_the_command_tensorrt_llm_would_be_given() -> None:
     """
     plan = serve_plan(ServeConfig(model="hf://owner/model", target="nvidia", backend="trtllm"))
     assert plan["runtime"] == "trtllm"
-    assert plan["argv"][:2] == ["trtllm-serve", "owner/model"]
+    assert plan["argv"][:3] == ["trtllm-serve", "serve", "owner/model"]
     assert isinstance(plan["runtime_installed"], bool)
     assert "runtime_executable" in plan
     # This launcher changes nothing in the environment, so there is nothing to
