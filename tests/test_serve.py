@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import lm7.serve.cli as serve_cli_module
 import lm7.serve.trtllm as trtllm_module
 import lm7.serve.vllm as vllm_module
 from lm7.cli import _build_parser, _cors_origins
@@ -643,7 +644,25 @@ def test_the_parser_collects_repeated_vllm_arguments() -> None:
 # -- TensorRT-LLM handover ------------------------------------------------
 
 
-def test_the_trtllm_command_line_carries_the_lm7_flags() -> None:
+@pytest.fixture
+def nvidia(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report an `sm89` GPU, whatever this machine has.
+
+    `trtllm_argv` resolves the target so it can refuse hardware TensorRT-LLM has
+    no kernels for, and resolving `nvidia` needs an NVIDIA GPU *attached to the
+    machine running the test* -- so without this every translation test below
+    would pass on the dev box and fail in CI, which is exactly what happened.
+    The gating itself is tested separately against `parse_target`, which needs
+    no hardware.
+    """
+    resolved = parse_target("nvidia:sm89")
+    # Every module in the serve package that resolves for itself: the plan does,
+    # and then hands off to a launcher that does it again.
+    for module in (serve_cli_module, trtllm_module, vllm_module):
+        monkeypatch.setattr(module, "resolve_target", lambda _: resolved)
+
+
+def test_the_trtllm_command_line_carries_the_lm7_flags(nvidia: None) -> None:
     config = ServeConfig(
         model="hf://owner/model", target="nvidia", backend="trtllm", port=9001, max_model_len=2048
     )
@@ -655,7 +674,7 @@ def test_the_trtllm_command_line_carries_the_lm7_flags() -> None:
     assert argv[argv.index("--max_seq_len") + 1] == "2048"
 
 
-def test_lm7_does_not_choose_tensorrt_llms_own_backend() -> None:
+def test_lm7_does_not_choose_tensorrt_llms_own_backend(nvidia: None) -> None:
     """`--backend` means something different on each side of the handover.
 
     LM7's selects the launcher; trtllm-serve's selects pytorch or the TensorRT
@@ -688,7 +707,7 @@ def test_a_pre_ampere_nvidia_card_is_refused_by_name() -> None:
     trtllm_supports(parse_target("nvidia"))
 
 
-def test_lm7_quantization_is_refused_rather_than_silently_dropped() -> None:
+def test_lm7_quantization_is_refused_rather_than_silently_dropped(nvidia: None) -> None:
     """`--quantize` quantizes LM7's own decode loop, which is not in this path."""
     config = ServeConfig(
         model="hf://owner/model", target="nvidia", backend="trtllm", quantize="fp8"
@@ -732,7 +751,7 @@ def test_tensorrt_llm_is_looked_for_where_it_is_actually_installed(
     assert Path(trtllm_module.trtllm_executable()) == expected
 
 
-def test_trtllm_passthrough_arguments_are_appended_last() -> None:
+def test_trtllm_passthrough_arguments_are_appended_last(nvidia: None) -> None:
     """The escape hatch that keeps this a launcher, same as --vllm-arg.
 
     On a desktop card the flag that matters is `--free_gpu_memory_fraction`:
@@ -752,7 +771,7 @@ def test_trtllm_passthrough_arguments_are_appended_last() -> None:
     assert argv.index("--max_seq_len") < argv.index("--free_gpu_memory_fraction")
 
 
-def test_each_launcher_refuses_the_other_ones_passthrough() -> None:
+def test_each_launcher_refuses_the_other_ones_passthrough(nvidia: None) -> None:
     """Refused rather than dropped, and this is the case a shared branch broke.
 
     Both launchers return from `serve_model` before LM7's own server is reached,
@@ -825,7 +844,7 @@ def test_the_plan_shows_the_command_vllm_would_be_given() -> None:
     assert plan["environment"].get("VLLM_HOST_IP") == "127.0.0.1"
 
 
-def test_the_plan_shows_the_command_tensorrt_llm_would_be_given() -> None:
+def test_the_plan_shows_the_command_tensorrt_llm_would_be_given(nvidia: None) -> None:
     """The same keys as the vLLM plan, because both are handovers.
 
     A launcher backend is described by which executable was found and what argv
