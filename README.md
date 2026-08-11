@@ -269,48 +269,37 @@ IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
 [JIT vs. AOT](docs/jit-vs-aot.md) and
 [artifact inspection](docs/artifact-inspection.md).
 
-### Inspect compiler IR and generated code
+### See what the compiler generated
 
-Retain the compiler layers alongside an AOTInductor artifact with `debug=True`:
+When two backends behave differently, save their compiler output to check what
+was fused or lowered and which code will run on the hardware:
 
 ```python
 artifact = lm7.export(
     model,
     args=(example_input,),
-    target="cpu",
+    target="auto",
     backend="aot_inductor",
     output="model-debug.lm7",
     debug=True,
 )
 
-for item in artifact.manifest.debug_artifacts:
-    print(item["level"], item["kind"], artifact.path / item["path"])
+for path in artifact.debug_files():
+    print(path)
 ```
 
-LM7 always records the exported graph and signature in a debug export.
-AOTInductor additionally requests FX graphs, pre- and post-fusion Inductor IR,
-and generated source. PTX, assembly, CUBIN, or HSACO are indexed when the target
-toolchain emits them; a CPU export normally contains generated C++ instead.
-Each indexed file carries its pipeline level, kind, relative path, and checksum,
-which makes outputs from different targets or compiler configurations easier to
-compare.
-
-Other export backends retain their final payload—such as OpenVINO IR,
-StableHLO, ONNX, IREE VMFB, or a TensorRT engine—beside the same exported
-PyTorch graph. That supports side-by-side output inspection, but their internal
-compiler passes are not captured by this generic debug switch.
-
-The JIT Inductor path can write the same trace classes without building an
-artifact:
+AOTInductor debug exports can include the exported and FX graphs, pre/post-fusion
+IR, generated C++ or CUDA, and PTX, assembly, or binaries when emitted. Other
+backends retain their final payload, such as OpenVINO IR, StableHLO, ONNX, IREE
+VMFB, or a TensorRT engine.
 
 ```bash
+# Capture the same Inductor trace from a JIT run.
 TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
   --target nvidia --debug-dir artifacts/cuda-debug
 ```
 
-Output is compiler- and target-dependent. LM7 preserves what the selected
-toolchain emits; it does not synthesize unavailable ISA levels or expose every
-private pass from every compiler. See
+LM7 saves only the levels the selected toolchain exposes. See
 [compiler IR and generated code](docs/development.md#compiler-ir-and-generated-code).
 
 ### Quantize with TorchAO
