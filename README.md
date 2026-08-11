@@ -106,7 +106,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 > [!NOTE]
 > **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
 >
-> **CPU:** AMD EPYC x86-64 · Arm Neoverse N2/N3
+> **CPU:** Intel Coffee Lake · AMD EPYC x86-64 · Arm Neoverse N2/N3
 >
 > **Apple:** M3 Pro · M4 · M4 Pro
 >
