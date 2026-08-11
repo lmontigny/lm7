@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1000" viewBox="0 0 1500 1000" role="img" aria-label="LM7 model serve architecture: clients, API, serve runtime, execution path, and streamed response">
+<defs><marker id="arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 1 L 6 4 L 0 7 z" fill="#94a3b4"/></marker></defs>
+<rect x="0" y="0" width="1500" height="1000" rx="0" fill="#f7f9fc"/>
+<text x="28" y="56" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#b9c4d0" text-anchor="start">01</text>
+<text x="28" y="76" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">CLIENTS</text>
+<rect x="150" y="22" width="1322" height="112" rx="14" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<text x="178" y="60" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="22" font-weight="800" fill="#1a2532" text-anchor="start">OpenAI-compatible clients</text>
+<text x="178" y="90" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#68788a" text-anchor="start">Use the built-in page or tools that already speak the OpenAI API.</text>
+<rect x="750" y="62" width="178" height="30" rx="15" fill="#e8eef7"/>
+<text x="839.0" y="82" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">Built-in chat</text>
+<rect x="946" y="62" width="164" height="30" rx="15" fill="#e8eef7"/>
+<text x="1028.0" y="82" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">OpenAI SDK</text>
+<rect x="1128" y="62" width="222" height="30" rx="15" fill="#e8eef7"/>
+<text x="1239.0" y="82" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">curl · Open WebUI</text>
+<path d="M 811.0 134 L 811.0 170" stroke="#94a3b4" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<text x="28" y="212" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#b9c4d0" text-anchor="start">02</text>
+<text x="28" y="232" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">HTTP API</text>
+<rect x="150" y="178" width="1322" height="130" rx="14" fill="#152441"/>
+<text x="182" y="223" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="27" font-weight="800" fill="#ffffff" text-anchor="start">lm7 model serve</text>
+<text x="182" y="253" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#b9c7dd" text-anchor="start">one model · one target · local endpoint</text>
+<rect x="670" y="204" width="230" height="30" rx="15" fill="#ffffff"/>
+<text x="785.0" y="224" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">/v1/chat/completions</text>
+<rect x="920" y="204" width="205" height="30" rx="15" fill="#ffffff"/>
+<text x="1022.5" y="224" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">/v1/completions</text>
+<rect x="1145" y="204" width="155" height="30" rx="15" fill="#ffffff"/>
+<text x="1222.5" y="224" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1a2532" text-anchor="middle">/v1/models</text>
+<rect x="670" y="253" width="180" height="30" rx="15" fill="#243858"/>
+<text x="760.0" y="273" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">SSE streaming</text>
+<rect x="870" y="253" width="190" height="30" rx="15" fill="#243858"/>
+<text x="965.0" y="273" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">sampling + stops</text>
+<rect x="1080" y="253" width="220" height="30" rx="15" fill="#243858"/>
+<text x="1190.0" y="273" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">/health · /metrics · /docs</text>
+<path d="M 811.0 308 L 811.0 346" stroke="#94a3b4" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<text x="28" y="378" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#b9c4d0" text-anchor="start">03</text>
+<text x="28" y="398" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">SERVE</text>
+<text x="28" y="414" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">RUNTIME</text>
+<rect x="138" y="336" width="1346" height="238" rx="14" fill="#eff5fd" stroke="#4a7fd0" stroke-width="1"/>
+<rect x="150.0" y="370" width="318.5" height="100" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="150.0" y="370" width="5" height="100" rx="3" fill="#4a7fd0"/>
+<text x="172.0" y="401" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">Load the model</text>
+<text x="172.0" y="425" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">hf:// model or local directory</text>
+<rect x="484.5" y="370" width="318.5" height="100" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="484.5" y="370" width="5" height="100" rx="3" fill="#4a7fd0"/>
+<text x="506.5" y="401" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">Prepare requests</text>
+<text x="506.5" y="425" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">chat template · limits · sampling</text>
+<rect x="819.0" y="370" width="318.5" height="100" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="819.0" y="370" width="5" height="100" rx="3" fill="#0f8f8f"/>
+<text x="841.0" y="401" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">Own generation state</text>
+<text x="841.0" y="425" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">one static KV cache</text>
+<rect x="1153.5" y="370" width="318.5" height="100" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="1153.5" y="370" width="5" height="100" rx="3" fill="#4a7fd0"/>
+<text x="1175.5" y="401" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">Report what runs</text>
+<text x="1175.5" y="425" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">target · backend · dtype · memory</text>
+<rect x="150" y="490" width="1322" height="56" rx="10" fill="#152441"/>
+<text x="178" y="524" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#ffffff" text-anchor="start">Safety boundary: one model · one request at a time · cancellation on disconnect</text>
+<path d="M 811.0 574 L 811.0 634" stroke="#94a3b4" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<text x="28" y="666" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#b9c4d0" text-anchor="start">04</text>
+<text x="28" y="686" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">EXECUTION</text>
+<rect x="138" y="624" width="1346" height="176" rx="14" fill="#f5f2fd" stroke="#8b6fd4" stroke-width="1"/>
+<rect x="150" y="652" width="790" height="118" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="150" y="652" width="5" height="118" rx="3" fill="#0f8f8f"/>
+<text x="172" y="683" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">LM7 compiled path · default</text>
+<text x="172" y="707" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">compile_generation → prefill + decode graphs → static KV cache</text>
+<rect x="178" y="720" width="116" height="30" rx="15" fill="#e7f5f4"/>
+<text x="236.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#0f8f8f" text-anchor="middle">CPU</text>
+<rect x="310" y="720" width="152" height="30" rx="15" fill="#e7f5f4"/>
+<text x="386.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#0f8f8f" text-anchor="middle">Apple MPS</text>
+<rect x="478" y="720" width="162" height="30" rx="15" fill="#e7f5f4"/>
+<text x="559.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#0f8f8f" text-anchor="middle">NVIDIA GPU</text>
+<rect x="656" y="720" width="236" height="30" rx="15" fill="#e7f5f4"/>
+<text x="774.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#0f8f8f" text-anchor="middle">target=auto · backend=auto</text>
+<rect x="958" y="652" width="514" height="118" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<rect x="958" y="652" width="5" height="118" rx="3" fill="#8b6fd4"/>
+<text x="980" y="683" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="800" fill="#1a2532" text-anchor="start">Throughput handoff</text>
+<text x="980" y="707" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#68788a" text-anchor="start">vLLM or TensorRT-LLM owns the port</text>
+<rect x="984" y="720" width="190" height="30" rx="15" fill="#eee9fb"/>
+<text x="1079.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#7257bc" text-anchor="middle">batching · paged attention</text>
+<rect x="1190" y="720" width="178" height="30" rx="15" fill="#eee9fb"/>
+<text x="1279.0" y="740" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#7257bc" text-anchor="middle">LM7 steps out</text>
+<path d="M 811.0 800 L 811.0 858" stroke="#94a3b4" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<text x="28" y="890" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#b9c4d0" text-anchor="start">05</text>
+<text x="28" y="910" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#68788a" text-anchor="start" letter-spacing="0.08em">RESPONSE</text>
+<rect x="138" y="848" width="1346" height="108" rx="14" fill="#eef9f1" stroke="#5aab74" stroke-width="1"/>
+<rect x="150" y="874" width="1322" height="56" rx="12" fill="#ffffff" stroke="#dde4ec" stroke-width="1"/>
+<text x="178" y="909" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="800" fill="#1a2532" text-anchor="start">OpenAI-compatible response</text>
+<rect x="640" y="887" width="170" height="30" rx="15" fill="#e7f5ea"/>
+<text x="725.0" y="907" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#3f8b59" text-anchor="middle">buffered JSON</text>
+<rect x="830" y="887" width="190" height="30" rx="15" fill="#e7f5ea"/>
+<text x="925.0" y="907" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#3f8b59" text-anchor="middle">SSE token stream</text>
+<rect x="1040" y="887" width="260" height="30" rx="15" fill="#e7f5ea"/>
+<text x="1170.0" y="907" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#3f8b59" text-anchor="middle">same client · different hardware</text>
+<text x="811.0" y="982" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#68788a" text-anchor="middle">Built-in serving is for local validation. Use a delegated engine when concurrency and throughput matter.</text>
+</svg>
