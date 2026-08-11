@@ -26,6 +26,13 @@ The extra installs the `litert-torch` converter and `ai-edge-litert` runtime.
 The converter stack is much larger than the runtime because it also includes
 the StableHLO/JAX lowering and quantization dependencies.
 
+This stack does **not** currently install on Linux aarch64. On the GCP Axion
+Neoverse N3 host, `litert-torch` 0.9.2/0.9.3 is visible to pip, but both versions
+depend on `litert-converter==0.3.*`, and pip reports no matching
+`litert-converter` distribution for `cp311`/Linux aarch64. That means the Arm
+server cannot even reach LM7's LiteRT integration tests; it is a packaging gap,
+not a measured converter/runtime result.
+
 ## Export and reload
 
 ```python
@@ -123,6 +130,8 @@ The initial integration is deliberately narrow:
 - FP32 MLP conversion/reload with maximum error below `6e-8`.
 - Keyword-input and tuple-output reload with exact agreement.
 - LiteRT Torch 0.9.2, LiteRT 2.1.6, and PyTorch 2.12.1 on Linux x86-64.
+- Not Linux aarch64: the converter dependency is not published there, as
+  documented above.
 - The same `.tflite` executed on a Snapdragon 8 Elite (arm64-v8a, Android 16),
   agreeing with host eager to 1.2e-07 on CPU and 8.9e-08 through the Adreno GPU
   delegate. See [android-device-testing.md](android-device-testing.md); the GPU

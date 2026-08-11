@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import importlib.util
+import platform
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,16 @@ class LiteRTBackend:
             package for module, package in _REQUIRED_MODULES.items() if not _has_module(module)
         ]
         if missing:
+            if "litert-torch" in missing and _is_linux_aarch64():
+                return BackendInfo(
+                    self.name,
+                    None,
+                    False,
+                    "LiteRT export support is not currently installable on Linux aarch64: "
+                    "litert-torch depends on litert-converter==0.3.*, which has no "
+                    "Linux aarch64 distribution. Export on a supported host and run "
+                    "the resulting .tflite artifact with a device LiteRT runtime.",
+                )
             return BackendInfo(
                 self.name,
                 None,
@@ -202,6 +213,13 @@ def runtime_version() -> str | None:
         return importlib.metadata.version("litert-torch")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _is_linux_aarch64() -> bool:
+    return platform.system() == "Linux" and platform.machine().lower() in {
+        "aarch64",
+        "arm64",
+    }
 
 
 def _to_torch(value: Any) -> Any:
