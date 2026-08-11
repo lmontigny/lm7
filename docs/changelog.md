@@ -114,6 +114,7 @@ file stays a index rather than a second, drifting description.
 | [#52](https://github.com/lmontigny/lm7/pull/52) | Run the ExecuTorch export on ARM64 in CI |
 | [#117](https://github.com/lmontigny/lm7/pull/117) | Stop downgrading torch under ExecuTorch, which broke the Core ML CI job |
 | [#125](https://github.com/lmontigny/lm7/pull/125) | Make CI load a real model, so the serve load path stops being untested |
+| [#141](https://github.com/lmontigny/lm7/pull/141) | Run the portable suite on the Arm that a deployment actually is |
 
 ## Evaluations that did not become backends
 

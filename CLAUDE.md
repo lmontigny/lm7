@@ -184,10 +184,13 @@ marketing copy — match that:
   proves the portable path. Install the extra and use `-m <marker>` (matching
   the marker list in `pyproject.toml`) to actually exercise one.
 - CI (`.github/workflows/ci.yml`) mirrors this: a `quality` job for the
-  portable suite/lint/mypy, real-hardware jobs where GitHub-hosted runners
-  happen to provide the hardware (Apple Silicon MPS/Core ML on `macos-26`,
-  ARM64 on `ubuntu-24.04-arm`, Windows on `windows-2025`), and a CPU-only
-  `backend` matrix for extras that don't need special hardware. CUDA, ROCm,
+  portable suite/lint/mypy, a `quality-arm64` job running that same suite on
+  `ubuntu-24.04-arm` (the only Linux Arm coverage — lint/mypy aren't repeated
+  there because they can't vary by architecture), real-hardware jobs where
+  GitHub-hosted runners happen to provide the hardware (Apple Silicon MPS/Core
+  ML on `macos-26`, ExecuTorch on `ubuntu-24.04-arm`, Windows on
+  `windows-2025`), and a CPU-only `backend` matrix for extras that don't need
+  special hardware. CUDA, ROCm,
   TPU, Tenstorrent, TensorRT, and GPU-accelerated jobs in general aren't
   there: GitHub's GPU-hosted runners exist but are gated to Organizations on
   the Team/Enterprise Cloud plan, which this personal-account repo isn't on.
