@@ -172,6 +172,11 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   where the INT8 matrix instructions this part advertises are never reached,
   because weight-only quantization issues no INT8 GEMM for them to accelerate.
 
+- [Sparse MoE](limitations.md#what-torchcompile-actually-does-to-a-sparse-moe), where zero graph
+  breaks and the near-1.0x CPU speedup both reproduce from a second ISA, and
+  where a tiny MoE compiles 1.4-1.5x faster on the same host that gets nothing
+  from compiling the FP32 MLP.
+
 Not measured on Arm: artifact portability for ONNX Runtime or ExecuTorch built
-on Arm, and `--quantize int8` through `lm7 model serve`. See
-[limitations](limitations.md).
+on Arm, and `--quantize int8` through `lm7 model serve`. Mixtral-8x7B does not
+fit: ~93 GB at BF16 against 31 GB of RAM. See [limitations](limitations.md).
