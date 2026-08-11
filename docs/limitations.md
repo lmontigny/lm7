@@ -221,10 +221,13 @@ had stated.
   accelerator target with that property; everything below is exercised by
   hand at best.
 - **CPU CI now spans three OS/architecture combinations**, not just one: Linux
-  x86-64 (the original `quality` job), Linux ARM64 (`ubuntu-24.04-arm`, which
-  is also where the `executorch` export suite runs on real ARM64 hardware),
-  and native Windows (`windows-2025`, with `cl.exe` on `PATH` for
-  TorchInductor's C++ codegen — passing, as of the PR that added it).
+  x86-64 (the original `quality` job), Linux ARM64 (`quality-arm64` on
+  `ubuntu-24.04-arm`, which is also where the `executorch` export suite runs on
+  real ARM64 hardware), and native Windows (`windows-2025`, with `cl.exe` on
+  `PATH` for TorchInductor's C++ codegen — passing, as of the PR that added it).
+  The ARM64 leg ran only the ExecuTorch export file until `quality-arm64` was
+  added; the portable suite had never run on Linux Arm, which is the one
+  combination a Graviton or Axion deployment actually is.
 - **A real Android phone (Snapdragon 8 Elite, via a cloud rental) has checked
   three export paths by hand**: `executorch`, `litert` (both its CPU and GPU
   delegates), and `qnn`. None of this is CI — it is a one-time device check,
