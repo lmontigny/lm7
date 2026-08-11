@@ -247,6 +247,8 @@ uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
 
+![LM7 model serve from OpenAI-compatible clients through the API, single-user runtime, compiled or delegated execution, and streamed responses](docs/figures/lm7-model-serve.png)
+
 Open <http://127.0.0.1:8000> for the built-in chat page, or connect an
 OpenAI-compatible client to `http://127.0.0.1:8000/v1`. The server exposes
 chat completions, text completions, model discovery, health, metrics, and an
