@@ -291,11 +291,12 @@ Examples and reproducible benchmark harnesses live in
 
 ## Design thesis
 
-LM7 makes a narrower architectural bet: hardware portability does not
-necessarily require another compiler or runtime. Existing stacks such as
-TorchInductor, TensorRT, OpenVINO, OpenXLA, and ExecuTorch already contain
-substantial hardware-specific work. LM7 provides a neutral layer above them
-instead of replacing them.
+LM7's architectural bet is that hardware portability does not require owning
+another compiler or runtime. Existing stacks such as TorchInductor, TensorRT,
+OpenVINO, OpenXLA, and ExecuTorch already contain substantial hardware-specific
+work. LM7 preserves the PyTorch programming model and provides a vendor-neutral
+orchestration layer above those stacks, selecting the appropriate toolchain
+instead of replacing it.
 
 ## Documentation
 
