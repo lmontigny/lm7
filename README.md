@@ -269,7 +269,11 @@ IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
 [JIT vs. AOT](docs/jit-vs-aot.md) and
 [artifact inspection](docs/artifact-inspection.md).
 
-Quantize a validated Hugging Face model:
+### Quantize with TorchAO
+
+LM7 uses [TorchAO](https://github.com/pytorch/ao) for runtime quantization of
+validated Hugging Face models. Available modes include INT8, FP8, and NVFP4
+weight quantization, plus activation-quantized variants on supported NVIDIA GPUs.
 
 ```bash
 uv pip install -e ".[hf,torchao]"
@@ -277,8 +281,10 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target cpu --quantize int8
 ```
 
-Quantization is admitted per model and mode rather than promised universally.
-See [quantization](docs/quantization.md) for measurements and accuracy checks.
+Quantization is admitted per model, mode, target, and dtype rather than promised
+universally. OpenVINO and ExecuTorch exports use their own quantization paths
+instead of TorchAO. See [quantization](docs/quantization.md) for supported modes,
+measurements, and accuracy checks.
 
 Examples and reproducible benchmark harnesses live in
 [`examples/`](examples) and [`benchmarks/`](benchmarks).
