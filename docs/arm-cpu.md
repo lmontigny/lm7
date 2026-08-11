@@ -114,7 +114,7 @@ the host above:
 | `executorch` | resolves | `tests/test_executorch_integration.py`: 6 passed |
 | `tvm` | **run** — suite passes, artifact validated, see [TVM](tvm.md#linux-aarch64-neoverse-servers) | `tests/test_tvm_integration.py`: 15 passed |
 | `torchao` | resolves | Used by the Arm INT8 measurement, not a backend by itself |
-| `litert` | resolves | Not run here; LiteRT Torch caps PyTorch below 2.13, so it needs a separate environment |
+| `litert` | **does not resolve** | `litert-torch` is visible, but its `litert-converter==0.3.*` dependency has no Linux aarch64 distribution |
 | `iree-vulkan` | resolves | Not useful on this VM: GCP Axion exposes no Mali/Vulkan GPU |
 | `serve` (FastAPI, uvicorn) | resolves | `lm7 model serve` ran; see below |
 | `zentorch` | **no wheel** — x86-64 Linux only, by construction | N/A |
@@ -189,8 +189,8 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   host — 4.16x over eager, more than it manages on Intel or Apple — while its
   INT8 route is the one that does *not* transfer from Intel.
 
-Not measured on Arm: LiteRT conversion in its older-Torch environment, Mali
-Vulkan execution, wider-SVE server parts, 512-token prompts on the N3, and
-artifact portability for ONNX Runtime or ExecuTorch built on Arm. Mixtral-8x7B
-does not fit: ~93 GB at BF16 against 31 GB of RAM. See
-[limitations](limitations.md).
+Not measured on Arm: Mali Vulkan execution, wider-SVE server parts, 512-token
+prompts on the N3, artifact portability for ONNX Runtime or ExecuTorch built on
+Arm. LiteRT conversion is blocked earlier than measurement: the converter
+dependency does not publish a Linux aarch64 wheel. Mixtral-8x7B does not fit:
+~93 GB at BF16 against 31 GB of RAM. See [limitations](limitations.md).
