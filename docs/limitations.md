@@ -112,6 +112,9 @@ point:
 | OLMoE-1B-7B (6.92B) | 5.14.1 | nvidia `sm120` | **1** | **0** | 17.88 ms | 11.20 ms | **1.60x** |
 | OLMoE-1B-7B (6.92B) | 5.14.1 | cpu | **1** | **0** | 345.0 ms | 335.0 ms | 1.03x |
 | Mixtral-8x7B (46.7B) | 5.14.1 | nvidia `sm120` | **1** | **0** | 60.43 ms | 55.62 ms | 1.09x |
+| Mixtral, tiny | 5.15.0 | cpu `aarch64` | **1** | **0** | 3.431 ms | 2.291 ms | **1.50x** |
+| OLMoE, tiny | 5.15.0 | cpu `aarch64` | **1** | **0** | 4.472 ms | 3.221 ms | **1.39x** |
+| OLMoE-1B-7B (6.92B) | 5.15.0 | cpu `aarch64`, BF16 | **1** | **0** | 449.6 ms | 420.7 ms | 1.07x |
 
 Four corrections come out of that.
 
@@ -142,6 +145,34 @@ model gets 1.03x on CPU and 1.60x on an `sm120` GPU. The 1.03x reproduces the
 did not generalize was reading a CPU result as a property of sparse MoE.
 
 Every row agrees with `eager` on the greedy next token.
+
+The last three rows are an Arm Neoverse N3 on transformers 5.15.0, and they say
+the same things from a second CPU ISA:
+
+- **Zero graph breaks is not an x86 property.** One graph, no breaks, on both
+  tiny architectures and on the 6.92B model — a third ISA and a minor version
+  past the 5.14.1 the rows above used.
+- **1.07x on the 6.92B model reproduces the 1.03x on x86 CPU.** Two unrelated
+  CPUs, two ISAs, the same "compiling a large MoE on a CPU is worth nothing".
+  That is the claim that most deserved a second host, because it was the one
+  originally over-generalized into a statement about MoE.
+- **The speedup shrinks with size on CPU too**, 1.50x and 1.39x on the tiny
+  configs against 1.07x at 6.92B, matching the monotonic decline documented on
+  `sm120` below.
+- **It also shows what the FP32 MLP could not.** [CPU
+  inference](cpu.md#latency-on-a-neoverse-n3) finds Inductor worth nothing on
+  this part, because that workload is 97–99% GEMM and leaves fusion under 3% to
+  win. A tiny MoE is the opposite shape — many small ops — and compiles 1.4–1.5x
+  faster on the same machine. Both results are about the workload, not the host.
+
+Two caveats on those rows. The 6.92B one ran at **BF16**, not the FP32 the CPU
+row above it used: 6.92B parameters at FP32 is ~28 GB against this host's 31 GB,
+which is too close to risk. So its 449.6 ms is not comparable with the 345.0 ms
+above it, and BF16 is not a free win on this part anyway — see [the Arm dtype
+section](cpu.md#the-same-question-on-arm-where-the-logs-cannot-answer-it). The
+ratio is the comparable part. And **Mixtral-8x7B was not run on Arm**: at ~93 GB
+BF16 it does not fit in 31 GB, so the largest real MoE this host can hold is
+OLMoE-1B-7B.
 
 ### The real Mixtral, and what compiling is worth at 46.7B
 
