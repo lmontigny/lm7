@@ -53,6 +53,7 @@ def test_backend_is_registered_but_export_only(monkeypatch):
 
 def test_probe_reports_missing_optional_packages(monkeypatch):
     monkeypatch.setattr(litert_backend, "_has_module", lambda _name: False)
+    monkeypatch.setattr(litert_backend, "_is_linux_aarch64", lambda: False)
 
     probe = LiteRTBackend().probe()
 
@@ -60,6 +61,22 @@ def test_probe_reports_missing_optional_packages(monkeypatch):
     assert '".[litert]"' in probe.reason
     assert "litert-torch" in probe.reason
     assert "ai-edge-litert" in probe.reason
+
+
+def test_probe_reports_linux_aarch64_litert_torch_packaging_gap(monkeypatch):
+    monkeypatch.setattr(
+        litert_backend,
+        "_has_module",
+        lambda name: name != "litert_torch",
+    )
+    monkeypatch.setattr(litert_backend, "_is_linux_aarch64", lambda: True)
+
+    probe = LiteRTBackend().probe()
+
+    assert not probe.available
+    assert "Linux aarch64" in probe.reason
+    assert "litert-converter==0.3.*" in probe.reason
+    assert '".[litert]"' not in probe.reason
 
 
 @pytest.mark.parametrize("version", [(2, 3), (2, 13)])
