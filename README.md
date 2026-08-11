@@ -4,59 +4,26 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-**Run the same PyTorch model on any supported accelerator by changing one
-string.**
+**Keep your PyTorch model. Change the hardware target, not your application.**
 
-LM7 is a PyTorch-first compiler orchestration layer for local inference. Hand it
-a model you already run — a pretrained network, a Hugging Face causal LM, a
-vision model, a single layer — and get back a normal callable.
+LM7 is a PyTorch-first compiler orchestration layer for local inference. It
+keeps the normal `nn.Module` interface while detecting hardware, selecting an
+available compiler, moving inputs, caching compiled variants, and handling
+controlled fallback.
 
 ```python
 import lm7
-from transformers import AutoModelForCausalLM
 
-model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct").eval()
-
-model = lm7.compile(model, target="auto")  # detect the best local device
-model = lm7.compile(model, target="nvidia:sm89")  # or pin it exactly
+compiled = lm7.compile(model.eval(), target="auto")
+output = compiled(example_input)
 ```
-
-`lm7.compile` returns a normal `nn.Module`, so the rest of your code does not
-change — no device juggling, no per-vendor branches, no manual compile cache.
-LM7 resolves the target, picks a compatible compiler, moves the inputs, compiles
-once per input shape, and falls back to plain PyTorch if a backend cannot handle
-the model.
 
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
-> compiled-artifact compatibility are not stable, and `cpu` and `apple` are the
-> only targets with CI coverage — GitHub-hosted runners provide no GPU, so
-> NVIDIA, AMD, Intel, TPU and mobile targets are validated by hand when at all.
-> See [limitations](docs/limitations.md) before depending on it.
-
-## Why
-
-**LM7 writes no kernels and no compiler of its own.** Every vendor already ships
-one; LM7 drives it. The same call site reaches a different vendor toolchain
-based only on the target you name:
-
-```python
-lm7.compile(model, target="cpu")  # TorchInductor, C++/OpenMP
-lm7.compile(model, target="nvidia")  # TorchInductor, Triton + cuBLAS/cuDNN
-lm7.compile(model, target="nvidia", backend="tensorrt")  # Torch-TensorRT instead
-lm7.compile(model, target="apple")  # TorchInductor, Metal via MPS
-lm7.compile(model, target="tpu")  # PyTorch/XLA and OpenXLA
-lm7.compile(model, target="tenstorrent")  # tt-xla, tt-mlir, tt-metal
-lm7.compile(model, target="intel:npu")  # OpenVINO, Intel NPU plugin
-```
-
-You do not install or learn five toolchains to try a second device; you change a
-string, and `lm7 doctor` reports what is missing. The corollary is that LM7's
-reach is bounded by what those toolchains already support.
-
-For the per-vendor code this replaces — detection branches, device-string
-inconsistencies, and the behaviour you would otherwise have to know about — see
-[what LM7 replaces](docs/what-this-replaces.md).
+> compiled-artifact compatibility are not stable. CPU and Apple are the only
+> targets with continuous integration coverage; other targets are tested by
+> hand, export-tested, mock-tested, or parse-only as documented below. See
+> [limitations](docs/limitations.md) before depending on it.
 
 ## Why not just `torch.compile`?
 
@@ -70,22 +37,16 @@ compiler you want to use. LM7 is for the case where the hardware can change.
 
 The missing layer is everything around the compiler call:
 
-- detecting whether the machine has NVIDIA, AMD ROCm, Intel XPU, Apple MPS, TPU,
-  or another accelerator;
+- detecting NVIDIA, AMD ROCm, Intel XPU, Apple MPS, TPU, and other accelerators;
 - normalizing their different device semantics;
-- selecting an available compiler for that target;
-- moving nested model inputs to the right device;
-- caching compiled variants by input signature;
+- selecting an available compiler for the resolved target;
+- moving nested inputs and caching variants by input signature;
 - handling first-call compilation failures and controlled fallback;
-- explaining why a backend was or was not selected;
-- exporting, inspecting, and loading artifacts produced by different compiler
-  stacks.
+- explaining backend selection and managing artifacts across compiler stacks.
 
 Some targets are not an Inductor call at all: TPU uses PyTorch/XLA and OpenXLA,
 Intel NPU uses OpenVINO, and other accelerators bring their own compiler and
 runtime.
-
-LM7 makes those paths one interface:
 
 ```python
 lm7.compile(model, target="auto")
@@ -98,139 +59,119 @@ lm7.compile(model, target="intel:npu")
 **PyTorch and hardware vendors provide the compilers. LM7 provides the
 vendor-neutral orchestration layer between them.**
 
-That neutrality is deliberate. NVIDIA, AMD, Intel, Google, Apple, and accelerator
-startups naturally optimize their own vertical stacks. LM7 sits above those
-competing ecosystems and can choose or expose whichever toolchain is appropriate
-for the target without owning a compiler of its own.
-
 If one `torch.compile(model)` call already covers your machine and deployment
 needs, you probably do not need LM7. If your PyTorch application needs to
-**survive a change of hardware**, LM7 is the layer intended to make that change
-boring.
+**survive a change of hardware**, LM7 is intended to make that change boring.
 
 See [what LM7 replaces](docs/what-this-replaces.md) for the concrete per-vendor
 code and behavior it centralizes.
 
+## When should I use LM7?
+
+Use LM7 when your PyTorch application needs to run on hardware you do not want
+to hard-code: a developer laptop today, NVIDIA tomorrow, a TPU or another
+accelerator later.
+
+LM7 is useful when you want to:
+
+- ship the same PyTorch application to machines with different hardware;
+- compare compiler backends without rewriting application code;
+- detect hardware and compiler availability at runtime;
+- build, inspect, and load artifacts through one interface.
+
+If you have one fixed target and already know the vendor stack you want, use
+that stack directly. A fixed NVIDIA deployment running vLLM, for example, does
+not need LM7.
+
 ## How it works
 
 LM7 sits between one PyTorch model and the vendor toolchains that compile it.
-`lm7.compile()` runs the result in this process; `lm7.export()` writes a `.lm7`
-artifact you can ship. Both take the same `target` string.
+`lm7.compile()` returns a normal callable; `lm7.export()` writes a versioned
+`.lm7` artifact. Both accept the same target vocabulary.
 
-![LM7 in five layers: the PyTorch model, the LM7 orchestrator, the backends per vendor, the lowering and runtime beneath them, and the hardware](docs/figures/lm7-architecture.png)
+![LM7 in five layers: the PyTorch model, the LM7 orchestrator, vendor backends, their lowering and runtime layers, and hardware](docs/figures/lm7-architecture.png)
 
-Every CPU reaches LM7 through the same `cpu` target — Intel, AMD, Apple and Arm
-alike — so a vendor column shows its CPU beside its accelerators because that is
-the machine you actually have. Backend priority, exact target strings, and
-artifact formats are in the table below.
+- **Targets and backends are separate.** A target says where the model runs
+  (`cpu`, `nvidia`, `apple`, `tpu`); a backend says which compiler gets it
+  there (`inductor`, `tensorrt`, `openxla`).
+- **Detection is automatic.** `target="auto"` prefers a detected accelerator and
+  otherwise uses CPU.
+- **Compilation is lazy and signature-aware.** The first call compiles; compiled
+  variants are cached by input signature.
+- **Fallback is controlled.** A failed backend can warn and fall back to eager,
+  or `fallback="error"` can stop immediately.
+- **Selection is inspectable.** `lm7 explain --target auto` reports which backend
+  would be selected and why.
 
-The figure is generated by `docs/figures/architecture.py`, so a backend or badge
-is corrected in one table rather than redrawn.
+## Validated on real hardware
 
-- **Target and backend are separate.** A *target* is where the model runs
-  (`cpu`, `nvidia`, `apple`, `tpu`, …); a *backend* is the compiler used to get
-  there (`inductor`, `tensorrt`, `openxla`, …). Pin either, or let LM7 choose.
-  That split is what makes hardware swappable.
-- **Detection is automatic.** `target="auto"` prefers a detected GPU or
-  accelerator, and otherwise uses the CPU.
-- **JIT compilation is lazy and per-input-shape.** Nothing compiles until the
-  first call; that call is slow and later calls are fast. AOT moves that cost out
-  of the process — see [JIT vs. AOT](#jit-vs-aot).
-- **Fallback is safe by default.** If a backend fails to compile, LM7 falls back
-  to PyTorch eager and warns. Use `fallback="error"` to stop instead.
+> [!NOTE]
+> **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
+>
+> **CPU:** AMD EPYC x86-64 · Arm Neoverse N2/N3
+>
+> **Apple:** M3 Pro · M4 · M4 Pro
+>
+> **Google:** TPU v6e
+>
+> **Qualcomm:** Snapdragon 8 Elite
 
-## Supported hardware
+These machines have executed LM7 paths on physical hardware. Only CPU and Apple
+MPS run in CI; the remaining machines were exercised manually. Exact parts,
+backends, workloads, and known gaps are recorded in
+[tested hardware](docs/tested-hardware.md).
 
-| Vendor | Hardware | `target` | Backends (highest priority first) |
+## Integrated targets
+
+Integration means that LM7 has target and backend code for a toolchain. It does
+**not** mean every row has run on physical hardware.
+
+| Vendor | Hardware | `target` | Integrated backends |
 | --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | `inductor`, `aot_inductor`, `openvino`, `onnxruntime`, `eager` (+ `litert`, `tvm`, `zentorch`) |
-| NVIDIA | GPU | `nvidia` | `inductor`, `aot_inductor`, `tensorrt`, `onnxruntime`, `eager` (+ `iree_vulkan`) |
-| AMD | GPU (ROCm/Vulkan) | `amd` | `inductor`, `eager` (+ `iree_vulkan`) |
-| Apple | GPU (Metal) | `apple` | `inductor`, `aot_inductor`, `eager` (+ `coreml`) |
-| Intel | GPU (XPU/Vulkan) | `intel` | `inductor`, `eager` (+ `iree_vulkan`) |
-| Arm | GPU (Mali, Vulkan) | `arm`, `arm:mali-g715` | `iree_vulkan` (export only, **compiles but has never run on a device**) |
-| Intel | NPU (Core Ultra AI Boost) | `intel:npu` | `openvino` |
-| Google | TPU | `tpu` | `openxla`, `eager` |
-| Tenstorrent | Wormhole, Blackhole | `tenstorrent` | `tenstorrent`, `eager` |
-| Android, iOS, embedded | CPU (ARM64, x86-64) | `cpu` | `executorch` (export only) |
-| Qualcomm | Snapdragon 8 Elite HTP v79 | `qualcomm:sm8750` | `qnn` (export only) |
-| AWS | Trainium | `aws:trainium` | parses only, never executed |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | Inductor, AOTInductor, OpenVINO, ONNX Runtime, eager; explicit/export integrations |
+| NVIDIA | GPU | `nvidia` | Inductor, AOTInductor, TensorRT, ONNX Runtime, eager, IREE Vulkan export |
+| AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, eager, IREE Vulkan export |
+| Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager, Core ML export |
+| Intel | GPU (XPU/Vulkan) | `intel` | Inductor, eager, IREE Vulkan export |
+| Arm | GPU (Mali/Vulkan) | `arm`, `arm:mali-g715` | IREE Vulkan export; never executed on device |
+| Intel | NPU | `intel:npu` | OpenVINO; mock-tested |
+| Google | TPU | `tpu` | OpenXLA, eager |
+| Tenstorrent | Wormhole, Blackhole | `tenstorrent` | tt-xla/tt-mlir/tt-metal, eager; mock-tested |
+| Mobile/embedded | CPU | `cpu` | ExecuTorch export |
+| Qualcomm | Snapdragon 8 Elite HTP | `qualcomm:sm8750` | QNN export |
+| AWS | Trainium | `aws:trainium` | Parse only; never executed |
 
-Any x86-64 or ARM64 CPU runs through `cpu`, Intel and AMD included. A vendor
-listed more than once has *additional* accelerators on top of that. Add a
-qualifier to pin an exact part — `nvidia:sm89`, `amd:gfx942`,
-`tenstorrent:blackhole` — or run `lm7 targets` to see what's actually on your
-machine. Backends in parentheses are export-only or explicit — see
-[backends](#backends).
+AMD ROCm GPU, Intel XPU, Tenstorrent, Intel NPU, and Trainium have not run
+through LM7 on real hardware. See [tested hardware](docs/tested-hardware.md) and
+[limitations](docs/limitations.md#hardware-validation) for the evidence behind
+each row.
 
-`intel:npu` is the one target with no PyTorch device behind it: OpenVINO owns
-it, so `target="auto"` never picks it automatically — see
-[its guide](docs/intel-npu.md).
+## Quick start
 
-The table above is what the vendor toolchains support, not what has actually
-run on physical hardware — see [tested hardware](docs/tested-hardware.md) for
-the real machines behind it, and the targets that are still mock-tested only.
-
-## Tested model coverage
-
-Smoke-test coverage, not a model zoo — LM7 doesn't allowlist models, so other
-Hugging Face checkpoints will likely *run*, just without this validation.
-
-| Model class | Examples | Tested for |
-| --- | --- | --- |
-| Vision / small nets | ResNet-18, MobileNetV2, BERT, ViT | `torch.compile` parity (CI) |
-| Sparse MoE | Mixtral (tiny → 8x7B/46.7B), OLMoE (tiny → 6.9B) | `torch.compile` parity, CPU + NVIDIA |
-| Causal LMs | SmolLM2-135M → Llama-3.1-8B-Instruct, DeepSeek-coder-1.3B | Generation, quantization, export |
-| TPU-specific | BERT, ViT, LSTM, Conv+BatchNorm, sparse MoE, 5 causal LMs | `openxla` parity on a TPU v6e |
-
-See [limitations](docs/limitations.md), [DeepSeek coverage](docs/deepseek.md),
-and [quantization](docs/quantization.md) for the full matrix.
-
-## 1. Install
-
-LM7 needs Python 3.10+ and a PyTorch build matching the target machine. It does
-**not** install GPU drivers, CUDA/ROCm toolchains, Xcode, PyTorch/XLA, or C++
-compilers.
+LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
+does **not** install GPU drivers, CUDA or ROCm, Xcode, PyTorch/XLA, or vendor
+toolchains.
 
 ```bash
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
 uv venv --python 3.12
-uv pip install -e .            # add ".[dev]" for pytest + ruff
-```
-
-`uv` also picks the right PyTorch wheel, which matters more than usual here —
-CPU, CUDA, and ROCm builds come from different indexes:
-
-```bash
+uv pip install -e .
 uv pip install torch --torch-backend=auto
 ```
 
-Then activate the environment (`source .venv/bin/activate`) or prefix commands
-with `uv run`. Without `uv`:
-`python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e .`.
-
-Per-hardware setup: [CPU](docs/cpu.md) · [AMD CPU](docs/amd-cpu.md) ·
-[NVIDIA](docs/development.md#nvidia-cuda) · [NVIDIA Blackwell](docs/nvidia-blackwell.md) ·
-[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
-[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
-
-## 2. Inspect the machine
+You still install the driver and compiler/runtime required by your hardware.
+LM7 removes the per-vendor application glue and tells you what is missing
+through `lm7 doctor`.
 
 ```bash
-lm7 doctor                    # environment and install check
-lm7 targets                   # detected hardware targets
-lm7 backends                  # registered compiler backends
-lm7 explain --target auto     # which backend LM7 would pick, and why
+lm7 doctor
+lm7 targets
+lm7 backends
+lm7 explain --target auto
 ```
 
-Add `--json` to any command for machine-readable output. The same CLI is
-available as `python -m lm7`.
-
-## 3. Compile a model
-
-`target="auto"` selects hardware for you; the first real call compiles that
-input signature.
+Then compile a model without hard-coding its device:
 
 ```python
 compiled = lm7.compile(model.eval(), target="auto")
@@ -239,339 +180,110 @@ result = compiled(example_input)
 print(compiled.target, compiled.selected_backend)
 ```
 
-### Backends
+Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cuda) ·
+[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
+[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
 
-| Backend | Underlying compiler | Produces | Mode | Targets | Priority |
-| --- | --- | --- | --- | --- | --- |
-| `inductor` | TorchInductor (`torch.compile`) | Triton kernels on GPU, C++/OpenMP on CPU, plus vendor library calls | JIT | cpu, nvidia, amd, intel, apple | 100 |
-| `openxla` | PyTorch/XLA + OpenXLA | XLA HLO fusions, target IR | JIT | tpu | 100 |
-| `tenstorrent` | tt-xla + tt-mlir + tt-metal | StableHLO, then a TT-NN flatbuffer | JIT | tenstorrent | 100 |
-| `aot_inductor` | AOTInductor | persistent `.pt2` package | **AOT** | cpu, apple, nvidia | 90 |
-| `tensorrt` | Torch-TensorRT | TensorRT engine | JIT + **AOT** | nvidia | 90 |
-| `openvino` | Intel OpenVINO | persistent IR (`.xml` + `.bin`) | **AOT** | cpu (Intel), intel:npu | 80 |
-| `onnxruntime` | PyTorch ONNX exporter + ONNX Runtime | persistent `.onnx` model | JIT + **AOT** | cpu, nvidia | 70 |
-| `iree_vulkan` | IREE Vulkan HAL | persistent VMFB with SPIR-V | **AOT**, export only | nvidia, amd, intel, arm | export only |
-| `litert` | LiteRT Torch + XNNPACK | persistent `.tflite` model | **AOT**, export only | cpu | export only |
-| `executorch` | ExecuTorch + XNNPACK | `.pte` for phones and embedded CPUs | **AOT**, export only | cpu | export only |
-| `qnn` | ExecuTorch + Qualcomm QNN | device-bound `.pte` for Snapdragon HTP | **AOT**, export only | qualcomm:sm8750 | export only |
-| `coreml` | ExecuTorch + Core ML | `.pte` through the Core ML delegate | **AOT**, export only | apple | export only |
-| `stablehlo` | PyTorch/XLA + OpenXLA | portable StableHLO for any PJRT plugin | **AOT**, export only | any | export only |
-| `tvm` | Apache TVM (Relax) | TVM VM module | JIT | cpu | explicit |
-| `eager` | none — plain PyTorch | nothing | none | any detected device | 0 |
+## Compiler and backend overview
 
-With `backend="auto"`, LM7 picks the highest-priority backend that supports the
-resolved target — `inductor` on CPU, NVIDIA, AMD, Intel, and Apple; `openxla`
-on TPU; `tenstorrent` on Tenstorrent; `openvino` on the Intel NPU, where it is
-the only candidate. `eager` wins only when nothing else supports the target,
-or a compile fails and `fallback="warn"` takes over.
+| Backend | Compiler/runtime | Mode | Targets |
+| --- | --- | --- | --- |
+| `inductor` | TorchInductor | JIT | CPU, NVIDIA, AMD, Intel GPU, Apple |
+| `openxla` | PyTorch/XLA + OpenXLA | JIT | TPU |
+| `tenstorrent` | tt-xla + tt-mlir + tt-metal | JIT | Tenstorrent |
+| `aot_inductor` | AOTInductor | AOT | CPU, NVIDIA, Apple |
+| `tensorrt` | Torch-TensorRT | JIT/AOT | NVIDIA |
+| `openvino` | OpenVINO | AOT | Intel CPU/NPU |
+| `onnxruntime` | ONNX Runtime | JIT/AOT | CPU, NVIDIA |
+| `iree_vulkan` | IREE Vulkan | Export | NVIDIA, AMD, Intel, Arm GPU |
+| `executorch` | ExecuTorch | Export | CPU/mobile |
+| `qnn` | ExecuTorch + Qualcomm QNN | Export | Snapdragon 8 Elite |
+| `coreml` | ExecuTorch + Core ML | Export | Apple |
+| `stablehlo` | OpenXLA StableHLO + PJRT | Export | Any PJRT target |
+| `litert`, `tvm`, `eager` | LiteRT, TVM, plain PyTorch | Export/JIT/eager | See backend guides |
 
-Rows marked **Export only** are reachable solely through `lm7.export(...,
-backend=...)` — asking `lm7.compile` for one raises. **Explicit** means it
-works with `lm7.compile` but `backend="auto"` never picks it; `tvm` is the
-only one, because its untuned codegen is far slower than Inductor
-([details](docs/tvm.md)).
+With `backend="auto"`, LM7 chooses the highest-priority installed backend for
+the resolved target. Export-only integrations are never selected by
+`lm7.compile`. See [JIT vs. AOT](docs/jit-vs-aot.md), the
+[architecture guide](docs/architecture.md), and the
+[documentation index](docs/README.md) for details and optional dependencies.
 
-On NVIDIA, `tensorrt` is the opt-in alternative to the default `inductor`:
-faster per-call in some measurements (1.8x on a fixed-shape SmolLM2 forward
-pass) but slower to build and narrower in model coverage — see the
-[evaluation](docs/nvidia-tensorrt-evaluation.md). Tuning knobs such as
-`max-autotune` and TPU matmul precision are covered in the
-[TorchInductor options guide](docs/inductor-options.md) and
-[Google TPU guide](docs/google-tpu.md).
+## Common workflows
 
-### Optional dependencies
-
-Most non-default backends need an extra:
-
-```bash
-uv pip install -e ".[tensorrt]"      # Torch-TensorRT 2.12.1 / PyTorch 2.12 / CUDA 13
-uv pip install -e ".[openvino]"      # Intel CPU and NPU
-uv pip install -e ".[onnxruntime]"   # CPU — or ".[onnxruntime-gpu]" for CUDA 13, never both
-uv pip install -e ".[iree-vulkan]"   # Vulkan AOT export
-uv pip install -e ".[openxla]"       # on a TPU VM
-uv pip install -e ".[tvm]"           # Apache TVM
-uv pip install -e ".[serve]"         # FastAPI/Uvicorn for `lm7 model serve`
-```
-
-Three need their own environment, because they pin PyTorch or ship outside PyPI:
-
-```bash
-uv pip install -e ".[litert]"        # LiteRT Torch caps PyTorch below 2.13
-uv pip install -e ".[stablehlo]"     # torch_xla, ABI-tied to a matching PyTorch
-uv pip install -e ".[executorch]"    # runtime extension ABI-linked to libtorch
-uv pip install pjrt-plugin-tt --extra-index-url https://pypi.eng.aws.tenstorrent.com/
-```
-
-`LM7_TARGET`, `LM7_BACKEND`, `LM7_FALLBACK`, and `LM7_CACHE_DIR` set defaults;
-explicit arguments take precedence.
-
-### JIT vs. AOT
-
-![LM7 compile and export execution modes](docs/assets/execution-modes.svg)
-
-There are two separate questions: *when a backend does its work*, and *what the
-API returns*.
-
-- **`lm7.compile()` returns a callable.** It is always lazy from the caller's
-  perspective: the first call for each input signature invokes the backend.
-  Inductor and OpenXLA generate code JIT; AOTInductor, TensorRT, OpenVINO, and
-  ONNX Runtime may build an engine or package internally, but LM7 loads it into
-  the current process rather than returning persistent files.
-- **`lm7.export()` returns files.** It always writes a versioned `.lm7`
-  directory at build time. The default `backend="export"` only captures a
-  portable graph—it is not a precompiled AOT payload. Choosing a lowering
-  backend adds persistent code, IR, or a runtime-specific model for later use.
-
-Use `compile` while iterating and `export` when you need persistence or
-deployment. See [JIT vs. AOT](docs/jit-vs-aot.md) for export levels, bundles,
-and the signature rules an artifact is pinned to.
-
-## 4. Run a Hugging Face model
+Run or generate with a Hugging Face model:
 
 ```bash
 uv pip install -e ".[hf]"
-lm7 model compatibility hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --target auto --backend auto
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --prompt "The capital of France is" --target auto --backend auto
-```
-
-`model compatibility` downloads only the model configuration and reports the
-model type, runtime backend, run/generate/export paths, and validated
-quantization modes. It is a fast preflight rather than proof of compiler
-operator coverage; see the [compatibility guide](docs/model-compatibility.md).
-
-The run command downloads through the normal Hugging Face cache, compiles the
-forward pass, and reports the selected target and backend, first-call and
-steady-call time, and the predicted next token (`--json` for structured output).
-
-Validated compact, ungated models: `HuggingFaceTB/SmolLM2-135M-Instruct`,
-`LiquidAI/LFM2.5-230M`, `unsloth/Llama-3.2-1B-Instruct`, `Qwen/Qwen3.5-0.8B`,
-and `deepseek-ai/deepseek-coder-1.3b-instruct` — the first four also compile on
-Apple Silicon. `unsloth/Llama-3.1-8B-Instruct` is validated too, for INT8 on
-both CPU and NVIDIA. See [DeepSeek coverage](docs/deepseek.md) and
-[quantization](docs/quantization.md) for per-model, per-backend numbers.
-
-For greedy token generation, use the static KV-cache path:
-
-```bash
+  --prompt "The capital of France is" --target auto
 lm7 model generate hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --prompt "The capital of France is" --max-new-tokens 32 --target nvidia
 ```
 
-Generation runs the prefill eagerly, then reuses one Inductor-compiled,
-fixed-shape decode graph against a static KV cache for every token. Greedy-only,
-and requires a Transformers causal LM supporting static caching — see
+See [model compatibility](docs/model-compatibility.md) and
 [compiled generation](docs/huggingface-generation.md).
 
-That command hands the loop to Transformers. To hold the two phases apart
-yourself — a compiled prefill, a compiled decode step, one cache you keep, and a
-count of everything that recompiled — use `lm7.compile_generation`:
-
-```python
-runner = lm7.compile_generation(model, target="nvidia", max_sequence_length=8192)
-
-state = runner.prefill(input_ids)
-token, state = runner.decode(state.next_token, state)
-```
-
-See [prefill and KV-cache decode](docs/kv-cache-decode.md) for the API and the
-H100 numbers.
-
-## 5. Serve a model
-
-To talk to that loop over HTTP — and to check a compiled model by hand without
-writing a client:
+Serve a model for local validation:
 
 ```bash
 uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
 
-Open <http://127.0.0.1:8000> for a chat page, or point any OpenAI-compatible
-client at `http://127.0.0.1:8000/v1`:
+This is a single-user validation server, not a production serving engine. For
+production NVIDIA serving, `--backend vllm` hands execution to vLLM. See
+[serving](docs/serving.md).
+
+Export and reload a versioned artifact:
 
 ```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="not-needed")
-client.chat.completions.create(model="...", messages=[{"role": "user", "content": "hi"}])
-```
-
-`POST /v1/chat/completions` (streaming or not), `/v1/completions`, `/v1/models`,
-`/health`, `/metrics`, and `/docs` for the schema. The chat page is a plain
-single-file page with no CDN, no build step and no external requests, so it
-works on an airgapped box; Open WebUI and other clients connect the same way —
-see [serving](docs/serving.md).
-
-This is a **single-user** server: one model, one static KV cache, one request at
-a time, and no batching or paged attention, because adding those would mean
-writing a serving engine and LM7 does not write compilers either. It is for
-trying a model on a target, not for production throughput. `--backend vllm`
-hands the port to vLLM instead and steps out of the request path entirely.
-
-Validated on `cpu:arm64` and `apple:metal` with SmolLM2-135M-Instruct; no other
-target has served anything, and there is no serving benchmark here — see
-[limitations](docs/limitations.md#serving).
-
-## 6. Export an artifact
-
-Capture a model and reload it in another process:
-
-```python
-artifact = lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
-
+lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
 loaded = lm7.load_artifact("model.lm7")
 output = loaded(example_input)
 ```
 
-An `.lm7` artifact is a directory with a versioned manifest, checksums, and a
-PyTorch `.pt2` program. Pick a backend to add a compiled payload beside it:
+Choose an export backend for AOTInductor, TensorRT, OpenVINO, ONNX Runtime,
+IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
+[JIT vs. AOT](docs/jit-vs-aot.md) and
+[artifact inspection](docs/artifact-inspection.md).
 
-| `backend=` | Adds | Runs without PyTorch | Guide |
-| --- | --- | --- | --- |
-| `export` (default) | portable `ExportedProgram` only | no | [JIT vs. AOT](docs/jit-vs-aot.md) |
-| `aot_inductor` | `.pt2` with kernels baked in | no | [NVIDIA AOT](docs/development.md#nvidia-aot-inductor) |
-| `openvino` | OpenVINO IR (`.xml` + `.bin`) | yes, Intel CPU or NPU | [OpenVINO](docs/openvino-evaluation.md), [Intel NPU](docs/intel-npu.md) |
-| `tensorrt` | serialized TensorRT engine (`.trt.pt2`) | no | [TensorRT](docs/nvidia-tensorrt-evaluation.md) |
-| `onnxruntime` | `.onnx` plus its execution provider | yes | [ONNX Runtime](docs/onnxruntime.md) |
-| `iree_vulkan` | Vulkan VMFB with SPIR-V | yes, GPU | [IREE Vulkan](docs/iree-vulkan.md) |
-| `litert` | `.tflite` flatbuffer | yes, CPU | [LiteRT](docs/litert.md) |
-| `executorch` | `.pte` for Android, iOS, embedded | yes, any CPU | [ExecuTorch](docs/executorch.md) |
-| `qnn` | device-bound `.pte` for SM8750 HTP | yes, matching Android QNN runtime | [QNN](docs/qnn.md) |
-| `coreml` | `.pte` through the Core ML delegate | yes, macOS (Core ML) | [Core ML](docs/coreml.md) |
-| `stablehlo` | portable StableHLO for any PJRT plugin | yes, any | [StableHLO](docs/stablehlo-pjrt-evaluation.md) |
-
-Three payloads are not bound to the machine that built them: `stablehlo`, whose
-plugin is chosen at load time; `executorch`, whose XNNPACK delegate covers
-ARM64 and x86-64 alike; and `coreml`, whose `.pte` embeds an uncompiled Core ML
-spec that whichever Mac loads it compiles locally. QNN is explicitly bound to
-SM8750 plus matching ExecuTorch and QNN runtime versions. Everything else is
-specific to compatible compiler, runtime, and hardware versions — artifacts are
-**not** a stable cross-version ABI.
-
-### From the CLI
-
-Export a Hugging Face model without writing any PyTorch:
-
-```bash
-lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target cpu --backend aot_inductor
-```
-
-Example inputs come from tokenizing `--prompt`, so the artifact is pinned to
-that many tokens by default. `--dynamic-seq` captures the sequence length as a
-bounded dynamic dimension instead:
-
-```bash
-lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target nvidia --backend aot_inductor --dynamic-seq        # bounds from the config
-lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct model.lm7 \
-  --target nvidia --backend aot_inductor --dynamic-seq 1:512  # or set them
-```
-
-Bounds are recorded in the manifest and enforced on every call, so a prompt
-outside them raises rather than producing quietly wrong output.
-
-### Bundles
-
-Combine per-target artifacts and select at load time:
-
-```python
-lm7.create_bundle(["build/cpu.lm7", "build/nvidia.lm7"], output="model.bundle.lm7")
-deployed = lm7.load_bundle("model.bundle.lm7").load(target="auto")
-```
-
-```bash
-lm7 bundle create model.bundle.lm7 build/cpu.lm7 build/nvidia.lm7
-lm7 bundle inspect model.bundle.lm7      # add --json for structured output
-```
-
-## Quantization
-
-For `lm7 model run`, quantization stores weights in fewer bits than the model was
-trained in. This path is weight-only:
-
-| `--quantize` | Weight storage | Targets | Compute |
-| --- | --- | --- | --- |
-| `none` (default) | as loaded | all | FP32 / FP16 / BF16 |
-| `int8` | INT8 | NVIDIA GPU, **CPU** | BF16 on NVIDIA, FP32 on CPU |
-| `fp8` | FP8 | NVIDIA Ada (`sm89`) or newer | BF16 |
-| `nvfp4` | NVFP4 (4-bit, block-16) | NVIDIA GPU | BF16 |
+Quantize a validated Hugging Face model:
 
 ```bash
 uv pip install -e ".[hf,torchao]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --target cpu --quantize int8      # 513 -> 210 MiB, same next token
+  --target cpu --quantize int8
 ```
 
-The conversion is [TorchAO](https://github.com/pytorch/ao)'s. It is opt-in and
-admitted per **(model, mode)** pair — a mode is rejected for a model whose
-outputs have not been compared against an unquantized baseline on real hardware.
-`int8` is the only mode measured off NVIDIA; on CPU it cuts a model to 2.44x
-smaller at no measured accuracy cost, with a latency effect that depends on model
-size. `nvfp4` buys the smallest footprint and costs the most accuracy; it clears
-the bar for one model out of four tried. Both `--quantize` and the older
-`--quantization` spelling work.
+Quantization is admitted per model and mode rather than promised universally.
+See [quantization](docs/quantization.md) for measurements and accuracy checks.
 
-This runtime path does not quantize activations. Two export paths quantize the
-*artifact* instead, each with its own mechanism:
+Examples and reproducible benchmark harnesses live in
+[`examples/`](examples) and [`benchmarks/`](benchmarks).
 
-```bash
-lm7 model export hf://... out.lm7 --backend openvino  --quantize int8  # NNCF, IR weights
-lm7 model export hf://... out.lm7 --backend executorch --quantize int8  # calibrated XNNPACK PTQ
-```
+## Design thesis
 
-The OpenVINO one compresses the IR to **3.98x smaller** and was the only
-quantization measured here that runs *faster* than its FP32 baseline. See
-[quantization](docs/quantization.md) for every mode and the measurements behind
-them, and [ExecuTorch](docs/executorch.md) for the edge flow.
+Projects such as ZML and Roofline.ai pursue the same broader goal of making ML
+workloads portable across heterogeneous hardware.
 
-## Examples and benchmarks
-
-```bash
-python examples/basic_mlp.py                        # CPU
-python examples/cuda_mlp.py --target nvidia         # NVIDIA
-python examples/mac_mlp.py                          # Apple Silicon
-python examples/coreml_mlp.py                       # Apple Core ML (export + run immediately)
-python examples/tenstorrent_mlp.py                  # Tenstorrent
-python examples/tpu_mlp.py                          # Google TPU
-python examples/rocm_mlp.py                         # AMD ROCm
-python examples/local_targets.py --require-nvidia   # CPU vs NVIDIA parity
-python examples/hf_causal_lm.py --target nvidia     # A Hugging Face causal LM
-python examples/sparse_moe.py                       # A sparse Mixture-of-Experts model
-python examples/aot_mlp.py                          # AOTInductor export, reload, and verify
-python benchmarks/local.py --target cpu nvidia --backend eager inductor
-python benchmarks/generation_paths.py --target apple  # what compiling generation is worth
-```
-
-One example per non-default backend, each exporting or compiling explicitly:
-
-```bash
-python examples/tensorrt_mlp.py                     # NVIDIA, backend="tensorrt"
-python examples/quantization_hf.py --quantize int8  # CPU or NVIDIA, weight quantization
-python examples/openvino_mlp.py                     # Intel CPU, backend="openvino"
-python examples/intel_npu_mlp.py                    # Intel NPU (Core Ultra AI Boost)
-python examples/onnxruntime_mlp.py                  # CPU (or NVIDIA), backend="onnxruntime"
-python examples/iree_vulkan_mlp.py                  # NVIDIA/AMD/Intel, backend="iree_vulkan"
-python examples/litert_mlp.py                       # CPU, backend="litert" (.tflite)
-python examples/executorch_mlp.py                   # CPU, backend="executorch" (.pte, XNNPACK)
-python examples/stablehlo_mlp.py                    # any target, portable StableHLO + PJRT
-python examples/tvm_mlp.py --mode jit               # CPU, backend="tvm" (explicit; slow)
-python examples/zentorch_mlp.py                     # AMD CPU, backend="zentorch"
-```
-
-More in [`examples/`](examples) and [`benchmarks/`](benchmarks).
+LM7 makes a narrower architectural bet: hardware portability does not
+necessarily require another compiler or runtime. Existing stacks such as
+TorchInductor, TensorRT, OpenVINO, OpenXLA, and ExecuTorch already contain
+substantial hardware-specific work. LM7 provides a neutral layer above them
+instead of replacing them.
 
 ## Documentation
 
-The [documentation index](docs/README.md) lists everything. Most useful:
+Start with:
 
 - [Limitations](docs/limitations.md) — what LM7 does not do, per backend.
+- [Tested hardware](docs/tested-hardware.md) — physical machines and exact gaps.
 - [Architecture](docs/architecture.md) — targets, backends, planner, artifacts.
+- [What LM7 replaces](docs/what-this-replaces.md) — per-vendor application glue.
 - [JIT vs. AOT](docs/jit-vs-aot.md) — compilation timing and artifact rules.
-- [Serving](docs/serving.md) — `lm7 model serve`, and what it deliberately is not.
-- [Development and testing](docs/development.md) — running the suite, GPU tests.
+- [Development and testing](docs/development.md) — running the suite and GPU tests.
+
+The [documentation index](docs/README.md) links every hardware and backend guide.
 
 ## Contributing
 
@@ -585,8 +297,7 @@ python -m ruff format --check .
 ```
 
 Hardware-specific tests skip automatically when the device or toolchain is
-absent. See [development and testing](docs/development.md). Working with an
-AI coding agent? See [CLAUDE.md](CLAUDE.md) for this repo's conventions.
+absent. See [development and testing](docs/development.md).
 
 ## License
 
