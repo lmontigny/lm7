@@ -31,10 +31,23 @@ targets with continuous-integration coverage.
 ## Compilation and artifacts
 
 - **JIT results are process-local.** A JIT-compiled callable does not outlive
-  the process. Only `aot_inductor`, `openvino`, `onnxruntime`, `tensorrt`,
-  `iree_vulkan`, `litert`, `executorch`, `stablehlo`, and `lm7.export` produce
-  something another process can load — and `tensorrt` only through
-  `lm7.export`; its `lm7.compile` engines still die with the process.
+  the process. The backends `lm7.export` accepts are what produce something
+  another process can load: `aot_inductor`, `coreml`, `executorch`,
+  `iree_vulkan`, `litert`, `onnxruntime`, `openvino`, `qnn`, `stablehlo`,
+  `tensorrt`, `tvm`, and the source-only `export` level. Two of those are
+  export-path-only — `tensorrt` and `tvm` both have `lm7.compile` backends whose
+  compiled result still dies with the process.
+- **An artifact is bound to the architecture that built it, on CPU as much as on
+  GPU.** `aot_inductor`, `tensorrt` and `tvm` carry a payload compiled for one
+  chip, and LM7 refuses to load one built elsewhere rather than letting it fail
+  at the driver. That gate covers `cpu` and not only `nvidia`/`amd`: an
+  AOTInductor CPU package holds a natively compiled `wrapper.so` — "ELF 64-bit
+  LSB shared object, ARM aarch64" when built on an Axion — that no x86-64 host
+  can `dlopen`, and TVM's LLVM codegen bakes in the exporting host's target
+  triple the same way. CI proves it across two machines: `cross-arch-build`
+  exports on `ubuntu-24.04-arm` and `cross-arch-load` gets it refused on x86-64.
+  See [artifact
+  compatibility](aot-artifact-compatibility.md#cpu-packages-are-architecture-bound-too).
 - **Exported causal-LM artifacts are prefill-only.** `--dynamic-seq` makes the
   sequence length variable within recorded bounds; the batch dimension stays
   fixed, and a KV-cache decode loop is not captured. LM7 captures a logits-only
@@ -44,6 +57,48 @@ targets with continuous-integration coverage.
   with the process, like every other `lm7.compile` result.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
+- **Saved compiler output is deep for AOTInductor and shallow for every other
+  backend.** `lm7.export(..., debug=True)` indexes whatever the selected
+  toolchain hands back, and only Inductor hands back more than the exported
+  graph. Measured on an RTX 4070 SUPER (Ada `sm89`, WSL2) under `torch
+  2.13.0+cu130`, on a 2-layer MLP:
+
+  | backend | files | what they are |
+  | --- | --- | --- |
+  | `export` (source-only) | 3 | exported program, graph, signature |
+  | `openvino` | 3 | those same three — nothing from OpenVINO's own compiler beyond the IR that is already the artifact payload |
+  | `aot_inductor`, `cpu` | 11 | those three, plus FX graphs, pre- and post-fusion Inductor IR, `output_code.cpp`, and the `kernel.cpp`/`wrapper.cpp` lifted back out of the `.pt2` package |
+  | `aot_inductor`, `nvidia` | 13 | the CPU set plus two `.cubin` device binaries |
+
+  Four things follow from that.
+
+  **PTX and assembly are classified, not produced.** LM7 labels `.ptx`, `.s`,
+  `.asm`, `.cubin` and `.hsaco` when the package contains them, so the levels
+  are named in the manifest — but the NVIDIA run above emitted `.cubin` only,
+  Triton keeping its PTX in its own cache rather than in the package. Read the
+  lower levels as best-effort, and check what a given toolchain actually wrote
+  rather than assuming the list.
+
+  **Only the export level is proved by a real compile.** The multi-level
+  assertions in `tests/test_aot_inductor.py` monkeypatch
+  `aoti_compile_and_package` and write the trace files themselves, so what runs
+  unmarked on every commit is LM7's indexing, not Inductor's emission. The rows
+  above are a hand run, not CI.
+
+  **It is a Python-API option only.** `lm7 model export` has no `--debug`, and
+  the JIT path has no LM7 API at all: the `--debug-dir` in
+  [`examples/cuda_mlp.py`](../examples/cuda_mlp.py) sets `torch._inductor` trace
+  config directly, and needs `TORCHINDUCTOR_FORCE_DISABLE_CACHES=1`, because a
+  cache hit skips codegen and writes no trace.
+
+  **A debug artifact carries the model's structure.** The files live inside the
+  `.lm7` directory under `debug/` and are hashed into the manifest, so an
+  artifact built this way ships its graph and generated source to whoever
+  receives it. A failed compile discards them unless `LM7_DEBUG_FAILURE_DIR`
+  names somewhere to copy them to first.
+
+  See [compiler IR and generated
+  code](development.md#compiler-ir-and-generated-code).
 - **Sparse Mixture-of-Experts models always compile; whether they *export*
   depends on the transformers version and the architecture.** Measured with
   `torch 2.13` on two-layer models through `lm7.export`:
@@ -226,9 +281,9 @@ had stated.
 | Backend | Scope and caveats |
 | --- | --- |
 | `inductor` | The default and the best-covered path. CPU and Apple Silicon (MPS) are the only targets with CI. |
-| `aot_inductor` | Validated for CPU, Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). Packages hold kernels compiled for one GPU architecture and refuse to load on another (LM7 raises before loading; PyTorch's own check only warns, then hits a driver error) — see [artifact compatibility](aot-artifact-compatibility.md). |
+| `aot_inductor` | Validated for CPU (x86-64 and aarch64), Apple Silicon (MPS), and NVIDIA GPU; uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). Packages hold code compiled for one architecture — kernels for one GPU compute capability, or a native `.so` for one CPU ISA — and refuse to load on another (LM7 raises before loading; PyTorch's own check only warns, then hits a driver error) — see [artifact compatibility](aot-artifact-compatibility.md). |
 | `tensorrt` | NVIDIA only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). `lm7.export` serializes the engine so a second process need not rebuild it; the artifact is static-shape and bound to the GPU architecture, TensorRT version, and Torch-TensorRT version that built it. **Four failure modes do not raise**: an export whose graph falls below the partitioner's `min_block_size` writes a TensorRT-labelled artifact containing no engine; the JIT path returns wrong numbers on BERT; `options={"dynamic": True}` is accepted and ignored by the export path, while the JIT path silently rebuilds an engine per unseen shape; and FP8 arithmetic is unreachable. See [tensorrt-validation.md](tensorrt-validation.md). |
-| `openvino` | Intel CPU, plus `intel:npu` — **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on both `model run` and `model export`, validated per model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
+| `openvino` | Any `cpu` target plus `intel:npu`, not Intel silicon only: the aarch64 wheel's CPU plugin loads on an Arm Neoverse N3 and the IR path is *faster* there than on either other host (4.16x over eager on SmolLM2-135M), while its INT8 advantage does not transfer at all — 1.83-2.53x faster than FP32 on Intel, 1.08x slower on Arm. `intel:npu` is **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on both `model run` and `model export`, validated per model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
 | `onnxruntime` | CPU and NVIDIA CUDA. Returns CPU tensors even after CUDA execution, because the initial adapter uses NumPy rather than I/O binding. Tensor-only inputs and flat outputs; external-data packaging above the 2 GiB protobuf limit is future work. See the [guide](onnxruntime.md). |
 | `iree_vulkan` | Export-only and experimental: fixed shapes, tensor-only I/O, FP32 MLP execution on an RTX 4070 SUPER is the validated scope. `arm` (Mali) targets parse and compile, but **nothing has ever executed on an Arm GPU** — that needs an NDK cross-compile of the IREE runtime, which has no prebuilt Android binary, and this project owns no Mali hardware. Causal LMs, dynamic sequences, KV caches, and WebGPU are future work. See the [guide](iree-vulkan.md). |
 | `litert` | Export-only, CPU/XNNPACK only from LM7's side, though the packaged `.tflite` also ran correctly on a real Snapdragon 8 Elite's GPU delegate (Adreno, OpenCL) by hand — **~660x slower per inference than its own CPU delegate** on a 3-layer MLP too small to amortise dispatch and shader compilation; unmeasured on a real model, since dynamic shapes are rejected. See [Android device testing](android-device-testing.md). Static tensor-only inputs, returns CPU tensors. LiteRT Torch caps PyTorch below 2.13, so conversion belongs in a separate environment; on Linux aarch64 even that environment cannot resolve today because `litert-converter` has no matching wheel. Packages generic `.tflite` graphs, not LiteRT-LM conversations. See the [guide](litert.md). |
@@ -238,7 +293,7 @@ had stated.
 | `stablehlo` | Export-only. Needs PyTorch/XLA to lower, which pins PyTorch to a matching pair. |
 | `openxla` | TPU only, single process. SPMD sharding, multi-host execution, and persistent XLA executables are not implemented, and the validated host has one chip, so the sharding paths are untested rather than merely absent. fp32 matmuls run at bf16 precision unless `options={"mat_mul_precision": ...}` says otherwise. It beats eager XLA by 27x on SmolLM2-135M and loses to it by 2.3x on a 3-layer MLP. Generation decodes eagerly and XLA recompiles per decode step, so a first `lm7 model generate` of 20 tokens costs 20 minutes and the second 2.5 s -- the documented per-shape compile cost, paid per decode graph. Warm the process before timing it. See the [guide](google-tpu.md). |
 | `tenstorrent` | JIT-only and single-card: the compiled flatbuffer does not outlive the process, multi-card sharding is not exposed, and coverage is bounded by what tt-mlir lowers. See the [guide](tenstorrent.md). |
-| `tvm` | CPU-only, JIT-only, positional-inputs-only, and **far slower than Inductor** — registered for reachability, not speed. Autotuning, CUDA, and artifacts are not wired up. See the [guide](tvm.md). |
+| `tvm` | CPU-only, positional-inputs-only, and **far slower than Inductor** — registered for reachability, not speed. It does export now: `lm7.export` writes `compiled_model.tvm.so`, which reloads without `torch.export` or the Relax frontend but is bound to the exporting host's CPU architecture and gated on it. Validated on x86-64 and on an Arm Neoverse N3. Autotuning, quantization, dynamic shapes, and CUDA are still not wired up. See the [guide](tvm.md#aot-export). |
 | `zentorch` | AMD's ZenDNN extension: CPU-only, JIT-only, explicit-only, x86-64 Linux wheels only, and ABI-tied to a matching PyTorch. Measured on one Zen 3 EPYC at FP32 it beat Inductor on one workload, tied on another, and lost on a third; BF16, INT8, and newer EPYC generations are unmeasured. No quantization path and no artifact. See the [guide](zentorch.md). |
 
 ## Hardware validation
@@ -270,13 +325,15 @@ had stated.
   v6e — which the rest of that list has not. It still has no CI, and one chip
   cannot say anything about multi-chip behaviour. See
   [Google TPU](google-tpu.md).
-- NVIDIA Inductor, quantization, and TensorRT have been exercised on two GPU
-  generations: a local Ada (`sm89`) and a Blackwell (`sm120`) RTX PRO 6000.
-  Detection, backend selection, and every weight-only mode worked on Blackwell
-  with no code changes, and all three NVIDIA compile backends run there
-  unmodified — `inductor`, `aot_inductor`, and `tensorrt`, the last in its own
-  environment because it pins PyTorch 2.12. None of it has CI. See
-  [NVIDIA Blackwell](nvidia-blackwell.md).
+- NVIDIA Inductor, quantization, and TensorRT have been exercised on three GPU
+  generations: a local Ada (`sm89`), a rented Hopper H100 80GB (`sm90`), and a
+  Blackwell (`sm120`) RTX PRO 6000. Detection, backend selection, and every
+  weight-only mode worked on Blackwell with no code changes, and all three
+  NVIDIA compile backends run there unmodified — `inductor`, `aot_inductor`, and
+  `tensorrt`, the last in its own environment because it pins PyTorch 2.12. The
+  H100 is where the per-row FP8 activation numbers and the batch-1–4096 Inductor
+  sweep come from. None of it has CI. See [NVIDIA
+  Blackwell](nvidia-blackwell.md) and [NVIDIA H100](nvidia-h100.md).
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
   **no Intel NPU has ever executed it**. Its integration tests skip unless
   OpenVINO reports an NPU; everything else about it is unit-tested against a
@@ -303,23 +360,30 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   scripted runner and a fake tokenizer. It proves the path works, not that
   output is right: the model has random weights, so no test in CI checks that a
   served answer is correct.
-- **Validated on four targets and two models.** Apple M-series `cpu:arm64` and
+- **Validated on five targets and two models.** Apple M-series `cpu:arm64` and
   `apple:metal` with SmolLM2-135M-Instruct; `nvidia:sm89` (RTX 4070 SUPER, WSL2)
-  with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct; and `cpu:x86_64` (Intel
-  Coffee Lake, AVX2) with SmolLM2-135M-Instruct — driven by `curl` and by the
+  with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct; `cpu:x86_64` (Intel
+  Coffee Lake, AVX2) with SmolLM2-135M-Instruct; and `cpu:aarch64` (Arm Neoverse
+  N3, GCP Axion) with SmolLM2-135M-Instruct — driven by `curl` and by the
   official `openai` Python SDK: both endpoints, both buffered and streamed,
-  greedy output byte-identical to `model.generate`, `int8` served on both CPU
-  targets, and `fp8` and `nvfp4` on the GPU. **`intel:npu` and `tpu` have served
+  greedy output byte-identical to `model.generate`, `int8` served on all three
+  CPU targets, and `fp8` and `nvfp4` on the GPU. **`intel:npu` and `tpu` have served
   nothing**, nothing above 1B has, and there is no serving benchmark in this repo
   — so no claim about serving latency or throughput can be sourced from it.
   `/metrics` TTFT and TPOT are compile-polluted until several requests have run,
   because the graphs compile inside the first one.
-- **A CPU target is two different machines.** `cpu:arm64` and `cpu:x86_64` are
-  one LM7 target family and unrelated vector units, and a serving number does not
-  cross between them: INT8 was 2.44x smaller and useful on Apple, and on an
-  AVX2-without-VNNI Intel part it served correctly at no speed benefit at all.
-  `--dtype auto` also means FP32 on either, so the same `--max-model-len` buys a
-  KV cache twice the size of the FP16 one a GPU allocates.
+- **A CPU target is three different machines, and two spellings.** `cpu:arm64`
+  (Apple, macOS), `cpu:x86_64` and `cpu:aarch64` (Linux Arm) are one LM7 target
+  family and unrelated vector units, and a serving number does not cross between
+  them: INT8 was 2.44x smaller and useful on Apple, the same 2.44x on the
+  Neoverse N3 with no speed benefit, and on an AVX2-without-VNNI Intel part it
+  also served correctly at no speed benefit at all. The spelling is the trap for
+  clients: `platform.machine()` says `arm64` on macOS and `aarch64` on Linux, so
+  the same Arm family reaches `/health` and `/metrics` under two different target
+  strings and a client that string-matches `cpu:arm64` will not match a Linux Arm
+  server. `--dtype auto` also means FP32 on all three, so the same
+  `--max-model-len` buys a KV cache twice the size of the FP16 one a GPU
+  allocates.
 - **A quantized serve was silently wrong on NVIDIA until it was run there.**
   `LM7ServeEngine.load` resolved `--dtype auto` without passing the quantization
   mode, so INT8 and FP8 weights were served under FP16 compute instead of BF16;
@@ -379,6 +443,9 @@ These have measurement harnesses or written plans, and no registered backend:
   export but remains SDK-gated and has no automated hardware validation.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — would unpin
   `stablehlo` from a matching PyTorch; evaluated and **not adopted**.
+- [RISC-V](riscv.md) — `cpu:riscv64` parses and round-trips, and that is the
+  whole of it: no PyTorch installs on a RISC-V host today, so there is nothing
+  for a backend to wrap. Nothing has run on RISC-V hardware.
 
 ## Quantization
 
@@ -389,19 +456,32 @@ through their own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, 
 OpenVINO's NNCF weight compression, the latter validated for two models out of
 three tried.
 
-**Activation quantization exists but is narrow.** `fp8-dynamic` (`sm89`+) and
-`nvfp4-dynamic` (`sm100`+) quantize activations at runtime so the matmul executes
-in the narrow format, confirmed by the emitted kernels rather than inferred.
-Scaling is dynamic only — no static calibration path — and exactly one pair is
-admitted: `Llama-3.2-1B` with `fp8-dynamic`. TorchAO's fused Triton scaling
-kernel for NVFP4 needs MSLK, which is not installable from PyPI, so LM7 runs the
-torch fallback and reports which one it used.
+**Activation quantization exists but is narrow.** `fp8-dynamic` and
+`fp8-dynamic-rowwise` (`sm89`+) and `nvfp4-dynamic` (`sm100`+) quantize
+activations at runtime so the matmul executes in the narrow format, confirmed by
+the emitted kernels rather than inferred. Scaling is dynamic only — there is no
+static calibration path — and the admitted set is four (model, mode) pairs, all
+FP8: `Llama-3.2-1B` and `Llama-3.1-8B`, each with both per-tensor and per-row
+scaling, the last three added by an H100 (`sm90`) run. **`nvfp4-dynamic` is
+implemented and admitted for nothing** — it scored 3/4 top-1 on the one model it
+was measured against, which is where 4-bit activations on top of 4-bit weights
+stop holding the token. Only per-row FP8 on the 1B is actually faster than not
+quantizing (0.94x); the other three are admitted on accuracy while costing
+latency. TorchAO's fused Triton scaling kernel for NVFP4 needs MSLK, which is not
+installable from PyPI, so LM7 runs the torch fallback and reports which one it
+used.
 
-Footprint is the reliable benefit for the weight-only modes, not speed. On both
-GPUs measured — Ada (`sm89`) and Blackwell (`sm120`) — every weight-only mode came out *slower* than the BF16
-baseline once compiled. Blackwell shrinks the penalty a long way without
+Footprint is the reliable benefit for the weight-only modes, not speed. On Ada
+(`sm89`) and Blackwell (`sm120`) every weight-only mode came out *slower* than
+the BF16 baseline once compiled. Blackwell shrinks the penalty a long way without
 removing it: `nvfp4` costs 1.24x there against 2.50x on Ada, for the same 2.30x
-footprint saving. Its FP4 tensor cores are not what does that, and cannot be —
+footprint saving. **A third card broke the "always slower" half of that**:
+on an H100 (`sm90`), weight-only `fp8` on Llama-3.2-1B runs at 0.97x, the first
+weight-only mode measured here to beat BF16 at all. It does not carry: on the
+same card `int8` is 4.94x slower, `nvfp4` 1.64x, and `fp8` on Llama-3.1-8B is
+1.89x slower *and* rejected at 3/4 top-1. So the honest form of the claim is that
+weight-only latency is a property of (card, model, mode) and has been a loss in
+every combination but one. Its FP4 tensor cores are not what does that, and cannot be —
 weight-only quantization unpacks to BF16 inside the kernel and never issues an
 FP4 matmul. On CPU, INT8 was at parity for SmolLM2-135M and 2.6x slower for
 Llama-3.2-1B, on an AVX2-only part with no VNNI — so the latency result does not
