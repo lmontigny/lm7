@@ -58,7 +58,7 @@ multi-gpu?
 multi-node
 inference benchmarks -> show perf vs w/o lm7
 intel Arc gpu
-
+verify decode path supported (not only prefill)
 
 
 ### Done ###
