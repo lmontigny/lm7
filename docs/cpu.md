@@ -152,6 +152,60 @@ oneDNN's verbose output, both of which are x86 names. A Neoverse part reports
 per-host" currently rests on one ISA, and the Arm half is unmeasured rather
 than measured and found similar.
 
+## Latency on a Neoverse N3
+
+The detection above came from a 4-vCPU shared CI runner, which is not a machine
+to time anything on. These are the first latency numbers this project has taken
+on Linux Arm: a GCP `n4a-standard-8` (Google Axion, **Arm Neoverse N3**, 8
+dedicated vCPU, 31 GiB, Debian 12, kernel 6.1), `torch 2.13.0+cpu` on 8 threads.
+Note this is a *different* Neoverse generation from the N2 in CI, so the two
+hosts are two data points rather than one repeated.
+
+[`benchmarks/local.py`](../benchmarks/local.py), FP32 MLP, median of 100 calls
+after 10 warmups:
+
+| batch | eager | inductor | |
+| --- | --- | --- | --- |
+| 1 | 1.548 ms | 1.616 ms | 0.96x |
+| 8 | 1.306 ms | 1.374 ms | 0.95x |
+| 64 | 4.079 ms | 4.025 ms | 1.01x |
+| 512 | 25.598 ms | 25.311 ms | 1.01x |
+
+**Compiling this workload buys nothing on this part, at any batch size tried.**
+Every ratio is within run-to-run spread — repeating the sweep moves the batch-1
+eager median between 1.44 ms and 1.58 ms on its own, which is wider than the gap
+to Inductor.
+
+That is the arithmetic working out rather than a backend falling back. The
+compiled path is real: Inductor emits five `.cpp`/`.so` pairs using `at::vec` and
+OpenMP, and none of the timings above come from an eager fallback. But Inductor
+fuses pointwise work and does not write GEMM kernels, so both paths hand
+`Linear` to the same BLAS — and this MLP is almost entirely `Linear`.
+[`benchmarks/cpu_fusion_headroom.py`](../benchmarks/cpu_fusion_headroom.py)
+times the layers separately and puts a ceiling on what fusion could recover:
+
+| batch | GEMM share | what fusion can win |
+| --- | --- | --- |
+| 1 | 98.7% | 1.3% |
+| 8 | 98.1% | 1.9% |
+| 64 | 97.3% | 2.7% |
+| 512 | 97.1% | 2.9% |
+
+A 1.0x result is what a 2% ceiling predicts. The honest reading is not "Inductor
+is useless on Arm" but "this workload cannot answer that question on any CPU with
+a competent BLAS" — and the same caveat applies to the CPU rows of every other
+`local.py` comparison in these docs.
+
+Two things this does not establish:
+
+- **Nothing here is a causal LM.** A 30-layer decoder is launch-bound in a way a
+  2-layer MLP is not, which is exactly where fusion earns its keep. That the MLP
+  shows no win predicts nothing about SmolLM2 on this part.
+- **FP32 only, so the matrix unit never came into it.** `torch` reports this core
+  as `SVE128`, and oneDNN does reach Arm Compute Library — a BF16 matmul
+  dispatches to `gemm:acl` — but the section above still has no Arm half, because
+  FP32 does not go there.
+
 ## Validate CPU and GPU locally
 
 The correctness example runs identical weights and inputs through CPU
