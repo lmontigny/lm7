@@ -39,6 +39,7 @@ file stays a index rather than a second, drifting description.
 | [#39](https://github.com/lmontigny/lm7/pull/39) | Refuse weight-only quantization on pre-Ampere NVIDIA |
 | [#56](https://github.com/lmontigny/lm7/pull/56) | Fix INT8 export for models that index with integer arithmetic |
 | [#106](https://github.com/lmontigny/lm7/pull/106) | Add Hopper FP8 dynamic activation and weight quantization |
+| [#140](https://github.com/lmontigny/lm7/pull/140) | Reach for the Arm INT8 instructions, and watch nothing reach them |
 
 ## Artifacts, CLI, and generation
 

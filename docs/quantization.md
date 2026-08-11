@@ -574,8 +574,58 @@ The SmolLM2 VNNI row is genuinely ambiguous between the two estimators and no
 "faster" claim is made from it. What survives the noise is the direction: on both
 ISAs, by every estimator, weight-only INT8 is slower for the 1B model.
 
-Untested, and therefore still unclaimed: AMX (`amx_int8`), which that Xeon does
-not have, and ARM cores with dotprod/i8mm.
+### i8mm does not rescue it either, and here is the kernel proving why
+
+The two rows above are two x86 ISAs, which left open whether the explanation was
+about weight-only quantization or about Intel. An Arm Neoverse N3 (GCP
+`n4a-standard-8`, 8 vCPU, `torch 2.13.0+cpu`) reports `i8mm` — the Arm INT8
+matrix-multiply instructions, the analogue of `amx_int8` — and answers it.
+Llama-3.2-1B, FP32 against INT8, eager, through
+[`benchmarks/quantization.py`](../benchmarks/quantization.py):
+
+| model | ISA | FP32 | INT8 | ratio | footprint |
+| --- | --- | --- | --- | --- | --- |
+| Llama-3.2-1B | **Arm Neoverse N3, `i8mm`** | 179.1 ms | 242.1 ms | **1.35x slower** | 4.943 GB → 2.026 GB (2.44x) |
+
+A third ISA, the same direction. Top-1 agreement is 4/4 with a maximum
+last-token logit difference of 0.51, so the weights are fine; only the latency
+disappoints. The footprint ratio is 2.44x, identical to every other row on this
+page, because it is a property of the weights and not of the host.
+
+Read only the ratio. This leg ran **eager**, with 3 warmups and 10 repeats,
+where the table at the top of this section ran `inductor` at sequence length 16
+with a median of 20 — so its 179.1 ms and the 411.2 ms above are not two
+measurements of the same thing. Eager was chosen deliberately: the question is
+which kernel oneDNN picks, and eager is the shortest path to it. On this part
+that costs little, since compiling a GEMM-bound CPU workload
+[buys nothing measurable](cpu.md#latency-on-a-neoverse-n3).
+
+**This time the kernel says so directly rather than by inference.** Running one
+forward pass under `ONEDNN_VERBOSE=all`, with and without `--quantize int8`:
+
+```
+quantize=None    113x  matmul  gemm:acl  f32/f32/f32
+quantize='int8'  113x  matmul  gemm:acl  f32/f32/f32
+                       declined: lowp_gemm:acl -> unsupported datatype combination
+```
+
+The two are **identical**. Quantizing the weights changes neither the number of
+matmuls, nor the kernel, nor the datatypes it runs at: 113 FP32 GEMMs either
+way. oneDNN's INT8 matmul kernels, `lowp_gemm:acl` and `lowp_gemm_sq:acl`, are
+declined in *both* runs for `unsupported datatype combination` — they are never
+offered INT8 operands to work on, because weight-only quantization dequantizes
+before the GEMM.
+
+So the VNNI explanation above was right, and it was never about VNNI. Weight-only
+INT8 issues no INT8 GEMM on any of the three ISAs measured, which is why no
+INT8 hardware — `vpdpbusd`, `i8mm`, or presumably `amx_int8` — can reach it. The
+extra 35% is dequantization bolted onto a matmul that was going to run in FP32
+regardless.
+
+Untested, and therefore still unclaimed: AMX (`amx_int8`), which neither that
+Xeon nor this Arm part has. It is now the only INT8 hardware in this table
+without a measurement, and the mechanism above predicts it will not help either
+— but that is a prediction, not a result.
 
 What is reliable on CPU is the footprint: **2.44x smaller, at no measured
 accuracy cost**, which is the difference between a 513 MiB and a 210 MiB
