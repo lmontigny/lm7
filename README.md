@@ -291,9 +291,6 @@ Examples and reproducible benchmark harnesses live in
 
 ## Design thesis
 
-Projects such as ZML and Roofline.ai pursue the same broader goal of making ML
-workloads portable across heterogeneous hardware.
-
 LM7 makes a narrower architectural bet: hardware portability does not
 necessarily require another compiler or runtime. Existing stacks such as
 TorchInductor, TensorRT, OpenVINO, OpenXLA, and ExecuTorch already contain
