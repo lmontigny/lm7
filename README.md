@@ -58,6 +58,59 @@ For the per-vendor code this replaces — detection branches, device-string
 inconsistencies, and the behaviour you would otherwise have to know about — see
 [what LM7 replaces](docs/what-this-replaces.md).
 
+## Why not just `torch.compile`?
+
+On CPU, NVIDIA, AMD, Intel GPU, and Apple Silicon, LM7 often *does* use
+`torch.compile` with TorchInductor underneath. LM7 is not another compiler and
+does not replace Inductor, TensorRT, OpenXLA, OpenVINO, or the other toolchains
+it integrates.
+
+`torch.compile(model)` is a good answer when you already know the hardware and
+compiler you want to use. LM7 is for the case where the hardware can change.
+
+The missing layer is everything around the compiler call:
+
+- detecting whether the machine has NVIDIA, AMD ROCm, Intel XPU, Apple MPS, TPU,
+  or another accelerator;
+- normalizing their different device semantics;
+- selecting an available compiler for that target;
+- moving nested model inputs to the right device;
+- caching compiled variants by input signature;
+- handling first-call compilation failures and controlled fallback;
+- explaining why a backend was or was not selected;
+- exporting, inspecting, and loading artifacts produced by different compiler
+  stacks.
+
+Some targets are not an Inductor call at all: TPU uses PyTorch/XLA and OpenXLA,
+Intel NPU uses OpenVINO, and other accelerators bring their own compiler and
+runtime.
+
+LM7 makes those paths one interface:
+
+```python
+lm7.compile(model, target="auto")
+lm7.compile(model, target="nvidia", backend="tensorrt")
+lm7.compile(model, target="amd")
+lm7.compile(model, target="tpu")
+lm7.compile(model, target="intel:npu")
+```
+
+**PyTorch and hardware vendors provide the compilers. LM7 provides the
+vendor-neutral orchestration layer between them.**
+
+That neutrality is deliberate. NVIDIA, AMD, Intel, Google, Apple, and accelerator
+startups naturally optimize their own vertical stacks. LM7 sits above those
+competing ecosystems and can choose or expose whichever toolchain is appropriate
+for the target without owning a compiler of its own.
+
+If one `torch.compile(model)` call already covers your machine and deployment
+needs, you probably do not need LM7. If your PyTorch application needs to
+**survive a change of hardware**, LM7 is the layer intended to make that change
+boring.
+
+See [what LM7 replaces](docs/what-this-replaces.md) for the concrete per-vendor
+code and behavior it centralizes.
+
 ## How it works
 
 LM7 sits between one PyTorch model and the vendor toolchains that compile it.
