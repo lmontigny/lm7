@@ -107,24 +107,24 @@ reads that from sysfs rather than assuming it.
 `pip install --dry-run` against the `[project.optional-dependencies]` names, on
 the host above:
 
-| Extra | aarch64 Linux wheel |
+| Extra | aarch64 Linux wheel | Run on the N3 |
 | --- | --- |
-| `openvino`, `nncf` | resolves |
-| `onnxruntime` | resolves |
-| `executorch` | resolves |
-| `tvm` | **run** — suite passes, artifact validated, see [TVM](tvm.md#linux-aarch64-neoverse-servers) |
-| `torchao` | resolves |
-| `litert` | resolves |
-| `iree-vulkan` | resolves |
-| `serve` (FastAPI, uvicorn) | resolves |
-| `zentorch` | **no wheel** — x86-64 Linux only, by construction |
+| `openvino`, `nncf` | resolves | `tests/test_openvino_integration.py`: 11 passed, 2 NPU skips |
+| `onnxruntime` | resolves | `tests/test_onnxruntime_integration.py`: 3 passed, 2 skips |
+| `executorch` | resolves | `tests/test_executorch_integration.py`: 6 passed |
+| `tvm` | **run** — suite passes, artifact validated, see [TVM](tvm.md#linux-aarch64-neoverse-servers) | `tests/test_tvm_integration.py`: 15 passed |
+| `torchao` | resolves | Used by the Arm INT8 measurement, not a backend by itself |
+| `litert` | resolves | Not run here; LiteRT Torch caps PyTorch below 2.13, so it needs a separate environment |
+| `iree-vulkan` | resolves | Not useful on this VM: GCP Axion exposes no Mali/Vulkan GPU |
+| `serve` (FastAPI, uvicorn) | resolves | `lm7 model serve` ran; see below |
+| `zentorch` | **no wheel** — x86-64 Linux only, by construction | N/A |
 
 > [!IMPORTANT]
-> **"Resolves" means a wheel exists, not that the backend works.** This table is
-> a packaging fact and nothing more: nothing here was installed, imported, run,
-> or checked for numerical agreement on Arm. `torch-tensorrt` also resolves, and
-> is for NVIDIA GPUs. Treat every row except `zentorch` as "worth trying",
-> and see [limitations](limitations.md) for what has actually been validated.
+> **"Resolves" still means only that a wheel exists.** The right column is the
+> extra step that turns a packaging fact into a backend fact. It was run in an
+> isolated checkout and virtualenv at `/mnt/data/codex-arm-smoke-lm7` on the same
+> `n4a-standard-8`, with `torch 2.13.0+cpu`, so it did not reuse the long-lived
+> benchmark environment. `torch-tensorrt` also resolves, and is for NVIDIA GPUs.
 
 `zentorch` is the one certainty, and it is a deliberate one — it is AMD's ZenDNN
 extension and ships x86-64 Linux wheels only, so `lm7 doctor` reports it
@@ -167,7 +167,10 @@ read ratios rather than absolute milliseconds, and run on an idle host.
 - [CPU AOTInductor artifacts](aot-artifact-compatibility.md#cpu-packages-are-architecture-bound-too),
   which carry a native `aarch64` shared object and were not architecture-gated
   until this host demonstrated it.
-
+- ONNX Runtime, OpenVINO, TVM and ExecuTorch integration suites in a fresh
+  aarch64 virtualenv, which turns their wheel availability into a real import,
+  export/load and numerical-agreement check for the small models those suites
+  cover.
 - [INT8 and `i8mm`](quantization.md#i8mm-does-not-rescue-it-either-and-here-is-the-kernel-proving-why),
   where the INT8 matrix instructions this part advertises are never reached,
   because weight-only quantization issues no INT8 GEMM for them to accelerate.
@@ -181,6 +184,8 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   where a tiny MoE compiles 1.4-1.5x faster on the same host that gets nothing
   from compiling the FP32 MLP.
 
-Not measured on Arm: artifact portability for ONNX Runtime or ExecuTorch built
-on Arm, and `--quantize int8` through `lm7 model serve`. Mixtral-8x7B does not
-fit: ~93 GB at BF16 against 31 GB of RAM. See [limitations](limitations.md).
+Not measured on Arm: LiteRT conversion in its older-Torch environment, Mali
+Vulkan execution, wider-SVE server parts, 512-token prompts on the N3, artifact
+portability for ONNX Runtime or ExecuTorch built on Arm, and `--quantize int8`
+through `lm7 model serve`. Mixtral-8x7B does not fit: ~93 GB at BF16 against
+31 GB of RAM. See [limitations](limitations.md).
