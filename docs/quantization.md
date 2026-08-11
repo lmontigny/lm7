@@ -970,6 +970,6 @@ unmeasured here.
 
 ## Related
 
-- [Supported hardware](../README.md#supported-hardware) — where quantization can run
+- [Integrated targets](../README.md#integrated-targets) — where quantization can run
 - [`src/lm7/huggingface.py`](../src/lm7/huggingface.py) — validation gates and
   module filters

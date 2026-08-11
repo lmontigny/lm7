@@ -1,6 +1,6 @@
 # Tested hardware
 
-[Supported hardware](../README.md#supported-hardware) is what the vendor
+[Integrated targets](../README.md#integrated-targets) are what the vendor
 toolchains allow; this is what has actually run on physical hardware. CPU and
 Apple Silicon (MPS) are the only targets with CI — MPS on GitHub's `macos-26`
 arm64 runner; everything else below was exercised by hand, once, on one part
