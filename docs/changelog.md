@@ -64,6 +64,7 @@ file stays a index rather than a second, drifting description.
 | [#130](https://github.com/lmontigny/lm7/pull/130) | Make the vLLM handover start on CUDA, where it never had |
 | [#132](https://github.com/lmontigny/lm7/pull/132) | Say what the model is made of, and what it is occupying |
 | [#110](https://github.com/lmontigny/lm7/pull/110) | Add experimental TensorRT-LLM serving backend for NVIDIA |
+| [#138](https://github.com/lmontigny/lm7/pull/138) | Gate the CPU artifact that was as architecture-bound as the GPU one |
 
 ## On-device validation
 
