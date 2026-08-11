@@ -44,6 +44,48 @@ targets with continuous-integration coverage.
   with the process, like every other `lm7.compile` result.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
+- **Saved compiler output is deep for AOTInductor and shallow for every other
+  backend.** `lm7.export(..., debug=True)` indexes whatever the selected
+  toolchain hands back, and only Inductor hands back more than the exported
+  graph. Measured on an RTX 4070 SUPER (Ada `sm89`, WSL2) under `torch
+  2.13.0+cu130`, on a 2-layer MLP:
+
+  | backend | files | what they are |
+  | --- | --- | --- |
+  | `export` (source-only) | 3 | exported program, graph, signature |
+  | `openvino` | 3 | those same three — nothing from OpenVINO's own compiler beyond the IR that is already the artifact payload |
+  | `aot_inductor`, `cpu` | 11 | those three, plus FX graphs, pre- and post-fusion Inductor IR, `output_code.cpp`, and the `kernel.cpp`/`wrapper.cpp` lifted back out of the `.pt2` package |
+  | `aot_inductor`, `nvidia` | 13 | the CPU set plus two `.cubin` device binaries |
+
+  Four things follow from that.
+
+  **PTX and assembly are classified, not produced.** LM7 labels `.ptx`, `.s`,
+  `.asm`, `.cubin` and `.hsaco` when the package contains them, so the levels
+  are named in the manifest — but the NVIDIA run above emitted `.cubin` only,
+  Triton keeping its PTX in its own cache rather than in the package. Read the
+  lower levels as best-effort, and check what a given toolchain actually wrote
+  rather than assuming the list.
+
+  **Only the export level is proved by a real compile.** The multi-level
+  assertions in `tests/test_aot_inductor.py` monkeypatch
+  `aoti_compile_and_package` and write the trace files themselves, so what runs
+  unmarked on every commit is LM7's indexing, not Inductor's emission. The rows
+  above are a hand run, not CI.
+
+  **It is a Python-API option only.** `lm7 model export` has no `--debug`, and
+  the JIT path has no LM7 API at all: the `--debug-dir` in
+  [`examples/cuda_mlp.py`](../examples/cuda_mlp.py) sets `torch._inductor` trace
+  config directly, and needs `TORCHINDUCTOR_FORCE_DISABLE_CACHES=1`, because a
+  cache hit skips codegen and writes no trace.
+
+  **A debug artifact carries the model's structure.** The files live inside the
+  `.lm7` directory under `debug/` and are hashed into the manifest, so an
+  artifact built this way ships its graph and generated source to whoever
+  receives it. A failed compile discards them unless `LM7_DEBUG_FAILURE_DIR`
+  names somewhere to copy them to first.
+
+  See [compiler IR and generated
+  code](development.md#compiler-ir-and-generated-code).
 - **Sparse Mixture-of-Experts models always compile; whether they *export*
   depends on the transformers version and the architecture.** Measured with
   `torch 2.13` on two-layer models through `lm7.export`:
