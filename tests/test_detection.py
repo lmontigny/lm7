@@ -17,6 +17,7 @@ from lm7.detection import (
     parse_cpu_info,
     parse_total_memory_bytes,
     precision_support,
+    read_physical_cores,
     resolve_target,
     torch_device,
 )
@@ -465,6 +466,7 @@ def test_cpu_target_degrades_without_proc(monkeypatch, tmp_path):
     detection_module = importlib.import_module("lm7.detection")
     monkeypatch.setattr(detection_module, "CPU_INFO_PATH", tmp_path / "absent")
     monkeypatch.setattr(detection_module, "MEMORY_INFO_PATH", tmp_path / "absent")
+    monkeypatch.setattr(detection_module, "CPU_TOPOLOGY_PATH", tmp_path / "absent")
 
     device = detect_cpu_target()
 
@@ -475,7 +477,106 @@ def test_cpu_target_degrades_without_proc(monkeypatch, tmp_path):
     assert device.total_memory_bytes is None
     assert device.capabilities["vendor_id"] is None
     assert device.capabilities["isa_extensions"] == ()
+    assert device.capabilities["physical_cores"] is None
     assert device.capabilities["logical_cores"] == os.cpu_count()
+
+
+def write_topology(root, pairs):
+    """Build the part of /sys/devices/system/cpu that read_physical_cores reads.
+
+    `pairs` is one (package, core) per logical CPU, in cpu0..cpuN order; a None
+    entry stands for an offline CPU, which has no topology directory at all.
+    """
+    for index, pair in enumerate(pairs):
+        if pair is None:
+            (root / f"cpu{index}").mkdir(parents=True)
+            continue
+        package, core = pair
+        topology = root / f"cpu{index}" / "topology"
+        topology.mkdir(parents=True)
+        (topology / "physical_package_id").write_text(f"{package}\n")
+        (topology / "core_id").write_text(f"{core}\n")
+    return root
+
+
+def test_physical_cores_come_from_sysfs_when_cpuinfo_has_no_topology(tmp_path):
+    # The GCP Axion n4a-standard-8 this was captured from: 8 cores, one thread
+    # each, and every one of them in package 148 rather than package 0.
+    root = write_topology(tmp_path, [(148, core) for core in range(8)])
+
+    assert read_physical_cores(root) == 8
+
+
+def test_physical_cores_fold_smt_siblings_together(tmp_path):
+    # Two logical CPUs sharing a core id are one physical core, which is the
+    # whole reason this counts pairs instead of directories.
+    root = write_topology(tmp_path, [(0, 0), (0, 0), (0, 1), (0, 1)])
+
+    assert read_physical_cores(root) == 2
+
+
+def test_physical_cores_separate_sockets_that_reuse_core_ids(tmp_path):
+    # Core 0 exists in both sockets and is two different cores.
+    root = write_topology(tmp_path, [(0, 0), (0, 1), (1, 0), (1, 1)])
+
+    assert read_physical_cores(root) == 4
+
+
+def test_physical_cores_skip_a_cpu_with_no_topology(tmp_path):
+    # An offline CPU publishes no topology directory. The online ones still
+    # answer the question, so it is skipped rather than abandoning the count.
+    root = write_topology(tmp_path, [(0, 0), None, (0, 1)])
+
+    assert read_physical_cores(root) == 2
+
+
+def test_physical_cores_are_absent_without_sysfs(tmp_path):
+    # Every non-Linux host. None means "unknown", not "zero cores".
+    assert read_physical_cores(tmp_path / "absent") is None
+
+
+def test_physical_cores_are_absent_when_sysfs_lists_no_cpus(tmp_path):
+    assert read_physical_cores(tmp_path) is None
+
+
+def test_cpu_target_fills_aarch64_cores_from_sysfs(monkeypatch, tmp_path):
+    """The gap this closes: AArch64 /proc/cpuinfo prints no topology at all, so
+    physical_cores was always None on Arm however many cores the host had."""
+    detection_module = importlib.import_module("lm7.detection")
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(AARCH64_CPUINFO)
+    monkeypatch.setattr(detection_module, "CPU_INFO_PATH", cpuinfo)
+    monkeypatch.setattr(detection_module, "MEMORY_INFO_PATH", tmp_path / "absent")
+    monkeypatch.setattr(
+        detection_module,
+        "CPU_TOPOLOGY_PATH",
+        write_topology(tmp_path / "sys", [(148, core) for core in range(8)]),
+    )
+
+    device = detect_cpu_target()
+
+    assert parse_cpu_info(AARCH64_CPUINFO)["physical_cores"] is None
+    assert device.capabilities["physical_cores"] == 8
+
+
+def test_cpu_target_prefers_cpuinfo_topology_over_sysfs(monkeypatch, tmp_path):
+    """x86 already answers this from /proc/cpuinfo, and keeps doing so -- sysfs
+    is the fallback, so this change cannot move an x86 count."""
+    detection_module = importlib.import_module("lm7.detection")
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(EPYC_CPUINFO)
+    monkeypatch.setattr(detection_module, "CPU_INFO_PATH", cpuinfo)
+    monkeypatch.setattr(detection_module, "MEMORY_INFO_PATH", tmp_path / "absent")
+    monkeypatch.setattr(
+        detection_module,
+        "CPU_TOPOLOGY_PATH",
+        write_topology(tmp_path / "sys", [(0, core) for core in range(64)]),
+    )
+
+    device = detect_cpu_target()
+
+    assert parse_cpu_info(EPYC_CPUINFO)["physical_cores"] == 1
+    assert device.capabilities["physical_cores"] == 1
 
 
 def test_explicit_remote_target_does_not_require_local_detection(monkeypatch):
