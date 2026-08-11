@@ -168,6 +168,10 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   which carry a native `aarch64` shared object and were not architecture-gated
   until this host demonstrated it.
 
-Not measured on Arm: INT8 and whether `i8mm` changes the CPU quantization story,
-and artifact portability for ONNX Runtime or ExecuTorch built on Arm. See
+- [INT8 and `i8mm`](quantization.md#i8mm-does-not-rescue-it-either-and-here-is-the-kernel-proving-why),
+  where the INT8 matrix instructions this part advertises are never reached,
+  because weight-only quantization issues no INT8 GEMM for them to accelerate.
+
+Not measured on Arm: artifact portability for ONNX Runtime or ExecuTorch built
+on Arm, and `--quantize int8` through `lm7 model serve`. See
 [limitations](limitations.md).
