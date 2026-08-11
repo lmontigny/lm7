@@ -91,6 +91,7 @@ file stays a index rather than a second, drifting description.
 | [#43](https://github.com/lmontigny/lm7/pull/43) | Validate Llama-3.1-8B INT8 on CPU, where the weights fit |
 | [#48](https://github.com/lmontigny/lm7/pull/48) | Correct the MoE export claim, and cover a second MoE architecture |
 | [#142](https://github.com/lmontigny/lm7/pull/142) | Validate optional CPU backends on Arm |
+| [#146](https://github.com/lmontigny/lm7/pull/146) | Record LiteRT's aarch64 packaging gap |
 | [#143](https://github.com/lmontigny/lm7/pull/143) | Put the MoE claims to a second CPU ISA, including the 6.92B one |
 | [#103](https://github.com/lmontigny/lm7/pull/103) | Measure LM7 on the GPU production inference actually runs on |
 | [#104](https://github.com/lmontigny/lm7/pull/104) | Run the workloads an LLM serving engine will not take |
@@ -119,6 +120,7 @@ file stays a index rather than a second, drifting description.
 | [#117](https://github.com/lmontigny/lm7/pull/117) | Stop downgrading torch under ExecuTorch, which broke the Core ML CI job |
 | [#125](https://github.com/lmontigny/lm7/pull/125) | Make CI load a real model, so the serve load path stops being untested |
 | [#141](https://github.com/lmontigny/lm7/pull/141) | Run the portable suite on the Arm that a deployment actually is |
+| [#147](https://github.com/lmontigny/lm7/pull/147) | Prove the architecture gate on two machines instead of one |
 
 ## Evaluations that did not become backends
 
