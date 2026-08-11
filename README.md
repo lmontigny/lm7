@@ -106,7 +106,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 > [!NOTE]
 > **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
 >
-> **CPU:** AMD EPYC x86-64 · Arm Neoverse N2/N3
+> **CPU:** Intel Coffee Lake · AMD EPYC x86-64 · Arm Neoverse N2/N3
 >
 > **Apple:** M3 Pro · M4 · M4 Pro
 >
@@ -268,6 +268,39 @@ Choose an export backend for AOTInductor, TensorRT, OpenVINO, ONNX Runtime,
 IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
 [JIT vs. AOT](docs/jit-vs-aot.md) and
 [artifact inspection](docs/artifact-inspection.md).
+
+### See what the compiler generated
+
+When two backends behave differently, save their compiler output to check what
+was fused or lowered and which code will run on the hardware:
+
+```python
+artifact = lm7.export(
+    model,
+    args=(example_input,),
+    target="auto",
+    backend="aot_inductor",
+    output="model-debug.lm7",
+    debug=True,
+)
+
+for path in artifact.debug_files():
+    print(path)
+```
+
+AOTInductor debug exports can include the exported and FX graphs, pre/post-fusion
+IR, generated C++ or CUDA, and PTX, assembly, or binaries when emitted. Other
+backends retain their final payload, such as OpenVINO IR, StableHLO, ONNX, IREE
+VMFB, or a TensorRT engine.
+
+```bash
+# Capture the same Inductor trace from a JIT run.
+TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
+  --target nvidia --debug-dir artifacts/cuda-debug
+```
+
+LM7 saves only the levels the selected toolchain exposes. See
+[compiler IR and generated code](docs/development.md#compiler-ir-and-generated-code).
 
 ### Quantize with TorchAO
 
