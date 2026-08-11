@@ -88,19 +88,19 @@ Detected targets (1):
   what matter and not their values — a GCP Axion reports all eight of its cores
   in package `148`.
 - **`isa_extensions` populates.** `bf16` and `i8mm` are both present on this
-  part — the Arm analogues of `amx_bf16` and `amx_int8`, and the reason the
-  section below has an unanswered Arm half. The SVE forms of the same
-  instructions (`svebf16`, `svei8mm`) are on the kernel's `Features` line but
-  are deliberately not recorded, because nothing here has established whether
-  oneDNN reaches for those or the NEON variants.
+  part — the Arm analogues of `amx_bf16` and `amx_int8`. The SVE forms of the
+  same instructions (`svebf16`, `svei8mm`) are on the kernel's `Features` line
+  but are deliberately not recorded, because nothing here has established
+  whether oneDNN reaches for those or the NEON variants — and, as the section
+  below finds, oneDNN's own logs decline to say.
 
-### What consulting the AMX flags would be worth
+### What consulting the matrix-unit flags would be worth
 
 Measured on an Intel Xeon Platinum 8559C (Emerald Rapids, 8 physical cores, 8
 threads) with `torch 2.13.0+cu130` and oneDNN v3.12, through
-[`benchmarks/cpu_amx.py`](../benchmarks/cpu_amx.py). AMX accelerates BF16 and
-INT8 matmuls and does nothing for FP32, so with the compute dtype pinned to FP32
-none of that hardware is reached today.
+[`benchmarks/cpu_matrix_unit.py`](../benchmarks/cpu_matrix_unit.py). AMX
+accelerates BF16 and INT8 matmuls and does nothing for FP32, so with the compute
+dtype pinned to FP32 none of that hardware is reached today.
 
 Switching the same models to BF16 does reach it — oneDNN dispatches every matmul
 to `brg_matmul:avx10_1_512_amx` — and what it buys depends entirely on the shape
@@ -139,7 +139,7 @@ Two things to know before repeating this:
 - **`torch.backends.cpu.get_cpu_capability()` cannot answer the question.** It
   returns `AVX512` on this machine and never mentions AMX. Only oneDNN's own
   kernel choice does, which is why the benchmark re-runs each case under
-  `ONEDNN_VERBOSE=1` and looks for a matmul reaching a BRGEMM implementation.
+  `ONEDNN_VERBOSE=all` and looks for a matmul reaching a BRGEMM implementation.
   oneDNN names the whole ISA `avx10_1_512_amx`, so an *eltwise* kernel carries
   `amx` in its name while doing no tile-unit work at all.
 - **BF16 is a numerics change, not a speed setting.** SmolLM2's logits move by
@@ -147,14 +147,79 @@ Two things to know before repeating this:
   [quantization](quantization.md)-shaped decision, with the validation that
   implies, rather than a free switch.
 
-**None of this has been repeated on Arm**, and the benchmark cannot be pointed
-at it unmodified: `benchmarks/cpu_amx.py` decides whether the matrix unit was
-reached by looking for a BRGEMM kernel and an `avx10_1_512_amx` ISA string in
-oneDNN's verbose output, both of which are x86 names. A Neoverse part reports
-`bf16` and `i8mm` (above), so the same question exists there and the same
-"reported, not consulted" answer applies — but "a dtype policy has to be
-per-host" currently rests on one ISA, and the Arm half is unmeasured rather
-than measured and found similar.
+### The same question on Arm, where the logs cannot answer it
+
+Repeated on a GCP `n4a-standard-8` (Google Axion, Arm Neoverse N3, 8 vCPU,
+`torch 2.13.0+cpu`, oneDNN v3.12) with the same benchmark. Two things came out
+of it, and the second one undoes the first.
+
+**On the synthetic MLP, BF16 wins everywhere — including where AMX loses.**
+Eager, median latency:
+
+| rows | FP32 | BF16 | | x86 AMX, for contrast |
+| --- | --- | --- | --- | --- |
+| 1 | 1.442 ms | 1.264 ms | 1.14x | **0.77x — slower** |
+| 8 | 1.324 ms | 0.546 ms | 2.42x | 2.22x |
+| 64 | 3.851 ms | 2.119 ms | 1.82x | 4.87x |
+| 512 | 25.728 ms | 8.136 ms | 3.16x | 3.16x |
+
+The AMX result above turns on a tile being 16 rows deep, so a single row leaves
+it idle and BF16 costs more than it saves. Nothing on this Arm part behaves that
+way: one row is already 1.14x. Read on its own, this says the x86 caveat about
+single-sequence decode does not apply here.
+
+**On a real causal LM it reverses.** SmolLM2-135M, same host, same benchmark:
+
+| prompt | eager FP32 | eager BF16 | inductor FP32 | inductor BF16 |
+| --- | --- | --- | --- | --- |
+| 5 tokens | 43.59 ms | 40.36 ms | 32.01 ms | **27.46 ms** |
+| 64 tokens | 94.28 ms | 302.52 ms | **76.95 ms** | 281.02 ms |
+
+At 64 tokens BF16 is **3.2x slower** in eager and 3.7x slower under Inductor —
+the opposite sign to the MLP at the same row count, where BF16 was 1.82x
+*faster*. So on this part the synthetic MLP does not predict the model, and the
+x86 section's habit of using it to "isolate the mechanism" does not carry over.
+Which of the two generalises to other Arm parts is not established by one core.
+
+**Neither oneDNN log can say whether the matrix instructions ran.** On x86 an
+`amx` in a matmul's implementation name is the proof. Here every matmul reads
+`gemm:acl` at *both* dtypes, because that names Arm Compute Library rather than
+an instruction, and the dispatch log is identical for FP32 and BF16 too. The
+benchmark therefore reports `matrix_matmul=unknown` on AArch64 rather than
+`no` — recording "the matrix unit never ran" beside a 2.42x BF16 speedup would
+be plainly false. The latency is the only evidence available, and it is
+circumstantial.
+
+What the dispatch log *does* answer is what was rejected and why:
+
+| implementation | why oneDNN skipped it |
+| --- | --- |
+| `matmul:brg:sve_512` | `unsupported isa` |
+| `matmul:lowp_gemm:acl` | `unsupported datatype combination` |
+| `matmul:lowp_gemm_sq:acl` | `unsupported datatype combination` |
+
+oneDNN reports the ISA as `AArch64 SVE (128 bits)`, and its Arm BRGEMM path
+wants 512-bit vectors — so **that path is unreachable on this core**, and a
+part with wider SVE (Graviton 3/4, Neoverse V-series) could land somewhere else
+entirely. The two `lowp_gemm` rows are the INT8 kernels, declined here only
+because nothing offered them INT8 operands.
+
+Two limits on the above:
+
+- **512-token prompts were not measured.** Each BF16 call there runs into
+  seconds, and the sweep was cut for cost. The x86 table's best BF16 case is its
+  512-token row, so the Arm comparison stops one length short of where AMX looks
+  best.
+- **Absolute latencies are not comparable to the x86 table.** Different host,
+  different `transformers`, and this repo's rule that behaviour is a property of
+  (model, library version) applies. The FP32-versus-BF16 ratios within each host
+  are the comparable part.
+
+The conclusion the x86 half reached — that a dtype policy has to be per-host,
+not per-model — survives, and gets stronger: the policy that would be right on
+Emerald Rapids (BF16 above 16 rows) is wrong on Neoverse N3 in both directions
+at once, winning at one row and losing at 64 tokens of a real model. That is
+still an argument for leaving the flags reported and not consulted.
 
 ## Latency on a Neoverse N3
 
