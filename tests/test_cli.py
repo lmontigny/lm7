@@ -71,6 +71,18 @@ def test_doctor_json(monkeypatch, capsys, detected_devices, tmp_path):
         lambda: ({"name": "eager", "available": True, "version": None, "reason": ""},),
     )
     monkeypatch.setattr(cli, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "inspect_vulkan_runtime",
+        lambda: {
+            "available": False,
+            "runtime_installed": True,
+            "runtime_version": "3.11.0",
+            "device_count": 0,
+            "devices": [],
+            "reason": "IREE Vulkan runtime is installed, but enumerates no Vulkan devices.",
+        },
+    )
 
     assert cli.main(["doctor", "--json"]) == 0
 
@@ -82,6 +94,36 @@ def test_doctor_json(monkeypatch, capsys, detected_devices, tmp_path):
     assert output["cache_dir"] == str(tmp_path)
     assert output["targets"][0]["name"] == "Test GPU"
     assert output["backends"][0]["name"] == "eager"
+    assert output["vulkan"]["runtime_installed"] is True
+    assert output["vulkan"]["device_count"] == 0
+
+
+def test_doctor_text_reports_vulkan_devices(monkeypatch, capsys, detected_devices, tmp_path):
+    monkeypatch.setattr(cli, "detect_targets", lambda: detected_devices)
+    monkeypatch.setattr(
+        cli,
+        "inspect_backends",
+        lambda: ({"name": "eager", "available": True, "version": None, "reason": ""},),
+    )
+    monkeypatch.setattr(cli, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "inspect_vulkan_runtime",
+        lambda: {
+            "available": True,
+            "runtime_installed": True,
+            "runtime_version": "3.11.0",
+            "device_count": 1,
+            "devices": [{"name": "Mali-G715", "type": "discrete"}],
+            "reason": "IREE Vulkan runtime found at least one Vulkan device.",
+        },
+    )
+
+    assert cli.main(["doctor"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Vulkan: available, IREE runtime 3.11.0" in output
+    assert "Mali-G715" in output
 
 
 def test_explain_json(capsys):

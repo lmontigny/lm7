@@ -13,6 +13,7 @@ from .api import backends as inspect_backends
 from .api import version
 from .backends import registry
 from .backends.base import CompileRequest
+from .backends.iree_vulkan import inspect_vulkan_runtime
 from .bundles import create_bundle, load_bundle
 from .cache import cache_dir
 from .compatibility import ModelCompatibilityResult, inspect_hf_model
@@ -113,6 +114,7 @@ def _doctor_data() -> dict[str, Any]:
         "cache_dir": str(cache_dir()),
         "targets": [_target_data(device) for device in detect_targets()],
         "backends": list(inspect_backends()),
+        "vulkan": inspect_vulkan_runtime(),
     }
 
 
@@ -192,6 +194,18 @@ def _print_backends(backends: Sequence[dict[str, Any]]) -> None:
             print(f"    {backend['reason']}")
 
 
+def _print_vulkan(data: Mapping[str, Any]) -> None:
+    status = "available" if data["available"] else "unavailable"
+    version = f", IREE runtime {data['runtime_version']}" if data["runtime_version"] else ""
+    print(f"Vulkan: {status}{version}")
+    print(f"  {data['reason']}")
+    for index, device in enumerate(data["devices"]):
+        name = device.get("name") or device.get("device_name") or "unknown"
+        device_type = device.get("type") or device.get("device_type")
+        suffix = f" ({device_type})" if device_type else ""
+        print(f"  [{index}] {name}{suffix}")
+
+
 def _print_explanation(data: dict[str, Any]) -> None:
     resolved = data["resolved_target"]["target"]
     print(f"Selected {data['selected_backend']} for {resolved}")
@@ -232,6 +246,8 @@ def _print_doctor(data: dict[str, Any]) -> None:
     )
     print()
     _print_backends(data["backends"])
+    print()
+    _print_vulkan(data["vulkan"])
 
 
 def _print_hexagon_doctor(result: HexagonToolchainDiagnostics, mode: str) -> None:

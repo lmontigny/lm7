@@ -70,6 +70,53 @@ def test_probe_distinguishes_offline_compilation_from_runtime_devices(monkeypatc
     assert "no Vulkan devices" in probe.reason
 
 
+def test_inspect_vulkan_runtime_reports_missing_runtime(monkeypatch):
+    monkeypatch.setattr(iree_vulkan, "_has_module", lambda _name: False)
+
+    diagnostics = iree_vulkan.inspect_vulkan_runtime()
+
+    assert diagnostics["available"] is False
+    assert diagnostics["runtime_installed"] is False
+    assert diagnostics["device_count"] == 0
+    assert '".[iree-vulkan]"' in diagnostics["reason"]
+
+
+def test_inspect_vulkan_runtime_reports_no_devices(monkeypatch):
+    monkeypatch.setattr(iree_vulkan, "_has_module", lambda _name: True)
+    monkeypatch.setattr(iree_vulkan, "_package_version", lambda _name: "3.11.0")
+    monkeypatch.setattr(iree_vulkan, "query_vulkan_devices", lambda: ())
+
+    diagnostics = iree_vulkan.inspect_vulkan_runtime()
+
+    assert diagnostics["available"] is False
+    assert diagnostics["runtime_installed"] is True
+    assert diagnostics["runtime_version"] == "3.11.0"
+    assert diagnostics["device_count"] == 0
+    assert "no Vulkan devices" in diagnostics["reason"]
+
+
+def test_inspect_vulkan_runtime_reports_devices_as_jsonable(monkeypatch):
+    class Opaque:
+        def __str__(self) -> str:
+            return "opaque-value"
+
+    monkeypatch.setattr(iree_vulkan, "_has_module", lambda _name: True)
+    monkeypatch.setattr(iree_vulkan, "_package_version", lambda _name: "3.11.0")
+    monkeypatch.setattr(
+        iree_vulkan,
+        "query_vulkan_devices",
+        lambda: ({"name": "Mali-G715", "driver": Opaque(), "queue_counts": (1, 2)},),
+    )
+
+    diagnostics = iree_vulkan.inspect_vulkan_runtime()
+
+    assert diagnostics["available"] is True
+    assert diagnostics["device_count"] == 1
+    assert diagnostics["devices"] == [
+        {"name": "Mali-G715", "driver": "opaque-value", "queue_counts": [1, 2]}
+    ]
+
+
 def test_compile_exported_writes_vmfb_with_portable_flags(monkeypatch, tmp_path):
     calls = {}
 
