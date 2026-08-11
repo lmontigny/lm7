@@ -22,6 +22,7 @@ This index covers everything else.
 | --- | --- |
 | CPU | [cpu.md](cpu.md) |
 | AMD CPU (EPYC, Ryzen) | [amd-cpu.md](amd-cpu.md) |
+| Arm CPU (Neoverse Linux servers) | [arm-cpu.md](arm-cpu.md) |
 | NVIDIA GPU | [development.md#nvidia-cuda](development.md#nvidia-cuda) |
 | NVIDIA Hopper (`sm90`, H100) | [nvidia-h100.md](nvidia-h100.md) |
 | NVIDIA Blackwell (`sm100`, `sm120`) | [nvidia-blackwell.md](nvidia-blackwell.md) |
