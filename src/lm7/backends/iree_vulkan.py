@@ -216,6 +216,53 @@ def query_vulkan_devices() -> tuple[Mapping[str, Any], ...]:
         return ()
 
 
+def inspect_vulkan_runtime() -> dict[str, Any]:
+    runtime_installed = _has_module("iree.runtime")
+    runtime_version = _package_version("iree-base-runtime") if runtime_installed else None
+    if not runtime_installed:
+        return {
+            "available": False,
+            "runtime_installed": False,
+            "runtime_version": None,
+            "device_count": 0,
+            "devices": [],
+            "reason": 'IREE runtime is not installed; install LM7 with ".[iree-vulkan]".',
+        }
+    devices = tuple(_jsonable_mapping(device) for device in query_vulkan_devices())
+    if not devices:
+        return {
+            "available": False,
+            "runtime_installed": True,
+            "runtime_version": runtime_version,
+            "device_count": 0,
+            "devices": [],
+            "reason": "IREE Vulkan runtime is installed, but enumerates no Vulkan devices.",
+        }
+    return {
+        "available": True,
+        "runtime_installed": True,
+        "runtime_version": runtime_version,
+        "device_count": len(devices),
+        "devices": list(devices),
+        "reason": "IREE Vulkan runtime found at least one Vulkan device.",
+    }
+
+
+def _jsonable_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if item is None or isinstance(item, (bool, int, float, str)):
+            result[str(key)] = item
+        elif isinstance(item, (tuple, list)):
+            result[str(key)] = [
+                child if child is None or isinstance(child, (bool, int, float, str)) else str(child)
+                for child in item
+            ]
+        else:
+            result[str(key)] = str(item)
+    return result
+
+
 def _flatten_tensors(value: Any) -> list[torch.Tensor]:
     tensors: list[torch.Tensor] = []
 
