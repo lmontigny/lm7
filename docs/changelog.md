@@ -89,6 +89,7 @@ file stays a index rather than a second, drifting description.
 | [#103](https://github.com/lmontigny/lm7/pull/103) | Measure LM7 on the GPU production inference actually runs on |
 | [#104](https://github.com/lmontigny/lm7/pull/104) | Run the workloads an LLM serving engine will not take |
 | [#105](https://github.com/lmontigny/lm7/pull/105) | Find where the H100's flat-latency regime ends, and where compiling stops paying |
+| [#134](https://github.com/lmontigny/lm7/pull/134) | Measure Arm latency at last, and find nothing to compile |
 
 ## Detection and diagnostics
 
