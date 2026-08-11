@@ -47,6 +47,45 @@ jobs:
       - name: Type check
         run: python -m mypy src/lm7
 
+  # The portable suite ran on x86-64 and on macOS arm64, and on no Linux Arm
+  # host anywhere -- so the one combination a Graviton or Axion deployment
+  # actually is went unexercised. That mattered once detection and artifact code
+  # started branching on architecture: the sysfs core count reads /sys, which
+  # macOS does not have, and the CPU artifact gate compares aarch64 against
+  # x86_64. Both were merged on the strength of x86 CI and a hand run.
+  #
+  # Deliberately a separate job from the ExecuTorch one below rather than an
+  # extra step in it. This installs ".[dev]" and nothing else, exactly like
+  # `quality` above, so a failure here means the architecture differs rather
+  # than the dependency set does. Lint, formatting and typing are not repeated,
+  # because none of them can vary by architecture.
+  quality-arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+
+      - name: Report the architecture under test
+        run: |
+          python -c "import platform; print('machine:', platform.machine())"
+          python -c "import torch; print('torch:', torch.__version__)"
+
+      - name: Test
+        run: python -m pytest
+
   # LM7's ExecuTorch artifacts are built for phones, but every automated check
   # runs on x86-64. This job is the cheap half of closing that gap: it exercises
   # the same XNNPACK lowering on real ARM64 hardware, so an ARM-specific
