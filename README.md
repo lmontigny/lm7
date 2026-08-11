@@ -20,9 +20,7 @@ output = compiled(example_input)
 
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
-> compiled-artifact compatibility are not stable. CPU and Apple are the only
-> targets with continuous integration coverage; other targets are tested by
-> hand, export-tested, mock-tested, or parse-only as documented below. See
+> compiled-artifact compatibility are not stable. See
 > [limitations](docs/limitations.md) before depending on it.
 
 ## Why not just `torch.compile`?
@@ -146,6 +144,25 @@ through LM7 on real hardware. See [tested hardware](docs/tested-hardware.md) and
 [limitations](docs/limitations.md#hardware-validation) for the evidence behind
 each row.
 
+## Validated models
+
+LM7 does not maintain a model allowlist. The models below have exercised at
+least one real compile, generation, export, or quantization path; support still
+depends on the selected target and backend.
+
+| Model type | Validated models |
+| --- | --- |
+| Causal language models | SmolLM2-135M-Instruct, LFM2.5-230M, Llama 3.2 1B Instruct, Llama 3.1 8B Instruct, Qwen3.5-0.8B, DeepSeek-Coder 1.3B Instruct |
+| Sparse mixture of experts | Mixtral 8x7B and tiny Mixtral configs; OLMoE-1B-7B and tiny OLMoE configs |
+| Vision | ResNet-18, MobileNetV2, ViT Base Patch16 |
+| Encoder and sequence models | BERT Base, LSTM reference model |
+
+This is validation evidence, not a guarantee that every model works through
+every compiler. Use `lm7 model compatibility hf://...` as a fast preflight,
+then run the model on the intended target for the definitive check. See
+[model compatibility](docs/model-compatibility.md), [tested hardware](docs/tested-hardware.md),
+and [limitations](docs/limitations.md).
+
 ## Quick start
 
 LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
@@ -223,12 +240,17 @@ lm7 model generate hf://HuggingFaceTB/SmolLM2-135M-Instruct \
 See [model compatibility](docs/model-compatibility.md) and
 [compiled generation](docs/huggingface-generation.md).
 
-Serve a model for local validation:
+### Serve a model with `lm7 model serve`
 
 ```bash
 uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
+
+Open <http://127.0.0.1:8000> for the built-in chat page, or connect an
+OpenAI-compatible client to `http://127.0.0.1:8000/v1`. The server exposes
+chat completions, text completions, model discovery, health, metrics, and an
+OpenAPI schema.
 
 This is a single-user validation server, not a production serving engine. For
 production NVIDIA serving, `--backend vllm` hands execution to vLLM. See
@@ -247,7 +269,11 @@ IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
 [JIT vs. AOT](docs/jit-vs-aot.md) and
 [artifact inspection](docs/artifact-inspection.md).
 
-Quantize a validated Hugging Face model:
+### Quantize with TorchAO
+
+LM7 uses [TorchAO](https://github.com/pytorch/ao) for runtime quantization of
+validated Hugging Face models. Available modes include INT8, FP8, and NVFP4
+weight quantization, plus activation-quantized variants on supported NVIDIA GPUs.
 
 ```bash
 uv pip install -e ".[hf,torchao]"
@@ -255,22 +281,22 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target cpu --quantize int8
 ```
 
-Quantization is admitted per model and mode rather than promised universally.
-See [quantization](docs/quantization.md) for measurements and accuracy checks.
+Quantization is admitted per model, mode, target, and dtype rather than promised
+universally. OpenVINO and ExecuTorch exports use their own quantization paths
+instead of TorchAO. See [quantization](docs/quantization.md) for supported modes,
+measurements, and accuracy checks.
 
 Examples and reproducible benchmark harnesses live in
 [`examples/`](examples) and [`benchmarks/`](benchmarks).
 
 ## Design thesis
 
-Projects such as ZML and Roofline.ai pursue the same broader goal of making ML
-workloads portable across heterogeneous hardware.
-
-LM7 makes a narrower architectural bet: hardware portability does not
-necessarily require another compiler or runtime. Existing stacks such as
-TorchInductor, TensorRT, OpenVINO, OpenXLA, and ExecuTorch already contain
-substantial hardware-specific work. LM7 provides a neutral layer above them
-instead of replacing them.
+LM7's architectural bet is that hardware portability does not require owning
+another compiler or runtime. Existing stacks such as TorchInductor, TensorRT,
+OpenVINO, OpenXLA, and ExecuTorch already contain substantial hardware-specific
+work. LM7 preserves the PyTorch programming model and provides a vendor-neutral
+orchestration layer above those stacks, selecting the appropriate toolchain
+instead of replacing it.
 
 ## Documentation
 
