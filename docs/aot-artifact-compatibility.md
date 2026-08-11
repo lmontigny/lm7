@@ -256,6 +256,7 @@ the PyTorch-version case needs a second interpreter and ran on **B1** and **A**.
 | case | outcome | what the user sees |
 | --- | --- | --- |
 | architecture claims another GPU | rejected | `its aot_inductor payload was built for nvidia:sm89, but this machine is nvidia:sm120 ... Re-export on a matching machine, or ship a bundle` |
+| architecture claims another CPU | rejected | `its aot_inductor payload was built for cpu:aarch64, but this machine is cpu:x86_64 ...` — the same gate, now reaching CPU packages, whose payload is a native `.so` |
 | `format_version` bumped | rejected | `Unsupported LM7 artifact format 2; this LM7 version supports format 1` |
 | payload byte flipped | rejected | `compiled package checksum does not match the manifest` |
 | program byte flipped | rejected | `program checksum does not match the manifest` |
@@ -341,9 +342,39 @@ same grounds. Now:
 package that could never fire, because nothing set `device_bound` for this
 backend. It fires now.
 
-CPU and Apple artifacts record nothing new. Their payload is bound to a host
-toolchain too, but LM7 has not characterized how, and a guess in a manifest is
-worse than a gap.
+### CPU packages are architecture-bound too
+
+Characterized on a GCP `n4a-standard-8` (Arm Neoverse N3, Debian 12), which is
+the first Linux Arm host this project could export from. A
+`backend="aot_inductor"`, `target="cpu"` artifact contains:
+
+```
+compiled_model/data/aotinductor/model/<hash>.wrapper.so
+  ELF 64-bit LSB shared object, ARM aarch64, version 1 (GNU/Linux)
+```
+
+That is 1.58 MB of natively compiled code, and no x86-64 host can `dlopen` it.
+So a CPU AOTInductor package is bound to its architecture in exactly the way a
+GPU one is bound to its compute capability — the guess this file previously
+declined to make now has a measurement behind it, and `aot_inductor` is gated
+for `cpu` as well as for `nvidia` and `amd`.
+
+Two things had to change together, because the gate alone would not have fired:
+
+- **The architecture was not being recorded.** `target="cpu"` parsed to a spec
+  with `architecture=None` while `target="auto"` on the same machine resolved to
+  `aarch64`, and the check is silent without a recorded architecture. Naming the
+  target explicitly therefore *disabled* the guard — including for `tvm`, whose
+  CPU gate this file already documents, and for `nvidia` when written without an
+  `sm` qualifier.
+- **Only bound backends get it.** The architecture is part of an artifact's
+  identity inside a bundle, so recording `cpu:aarch64` on a portable `export`
+  payload would stop it answering a request for plain `cpu`. Portable backends
+  still record the vendor alone.
+
+Apple artifacts still record nothing new. An `apple` target's architecture is
+`metal`, which describes the GPU rather than the CPU the payload was compiled
+for, so the same reasoning does not transfer without its own measurement.
 
 ## Scope
 

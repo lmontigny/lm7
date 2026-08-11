@@ -217,7 +217,7 @@ def export(
         raise BackendUnavailableError(
             f"Export backend {backend!r} is not supported; choose one of {choices}."
         )
-    resolved_target = _artifact_target(target)
+    resolved_target = _artifact_target(target, backend)
     if backend == "aot_inductor" and resolved_target.vendor not in AOT_INDUCTOR_VENDORS:
         raise BackendUnavailableError(
             "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU, Apple "
@@ -772,10 +772,14 @@ def export(
 # exporting host's CPU target triple (arm64 vs x86-64). Everything else either
 # carries a portable program or does not vary by architecture at load time.
 _ARCHITECTURE_BOUND_BACKENDS = frozenset({"aot_inductor", "tensorrt", "tvm"})
-# aot_inductor/tensorrt are bound to a GPU compute capability (vendor nvidia or
-# amd); tvm is bound to the CPU instruction set (vendor cpu) instead.
+# tensorrt is bound to a GPU compute capability (vendor nvidia or amd); tvm is
+# bound to the CPU instruction set instead. AOTInductor is both: its GPU
+# packages carry kernels for one compute capability, and its *CPU* packages
+# carry a natively compiled shared object. A cpu artifact exported on a GCP
+# Axion holds `wrapper.so`, "ELF 64-bit LSB shared object, ARM aarch64", which
+# no x86-64 host can dlopen -- see docs/aot-artifact-compatibility.md.
 _ARCHITECTURE_BOUND_VENDORS = {
-    "aot_inductor": {"nvidia", "amd"},
+    "aot_inductor": {"nvidia", "amd", "cpu"},
     "tensorrt": {"nvidia", "amd"},
     "tvm": {"cpu"},
 }
@@ -1198,9 +1202,40 @@ def artifact_cache_key(model_graph_hash: str, signature: Any, target: TargetSpec
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _artifact_target(target: str | TargetSpec) -> TargetSpec:
+def _artifact_target(target: str | TargetSpec, backend: str = "export") -> TargetSpec:
+    """The target to record in the manifest, with its architecture filled in.
+
+    Resolving only ``auto`` was not enough. An explicitly named vendor parses to
+    a spec with ``architecture=None``, so ``target="cpu"`` recorded no
+    architecture while ``target="auto"`` on the same machine recorded
+    ``aarch64`` -- and :func:`_validate_target_architecture` is silent without a
+    recorded one. Spelling the target out therefore disabled the architecture
+    check for the backends that need it, which is the opposite of what being
+    explicit should do.
+
+    Only architecture-bound backends get the extra resolution, and only for the
+    vendors that bind them. The architecture is part of the artifact's identity
+    inside a bundle, so recording it on a *portable* payload would narrow
+    matching for something that runs anywhere: an `export` artifact keyed
+    ``cpu:aarch64`` stops answering a request for plain ``cpu``.
+
+    Best-effort even then, because an artifact does not need local hardware to
+    exist: a remote (AOT-only) target describes a device that is not attached,
+    an architecture the caller already gave is theirs to keep, and a vendor
+    whose hardware is absent -- cross-compiling for a GPU this host does not
+    have -- keeps the parsed spec rather than failing the export.
+    """
     parsed = parse_target(target)
-    return resolve_target(parsed) if parsed.vendor == "auto" else parsed
+    if parsed.vendor == "auto":
+        return resolve_target(parsed)
+    if parsed.remote or parsed.architecture:
+        return parsed
+    if parsed.vendor not in _ARCHITECTURE_BOUND_VENDORS.get(backend, frozenset()):
+        return parsed
+    try:
+        return resolve_target(parsed)
+    except TargetNotFoundError:
+        return parsed
 
 
 def _graph_hash(exported_program: torch.export.ExportedProgram) -> str:

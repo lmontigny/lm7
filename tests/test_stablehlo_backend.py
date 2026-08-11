@@ -154,7 +154,9 @@ def test_export_does_not_gate_on_vendor(tmp_path, monkeypatch, target):
     device is a separate question, so a device-move failure is not a gate failure.
     """
     install_fake_torch_xla(monkeypatch)
-    monkeypatch.setattr(lm7.exporting, "_artifact_target", lambda value: parse_target(target))
+    monkeypatch.setattr(
+        lm7.exporting, "_artifact_target", lambda value, backend="export": parse_target(target)
+    )
     try:
         artifact = lm7.export(
             model(),
