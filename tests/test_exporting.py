@@ -249,6 +249,97 @@ def test_portable_backends_are_not_architecture_gated(monkeypatch, tmp_path, bac
     exporting._validate_target_architecture(_architecture_manifest(backend, "sm89"), tmp_path)
 
 
+def test_cpu_aot_inductor_artifact_is_refused_on_a_different_cpu(monkeypatch, tmp_path):
+    """A CPU AOTInductor package carries a natively compiled shared object.
+
+    An artifact exported on a GCP Axion holds `wrapper.so`, "ELF 64-bit LSB
+    shared object, ARM aarch64", which no x86-64 host can dlopen. Before this
+    it was ungated, because the backend was listed as GPU-bound only.
+    """
+    monkeypatch.setattr(
+        exporting, "resolve_target", lambda _: TargetSpec("cpu", "cpu", architecture="x86_64")
+    )
+    manifest = _architecture_manifest("aot_inductor", "aarch64", vendor="cpu")
+    with pytest.raises(ArtifactLoadError, match="built for cpu:aarch64"):
+        exporting._validate_target_architecture(manifest, tmp_path)
+
+
+def test_cpu_aot_inductor_artifact_loads_on_the_same_cpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        exporting, "resolve_target", lambda _: TargetSpec("cpu", "cpu", architecture="aarch64")
+    )
+    exporting._validate_target_architecture(
+        _architecture_manifest("aot_inductor", "aarch64", vendor="cpu"), tmp_path
+    )
+
+
+def test_naming_a_vendor_records_its_architecture(monkeypatch):
+    """target="cpu" must record what target="auto" records on the same host.
+
+    It did not: an explicitly named vendor parsed to architecture=None, and the
+    architecture check is silent without a recorded one -- so spelling the
+    target out disabled the very guard being explicit should have engaged.
+    """
+    monkeypatch.setattr(
+        exporting, "resolve_target", lambda _: TargetSpec("cpu", "cpu", architecture="aarch64")
+    )
+
+    assert exporting._artifact_target("cpu", "aot_inductor").architecture == "aarch64"
+    assert exporting._artifact_target("auto", "aot_inductor").architecture == "aarch64"
+
+
+@pytest.mark.parametrize("backend", ["export", "executorch", "openvino", "stablehlo", "litert"])
+def test_portable_payloads_are_not_pinned_to_this_architecture(monkeypatch, backend):
+    """A portable artifact must stay portable, including inside a bundle.
+
+    The architecture is part of an artifact's identity in a bundle, so recording
+    it on a payload that runs anywhere would narrow matching: an `export`
+    artifact keyed cpu:aarch64 stops answering a request for plain `cpu`.
+    """
+
+    def unexpected(_):
+        raise AssertionError(f"{backend} is portable and must not consult local hardware")
+
+    monkeypatch.setattr(exporting, "resolve_target", unexpected)
+
+    assert exporting._artifact_target("cpu", backend).architecture is None
+
+
+def test_an_architecture_the_caller_gave_is_kept(monkeypatch):
+    """Cross-compiling for a named architecture must not be overwritten by this host."""
+
+    def unexpected(_):
+        raise AssertionError("an explicit architecture must not consult local hardware")
+
+    monkeypatch.setattr(exporting, "resolve_target", unexpected)
+
+    assert exporting._artifact_target("nvidia:sm90", "aot_inductor").architecture == "sm90"
+
+
+def test_absent_hardware_still_exports(monkeypatch):
+    """Exporting for a GPU this host does not have keeps working, without one."""
+
+    def unresolvable(_):
+        raise TargetNotFoundError("no NVIDIA GPU on this host")
+
+    monkeypatch.setattr(exporting, "resolve_target", unresolvable)
+    spec = exporting._artifact_target("nvidia", "aot_inductor")
+
+    assert spec.vendor == "nvidia"
+    assert spec.architecture is None
+
+
+def test_remote_targets_are_not_resolved_against_this_host(monkeypatch):
+    """An AOT-only target describes a device that is not attached."""
+
+    def unexpected(_):
+        raise AssertionError("a remote target must not inspect local devices")
+
+    monkeypatch.setattr(exporting, "resolve_target", unexpected)
+
+    assert exporting._artifact_target("qualcomm:sm8750", "executorch").vendor == "qualcomm"
+
+
 def test_architecture_check_is_silent_when_the_answer_is_unknowable(monkeypatch, tmp_path):
     """No recorded architecture, or an unresolvable host, must still load."""
     monkeypatch.setattr(
