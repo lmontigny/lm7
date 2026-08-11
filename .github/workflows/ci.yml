@@ -491,3 +491,117 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
+
+  # docs/aot-artifact-compatibility.md's architecture gate is the one check in
+  # this repo that cannot be exercised on a single machine: it compares the
+  # architecture an artifact was built for against the one loading it, so
+  # proving it needs two. Everything until now tested it from hand-built
+  # manifests and monkeypatched resolve_target, which verifies the comparison
+  # and not that a real payload actually refuses to load.
+  #
+  # These two jobs are the real thing. The first builds on ARM64, the second
+  # loads on x86-64. It became testable at all once the architecture started
+  # being recorded for a bare `target="cpu"`; before that the manifest said
+  # None and the gate was silent, which is exactly the failure this would have
+  # caught.
+  cross-arch-build:
+    name: Cross-arch artifact (build on ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7
+        run: |
+          sudo apt-get update && sudo apt-get install --yes g++
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+
+      - name: Build an architecture-bound artifact and a portable one
+        run: |
+          mkdir -p cross-arch
+          python examples/aot_mlp.py --output cross-arch/bound.lm7
+          python - <<'PY'
+          import torch, lm7
+          torch.manual_seed(0)
+          model = torch.nn.Sequential(
+              torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 8)
+          ).eval()
+          lm7.export(
+              model, args=(torch.randn(2, 8),),
+              output="cross-arch/portable.lm7", target="cpu", backend="export",
+          )
+          PY
+          python -c "
+          import json
+          for name in ('bound', 'portable'):
+              m = json.load(open(f'cross-arch/{name}.lm7/manifest.json'))
+              print(name, m['backend'], m['target']['architecture'])
+          "
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cross-arch-artifacts
+          path: cross-arch/
+          retention-days: 1
+
+  cross-arch-load:
+    name: Cross-arch artifact (load on x86-64)
+    runs-on: ubuntu-24.04
+    needs: cross-arch-build
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install LM7
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: cross-arch-artifacts
+          path: cross-arch/
+
+      - name: The bound artifact must be refused, the portable one must load
+        run: |
+          python - <<'PY'
+          import platform
+          import lm7
+          from lm7.errors import ArtifactLoadError
+
+          assert platform.machine() == "x86_64", platform.machine()
+
+          # Architecture-bound: an aarch64 AOTInductor payload is a native .so,
+          # so being refused here is the whole point. A dlopen error instead
+          # would mean the gate never fired.
+          try:
+              lm7.load_artifact("cross-arch/bound.lm7")
+          except ArtifactLoadError as error:
+              assert "cpu:aarch64" in str(error), error
+              assert "cpu:x86_64" in str(error), error
+              print("bound artifact refused as intended:", str(error)[:140])
+          else:
+              raise SystemExit("an aarch64 aot_inductor artifact loaded on x86-64")
+
+          # Portable: an ExportedProgram carries no native code, so the same
+          # gate must stay out of its way. Refusing everything would pass the
+          # check above while breaking every portable artifact.
+          loaded = lm7.load_artifact("cross-arch/portable.lm7")
+          assert loaded.manifest.backend == "export", loaded.manifest.backend
+          print("portable artifact loaded across architectures")
+          PY
