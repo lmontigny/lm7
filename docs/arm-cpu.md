@@ -1,0 +1,166 @@
+# Arm CPU inference (Linux servers)
+
+[CPU inference](cpu.md) covers what LM7 does on a CPU generally, and most of it
+is architecture-neutral. This is the Arm-server-specific half: what a Neoverse
+host needs that an x86 one does not, what LM7 reports there, and the traps that
+cost time on the way in.
+
+For Apple Silicon see [Apple Silicon](apple-mps.md) — it is also `arm64`, but a
+laptop with a GPU attached is a different setup problem from a headless server.
+
+Everything below was done on a GCP `n4a-standard-8` (Google Axion, **Arm
+Neoverse N3**, 8 vCPU, 31 GiB, Debian 12 bookworm, kernel 6.1 arm64) — the host
+in [tested hardware](tested-hardware.md). Version-specific findings say so.
+
+## Setting one up
+
+```bash
+sudo apt-get install -y python3-venv python3-dev build-essential
+python3 -m venv /mnt/data/venv
+/mnt/data/venv/bin/pip install numpy
+/mnt/data/venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+/mnt/data/venv/bin/pip install -e ".[dev]"
+```
+
+Four things that are not obvious, in the order they bite:
+
+- **`python3-dev` is not optional if you intend to use Inductor.** TorchInductor
+  generates C++ and compiles it at run time, so it needs `Python.h` present. A
+  plain cloud image has the interpreter and not the headers, and the failure
+  arrives on the first `lm7.compile(..., backend="inductor")` rather than at
+  install time.
+- **The boot disk is probably too small.** Cloud Arm images default to around
+  10 GiB, and `torch` plus one small checkpoint will fill it. Put the virtualenv
+  *and* the Hugging Face cache on a data disk — `HF_HOME` defaults to `~/.cache`
+  and will quietly target the boot disk otherwise:
+
+  ```bash
+  export HF_HOME=/mnt/data/hf-cache
+  ```
+
+- **`numpy` is not pulled in by `torch`.** Without it every import prints
+  `Failed to initialize NumPy: No module named 'numpy'` and continues. It is a
+  warning rather than an error, which makes it easy to carry a long way.
+- **The CPU wheel index is the one that was tested here.** `--index-url
+  .../whl/cpu` is explicit about wanting a CPU build. Whether plain `pip install
+  torch` resolves to the same wheel on aarch64 was not checked, and CUDA-on-Arm
+  wheels do now exist for server parts, so do not assume the default is CPU-only
+  the way it historically was.
+
+## What LM7 reports on a Neoverse host
+
+```
+Detected targets (1):
+  cpu:aarch64: Arm Neoverse N3, 31.3 GiB
+```
+
+```json
+{
+  "target": "cpu:aarch64",
+  "name": "Arm Neoverse N3",
+  "capabilities": {
+    "isa_extensions": ["asimd", "asimddp", "asimdhp", "bf16", "i8mm", "sve", "sve2"],
+    "logical_cores": 8,
+    "physical_cores": 8,
+    "vendor_id": null
+  }
+}
+```
+
+The core is named from its `CPU implementer` and `CPU part` numbers, because
+AArch64 publishes no `model name`; `physical_cores` comes from sysfs topology,
+because AArch64 publishes no `core id` either; `vendor_id` stays `null` because
+nothing publishes one. All three are explained in
+[CPU inference](cpu.md#on-aarch64-the-kernel-prints-less).
+
+## What the toolchain says about itself
+
+Worth capturing on a new host, because three different layers each answer a
+different question and only the last one is about matrix hardware:
+
+| | on the N3 |
+| --- | --- |
+| `torch.backends.cpu.get_cpu_capability()` | `SVE128` |
+| `torch.__config__.show()` | `USE_MKLDNN=1`, `USE_OPENMP=ON`, `BLAS_INFO=open` |
+| oneDNN (`ONEDNN_VERBOSE=1`) | `v3.12.0`, `isa:AArch64 SVE (128 bits)` |
+
+- **`get_cpu_capability()` reports the SVE vector length, not a matrix-unit
+  answer.** `SVE128` says the vectors are 128 bits wide. It says nothing about
+  whether `bf16` or `i8mm` instructions are reached, exactly as its `AVX512`
+  answer on an Intel host says nothing about AMX.
+- **BLAS is OpenBLAS, and oneDNN is present and reaches Arm Compute Library.**
+  A matmul dispatches to `gemm:acl` — at *every* dtype, which is why it cannot
+  be used as evidence that BF16 instructions ran. See
+  [the Arm dtype section](cpu.md#the-same-question-on-arm-where-the-logs-cannot-answer-it).
+- **Vector width decides which oneDNN kernels are even eligible.** On this part
+  `ONEDNN_VERBOSE=all` shows `matmul:brg:sve_512` rejected for `unsupported
+  isa`: oneDNN's Arm BRGEMM path wants 512-bit vectors and this core has 128.
+  A wider-SVE part (Graviton 3/4, Neoverse V-series) may take a different path,
+  so do not carry a Neoverse N-series result onto a V-series one.
+
+Threading defaults to one thread per logical core (8 here). Neoverse server
+cores are one thread per core, so that is also the physical count — but LM7 now
+reads that from sysfs rather than assuming it.
+
+## Which extras resolve on aarch64 Linux
+
+`pip install --dry-run` against the `[project.optional-dependencies]` names, on
+the host above:
+
+| Extra | aarch64 Linux wheel |
+| --- | --- |
+| `openvino`, `nncf` | resolves |
+| `onnxruntime` | resolves |
+| `executorch` | resolves |
+| `tvm` | resolves |
+| `torchao` | resolves |
+| `litert` | resolves |
+| `iree-vulkan` | resolves |
+| `serve` (FastAPI, uvicorn) | resolves |
+| `zentorch` | **no wheel** — x86-64 Linux only, by construction |
+
+> [!IMPORTANT]
+> **"Resolves" means a wheel exists, not that the backend works.** This table is
+> a packaging fact and nothing more: nothing here was installed, imported, run,
+> or checked for numerical agreement on Arm. `torch-tensorrt` also resolves, and
+> is for NVIDIA GPUs. Treat every row except `zentorch` as "worth trying",
+> and see [limitations](limitations.md) for what has actually been validated.
+
+`zentorch` is the one certainty, and it is a deliberate one — it is AMD's ZenDNN
+extension and ships x86-64 Linux wheels only, so `lm7 doctor` reports it
+unavailable on Arm with that reason. It is the AMD-CPU counterpart to
+[OpenVINO](openvino-evaluation.md) on Intel; the Arm equivalent of neither
+exists as an LM7 backend, and Arm Compute Library is reached through oneDNN
+rather than through a backend of its own.
+
+## Before you time anything on one
+
+Two mistakes made on this host, both of which produced numbers that looked
+plausible and were wrong:
+
+- **A benchmark process can outlive the SSH command that started it.** A
+  `gcloud compute ssh --command` whose *local* side times out does not kill the
+  remote process. One left running alongside the next sweep inflated its
+  medians by up to 10x, and neither run announced anything was wrong. Check the
+  host is idle (`uptime`, `pgrep`) before trusting a timing, and treat two runs
+  that disagree by more than a few percent as contention until proven otherwise.
+- **`ONEDNN_VERBOSE=all` is not free.** On a 30-layer causal LM at 512 tokens it
+  emits enough output to exhaust 31 GiB if something buffers it in memory, which
+  wedged this machine hard enough to need a reset.
+  [`benchmarks/cpu_matrix_unit.py`](../benchmarks/cpu_matrix_unit.py) now streams
+  and line-caps it; anything else reading that variable should too.
+
+Otherwise the usual CPU-benchmarking advice in
+[`benchmarks/cpu_matrix_unit.py`](../benchmarks/cpu_matrix_unit.py) applies —
+read ratios rather than absolute milliseconds, and run on an idle host.
+
+## What has actually been measured here
+
+- Eager against Inductor on the FP32 MLP, batch 1–512 — and
+  [why compiling wins nothing on it](cpu.md#latency-on-a-neoverse-n3).
+- FP32 against BF16 on that MLP and on SmolLM2-135M, where
+  [the two workloads disagree on BF16's sign](cpu.md#the-same-question-on-arm-where-the-logs-cannot-answer-it).
+
+Not measured on Arm: INT8 and whether `i8mm` changes the CPU quantization story,
+`lm7 model serve`, and artifact portability for AOTInductor or ONNX Runtime
+built on Arm. See [limitations](limitations.md).

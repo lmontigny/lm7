@@ -132,3 +132,4 @@ file stays a index rather than a second, drifting description.
 | [#46](https://github.com/lmontigny/lm7/pull/46) | Document what is actually different about AMD CPUs |
 | [#119](https://github.com/lmontigny/lm7/pull/119) | Draft an external one-page summary of LM7, and correct the README's CI claim |
 | [#127](https://github.com/lmontigny/lm7/pull/127) | Record that Mali is what IREE's Vulkan path is actually aimed at |
+| [#137](https://github.com/lmontigny/lm7/pull/137) | Document Arm server CPU setup for LM7 |

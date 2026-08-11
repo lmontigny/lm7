@@ -56,7 +56,9 @@ Two things this does *not* mean:
 ### On AArch64, the kernel prints less
 
 Everything above is an x86 host. An Arm one fills in less of the table, because
-`/proc/cpuinfo` carries less. Captured on the `ubuntu-24.04-arm` CI runner
+`/proc/cpuinfo` carries less. For setting up an Arm Linux server in the first
+place — wheels, headers, threading, and which extras exist there — see
+[Arm CPU inference](arm-cpu.md). Captured on the `ubuntu-24.04-arm` CI runner
 (Azure Cobalt 100, Arm Neoverse N2, 4 vCPU, 15.6 GiB):
 
 ```
