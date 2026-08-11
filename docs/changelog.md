@@ -40,6 +40,7 @@ file stays a index rather than a second, drifting description.
 | [#56](https://github.com/lmontigny/lm7/pull/56) | Fix INT8 export for models that index with integer arithmetic |
 | [#106](https://github.com/lmontigny/lm7/pull/106) | Add Hopper FP8 dynamic activation and weight quantization |
 | [#140](https://github.com/lmontigny/lm7/pull/140) | Reach for the Arm INT8 instructions, and watch nothing reach them |
+| [#145](https://github.com/lmontigny/lm7/pull/145) | Find out whether "OpenVINO is faster" was about OpenVINO or about Intel |
 
 ## Artifacts, CLI, and generation
 
@@ -89,6 +90,8 @@ file stays a index rather than a second, drifting description.
 | [#42](https://github.com/lmontigny/lm7/pull/42) | Let a CPU benchmark pin its thread count, and record the host |
 | [#43](https://github.com/lmontigny/lm7/pull/43) | Validate Llama-3.1-8B INT8 on CPU, where the weights fit |
 | [#48](https://github.com/lmontigny/lm7/pull/48) | Correct the MoE export claim, and cover a second MoE architecture |
+| [#142](https://github.com/lmontigny/lm7/pull/142) | Validate optional CPU backends on Arm |
+| [#143](https://github.com/lmontigny/lm7/pull/143) | Put the MoE claims to a second CPU ISA, including the 6.92B one |
 | [#103](https://github.com/lmontigny/lm7/pull/103) | Measure LM7 on the GPU production inference actually runs on |
 | [#104](https://github.com/lmontigny/lm7/pull/104) | Run the workloads an LLM serving engine will not take |
 | [#105](https://github.com/lmontigny/lm7/pull/105) | Find where the H100's flat-latency regime ends, and where compiling stops paying |
@@ -136,4 +139,5 @@ file stays a index rather than a second, drifting description.
 | [#46](https://github.com/lmontigny/lm7/pull/46) | Document what is actually different about AMD CPUs |
 | [#119](https://github.com/lmontigny/lm7/pull/119) | Draft an external one-page summary of LM7, and correct the README's CI claim |
 | [#127](https://github.com/lmontigny/lm7/pull/127) | Record that Mali is what IREE's Vulkan path is actually aimed at |
+| [#144](https://github.com/lmontigny/lm7/pull/144) | Build a TVM artifact on the architecture its guard was written about |
 | [#137](https://github.com/lmontigny/lm7/pull/137) | Document Arm server CPU setup for LM7 |
