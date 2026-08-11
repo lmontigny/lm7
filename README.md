@@ -221,12 +221,17 @@ lm7 model generate hf://HuggingFaceTB/SmolLM2-135M-Instruct \
 See [model compatibility](docs/model-compatibility.md) and
 [compiled generation](docs/huggingface-generation.md).
 
-Serve a model for local validation:
+### Serve a model with `lm7 model serve`
 
 ```bash
 uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
+
+Open <http://127.0.0.1:8000> for the built-in chat page, or connect an
+OpenAI-compatible client to `http://127.0.0.1:8000/v1`. The server exposes
+chat completions, text completions, model discovery, health, metrics, and an
+OpenAPI schema.
 
 This is a single-user validation server, not a production serving engine. For
 production NVIDIA serving, `--backend vllm` hands execution to vLLM. See
