@@ -75,6 +75,7 @@ file stays a index rather than a second, drifting description.
 | [#55](https://github.com/lmontigny/lm7/pull/55) | Validate the LiteRT export on the device, CPU and Adreno GPU |
 | [#123](https://github.com/lmontigny/lm7/pull/123) | Validate the vLLM handover on Apple Silicon through vllm-metal |
 | [#131](https://github.com/lmontigny/lm7/pull/131) | Serve on the other kind of CPU, where INT8 stops being worth it |
+| [#139](https://github.com/lmontigny/lm7/pull/139) | Serve on the Arm that is not a Mac, and find the spelling that leaks |
 
 ## Model coverage and measurement
 
