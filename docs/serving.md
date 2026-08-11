@@ -813,6 +813,52 @@ on the 4070.
 Not run: the vLLM CPU handover, `--api-key`/`--cors-origins` on this target
 (they are transport middleware and target-independent), and anything above 135M.
 
+### On Linux Arm (Arm Neoverse N3)
+
+The `cpu:arm64` runs above are Apple Silicon, which is macOS. This is the same
+architecture family on the other operating system: a GCP `n4a-standard-8`
+(Google Axion, **Arm Neoverse N3**, 8 vCPU, Debian 12), torch 2.13.0+cpu,
+transformers 5.15.0, `SmolLM2-135M-Instruct`, `--target cpu`.
+
+```
+lm7: loading HuggingFaceTB/SmolLM2-135M-Instruct for cpu:aarch64...
+lm7: serving ... on http://127.0.0.1:8124 (cpu:aarch64, backend=auto, max_model_len=512, kv cache 24 MB)
+lm7: the first request compiles the prefill and decode graphs and will be slower.
+```
+
+**The target string in the API is `cpu:aarch64`, not `cpu:arm64`.** Every other
+`arm64` line on this page came from a Mac, and `platform.machine()` spells the
+same family `arm64` on macOS and `aarch64` on Linux — see
+[CPU inference](cpu.md#on-aarch64-the-kernel-prints-less). It is one target
+family with two spellings and no separate code path, but the spelling is visible
+in `/health` and `/metrics` output, so a client that string-matches `cpu:arm64`
+to decide anything will not match a Linux Arm server:
+
+```json
+{"status":"ok","model":"...","target":"cpu:aarch64","backend":"auto"}
+```
+
+What ran:
+
+- `/health`, `/metrics`, `/v1/models`
+- chat completions, buffered and streamed; `/v1/completions`, buffered
+- **greedy output byte-identical to `model.generate`** on the same prompt,
+  against an FP32 eager reference on the same host
+- 400 on `n=4`, 422 on an empty `messages` array, and 400 on an oversized
+  `max_tokens` naming the 481 that would have fit
+
+`/metrics` reports `dtype: float32`, `weights_bytes` 538,060,288 (513 MiB) and
+`kv_cache_bytes` 23,592,960 at `--max-model-len 512` — the same cache size as
+the x86-64 row above, and for the same reason: `--dtype auto` is FP32 on every
+CPU, so the KV cache is twice what the same setting allocates on a GPU. Nothing
+about the Arm target changes that.
+
+Not run here: `--quantize int8`, the deployment flags (`--api-key`,
+`--cors-origins`), the local-directory form, the vLLM handover, and anything
+above 135M. The first three are target-independent and were checked on the two
+CPU targets above; INT8 on Arm is a real gap, because `i8mm` is the one thing
+this part has that neither of those did.
+
 Still unrun anywhere: `intel:npu` and `tpu`, and the ROCm and TPU vLLM handovers.
 Nothing above 1B has been served on any target. **No timing on this page is a
 measurement.** The KV cache is allocated at startup and the graphs compile inside

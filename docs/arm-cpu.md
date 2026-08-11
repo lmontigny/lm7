@@ -161,6 +161,13 @@ read ratios rather than absolute milliseconds, and run on an idle host.
 - FP32 against BF16 on that MLP and on SmolLM2-135M, where
   [the two workloads disagree on BF16's sign](cpu.md#the-same-question-on-arm-where-the-logs-cannot-answer-it).
 
+- [`lm7 model serve`](serving.md#on-linux-arm-arm-neoverse-n3), where the target
+  string a client sees is `cpu:aarch64` rather than the `cpu:arm64` every other
+  Arm row on that page reports.
+- [CPU AOTInductor artifacts](aot-artifact-compatibility.md#cpu-packages-are-architecture-bound-too),
+  which carry a native `aarch64` shared object and were not architecture-gated
+  until this host demonstrated it.
+
 Not measured on Arm: INT8 and whether `i8mm` changes the CPU quantization story,
-`lm7 model serve`, and artifact portability for AOTInductor or ONNX Runtime
-built on Arm. See [limitations](limitations.md).
+and artifact portability for ONNX Runtime or ExecuTorch built on Arm. See
+[limitations](limitations.md).
