@@ -144,6 +144,25 @@ through LM7 on real hardware. See [tested hardware](docs/tested-hardware.md) and
 [limitations](docs/limitations.md#hardware-validation) for the evidence behind
 each row.
 
+## Validated models
+
+LM7 does not maintain a model allowlist. The models below have exercised at
+least one real compile, generation, export, or quantization path; support still
+depends on the selected target and backend.
+
+| Model type | Validated models |
+| --- | --- |
+| Causal language models | SmolLM2-135M-Instruct, LFM2.5-230M, Llama 3.2 1B Instruct, Llama 3.1 8B Instruct, Qwen3.5-0.8B, DeepSeek-Coder 1.3B Instruct |
+| Sparse mixture of experts | Mixtral 8x7B and tiny Mixtral configs; OLMoE-1B-7B and tiny OLMoE configs |
+| Vision | ResNet-18, MobileNetV2, ViT Base Patch16 |
+| Encoder and sequence models | BERT Base, LSTM reference model |
+
+This is validation evidence, not a guarantee that every model works through
+every compiler. Use `lm7 model compatibility hf://...` as a fast preflight,
+then run the model on the intended target for the definitive check. See
+[model compatibility](docs/model-compatibility.md), [tested hardware](docs/tested-hardware.md),
+and [limitations](docs/limitations.md).
+
 ## Quick start
 
 LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
