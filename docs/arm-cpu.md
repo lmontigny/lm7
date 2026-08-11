@@ -112,7 +112,7 @@ the host above:
 | `openvino`, `nncf` | resolves |
 | `onnxruntime` | resolves |
 | `executorch` | resolves |
-| `tvm` | resolves |
+| `tvm` | **run** — suite passes, artifact validated, see [TVM](tvm.md#linux-aarch64-neoverse-servers) |
 | `torchao` | resolves |
 | `litert` | resolves |
 | `iree-vulkan` | resolves |
@@ -172,6 +172,10 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   where the INT8 matrix instructions this part advertises are never reached,
   because weight-only quantization issues no INT8 GEMM for them to accelerate.
 
+- [TVM](tvm.md#linux-aarch64-neoverse-servers), where the whole integration
+  suite passes and an exported `.so` really does carry the host's `aarch64`
+  triple, as [artifact compatibility](aot-artifact-compatibility.md#cpu-packages-are-architecture-bound-too)
+  had assumed from x86 alone.
 - [Sparse MoE](limitations.md#what-torchcompile-actually-does-to-a-sparse-moe), where zero graph
   breaks and the near-1.0x CPU speedup both reproduce from a second ISA, and
   where a tiny MoE compiles 1.4-1.5x faster on the same host that gets nothing
