@@ -20,9 +20,7 @@ output = compiled(example_input)
 
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
-> compiled-artifact compatibility are not stable. CPU and Apple are the only
-> targets with continuous integration coverage; other targets are tested by
-> hand, export-tested, mock-tested, or parse-only as documented below. See
+> compiled-artifact compatibility are not stable. See
 > [limitations](docs/limitations.md) before depending on it.
 
 ## Why not just `torch.compile`?
