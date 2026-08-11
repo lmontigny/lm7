@@ -554,6 +554,7 @@ def _openvino_property(core: Any, device_name: str, key: str) -> str | None:
 
 CPU_INFO_PATH = Path("/proc/cpuinfo")
 MEMORY_INFO_PATH = Path("/proc/meminfo")
+CPU_TOPOLOGY_PATH = Path("/sys/devices/system/cpu")
 
 # Instruction-set extensions that change what LM7 should compile or quantize for,
 # named exactly as Linux prints them. AVX-512 and AMX decide whether BF16 is
@@ -654,7 +655,11 @@ def detect_cpu_target() -> DeviceInfo:
     isa_extensions = info.get("isa_extensions", ())
     capabilities: dict[str, Any] = {
         "vendor_id": info.get("vendor_id"),
-        "physical_cores": info.get("physical_cores"),
+        # /proc/cpuinfo answers this on x86 and never on AArch64, which prints no
+        # topology fields at all. sysfs carries the same (socket, core) pairs on
+        # both, so it is the fallback rather than the source: x86 keeps reading
+        # the file it always read.
+        "physical_cores": info.get("physical_cores") or read_physical_cores(CPU_TOPOLOGY_PATH),
         # os.cpu_count() is the fallback rather than the source: it counts the
         # CPUs the OS exposes, which is what /proc/cpuinfo lists anyway, and it
         # is all that is available off Linux.
@@ -674,6 +679,41 @@ def _read_cpu_info() -> dict[str, Any]:
         return parse_cpu_info(CPU_INFO_PATH.read_text())
     except OSError:
         return {}
+
+
+def read_physical_cores(root: Path) -> int | None:
+    """Count physical cores from sysfs topology, for hosts ``/proc/cpuinfo`` fails.
+
+    AArch64 prints no ``physical id`` or ``core id``, so the ``/proc/cpuinfo``
+    count is always ``None`` there — but the kernel does publish the same
+    information under ``/sys/devices/system/cpu/cpu*/topology/``, on every
+    architecture. Counts distinct (package, core) pairs for the same reason
+    :func:`parse_cpu_info` does: it folds SMT siblings together and stays right
+    on a multi-socket host.
+
+    Takes the root as an argument so it can be pointed at a captured tree in
+    tests. Returns ``None`` rather than guessing when sysfs is absent, which is
+    every non-Linux host, or unreadable.
+    """
+    cores: set[tuple[str, str]] = set()
+    try:
+        entries = sorted(root.glob("cpu[0-9]*"))
+    except OSError:
+        return None
+    for entry in entries:
+        topology = entry / "topology"
+        try:
+            package = (topology / "physical_package_id").read_text().strip()
+            core = (topology / "core_id").read_text().strip()
+        except OSError:
+            # An offline CPU has no topology directory. Skip it rather than
+            # abandoning the count -- the online ones still answer the question.
+            continue
+        # Package IDs are not dense and not zero-based: a GCP Axion reports
+        # every core in package 148. Only their distinctness is meaningful.
+        if package and core:
+            cores.add((package, core))
+    return len(cores) or None
 
 
 def parse_cpu_info(text: str) -> dict[str, Any]:

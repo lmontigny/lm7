@@ -98,6 +98,7 @@ file stays a index rather than a second, drifting description.
 | [#31](https://github.com/lmontigny/lm7/pull/31) | Preflight Triton's Intel GPU backend instead of falling back silently |
 | [#41](https://github.com/lmontigny/lm7/pull/41) | Describe the host CPU instead of guessing at it |
 | [#57](https://github.com/lmontigny/lm7/pull/57) | Add Hexagon toolchain diagnostics |
+| [#135](https://github.com/lmontigny/lm7/pull/135) | Count Arm cores from the place the kernel actually publishes them |
 
 ## CI
 

@@ -34,7 +34,7 @@ Detected targets (1):
 | Key | Meaning |
 | --- | --- |
 | `vendor_id` | `AuthenticAMD`, `GenuineIntel`, or absent |
-| `physical_cores` | Distinct (socket, core) pairs — SMT siblings folded together |
+| `physical_cores` | Distinct (socket, core) pairs — SMT siblings folded together. From `/proc/cpuinfo`, or from sysfs topology where that prints none |
 | `logical_cores` | CPUs the OS exposes, SMT siblings included |
 | `isa_extensions` | Vector and matrix extensions, named as the kernel names them |
 
@@ -76,13 +76,17 @@ Detected targets (1):
   all land, since those vendors ship Neoverse designs. An implementer or part
   outside it degrades to the vendor and the raw part number, or to nothing,
   rather than guessing.
-- **`vendor_id` and `physical_cores` are absent, and stay absent.** AArch64
-  prints no `vendor_id`, `physical id` or `core id` at all. Neoverse server
-  cores run one thread per core, so `logical_cores` *is* the physical count on
-  the parts LM7 is likely to meet — but that is not architecturally guaranteed,
-  so LM7 reports nothing instead of assuming it. Reading
-  `/sys/devices/system/cpu/*/topology/` would answer it properly; nothing does
-  yet.
+- **`vendor_id` is absent and stays absent.** AArch64 prints no `vendor_id` at
+  all, and nothing else publishes one.
+- **`physical_cores` comes from sysfs here, not from `/proc/cpuinfo`.** AArch64
+  prints no `physical id` or `core id` either, so the file-based count is always
+  `None` on Arm. `/sys/devices/system/cpu/cpu*/topology/` carries the same
+  (socket, core) pairs on every architecture, so LM7 falls back to it and counts
+  distinct pairs — which folds SMT siblings together and stays right on a
+  multi-socket host, exactly as the `/proc/cpuinfo` path does. x86 is unchanged:
+  it still answers from the file, and sysfs only fills a gap. Note the pairs are
+  what matter and not their values — a GCP Axion reports all eight of its cores
+  in package `148`.
 - **`isa_extensions` populates.** `bf16` and `i8mm` are both present on this
   part — the Arm analogues of `amx_bf16` and `amx_int8`, and the reason the
   section below has an unanswered Arm half. The SVE forms of the same
