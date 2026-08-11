@@ -24,7 +24,7 @@ output = reloaded(example_input)
 ```
 
 > [!WARNING]
-> This backend is **explicit-only and far slower than Inductor** — 62-167x
+> This backend is **explicit-only and far slower than Inductor** — 62-200x
 > slower than eager, depending on host, on the benchmarks below. It exists so
 > TVM's IR and toolchain are reachable from LM7, not because it is a good way
 > to run a model today. Read [performance](#performance) before using it for
@@ -154,6 +154,33 @@ MLP above, indistinguishable from noise. Consistent with the BYOC finding —
 the bottleneck is the missing library dispatch for matmul, not instruction
 selection, so tuning what LLVM targets does not move it.
 
+### Linux aarch64 (Neoverse servers)
+
+The other Arm, and the one a Graviton or Axion deployment is. `apache-tvm`
+publishes an aarch64 Linux wheel, the backend works unmodified, and the whole
+integration suite passes — 15 tests on an Arm Neoverse N3 (GCP
+`n4a-standard-8`), TVM 0.25.0.post1, PyTorch 2.13.0+cpu. TVM reports its LLVM
+target as `aarch64-conda-linux-gnu`.
+
+`python benchmarks/tvm_relax.py`, same MLP as above:
+
+| Backend | First call | Steady median | vs eager |
+| --- | --- | --- | --- |
+| `eager` | 941 ms | **1.380 ms** | 1.0x |
+| `inductor` | 2260 ms | **1.504 ms** | 0.92x |
+| `tvm` | 1045 ms | **275.3 ms** | **0.005x** |
+
+Same shape again, and worse than either of the others: untuned Relax is **200x
+slower than eager** here, against 62x on Apple Silicon and 167x on x86-64. The
+ordering of the three hosts is not something this measurement explains, and one
+untuned part is thin evidence for a claim about Arm codegen — but the direction
+is consistent everywhere, and it is the reason `tvm` ranks below Inductor and
+`backend="auto"` never selects it.
+
+Note the `inductor` row loses to `eager` here. That is not a TVM fact; it is
+this workload being 97–99% GEMM on a part where fusion has nothing to win — see
+[CPU inference](cpu.md#latency-on-a-neoverse-n3).
+
 ## Scope
 
 - **CPU (`llvm`) only.** TVM's CUDA codegen needs a CUDA toolkit it can
@@ -209,12 +236,32 @@ built on arm64 does not reload on x86-64, or vice versa.
 
 LM7 refuses to load an artifact whose recorded architecture does not match
 the local host, the same protection AOTInductor and TensorRT get for GPU
-architectures — but only when the export's target carried a concrete
-architecture in the first place. `target="cpu"` is intentionally unqualified
-throughout this document and does not record one, so exporting and reloading
-across two different Macs (both `target="cpu"`) will not be caught by this
-check; the underlying `.so` still will not run correctly. Use
-`target="cpu:arm64"` or `target="cpu:x86_64"` explicitly to get the check.
+architectures.
+
+> [!NOTE]
+> This used to require `target="cpu:arm64"` spelled out, because an unqualified
+> `target="cpu"` recorded no architecture and the check is silent without one —
+> so the export most people write was the one the guard could not protect. That
+> was fixed: an architecture-bound backend now resolves the host's architecture
+> even from a bare vendor. `target="cpu"` on a Neoverse host records
+> `cpu:aarch64`, and the guard fires. Portable backends still record the vendor
+> alone, because the architecture is part of an artifact's identity inside a
+> bundle.
+
+Verified end to end on Linux aarch64 rather than from fixtures. A `target="cpu"`
+export on an Arm Neoverse N3 writes `compiled_model.tvm.so` — *"ELF 64-bit LSB
+shared object, ARM aarch64"* — records `architecture: aarch64` in its manifest,
+reloads on the same host agreeing with eager to `2.4e-07`, and is refused when
+the host reports `x86_64`:
+
+```
+its tvm payload was built for cpu:aarch64, but this machine is cpu:x86_64.
+Kernels are compiled per architecture, so it cannot run here.
+```
+
+That is the claim this section makes — that the `.so` carries the exporting
+host's triple — demonstrated with an artifact built on one architecture rather
+than inferred from the codegen target.
 
 ## Is TVM abandoned?
 
