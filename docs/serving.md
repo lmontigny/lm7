@@ -853,11 +853,19 @@ the x86-64 row above, and for the same reason: `--dtype auto` is FP32 on every
 CPU, so the KV cache is twice what the same setting allocates on a GPU. Nothing
 about the Arm target changes that.
 
-Not run here: `--quantize int8`, the deployment flags (`--api-key`,
-`--cors-origins`), the local-directory form, the vLLM handover, and anything
-above 135M. The first three are target-independent and were checked on the two
-CPU targets above; INT8 on Arm is a real gap, because `i8mm` is the one thing
-this part has that neither of those did.
+**`--quantize int8` has been served here too.** `/metrics` reports
+`weights_bytes` 220,332,928 against 538,060,288 unquantized — 513 to 210 MiB,
+the same 2.44x the offline path gets — with `dtype` still `float32`, and the
+completion is byte-identical to the unquantized one above. It is a footprint
+change and not a speed one: neither INT8 mechanism is faster than FP32 on this
+part, which is [measured in
+quantization](quantization.md#int8-on-cpu-has-two-mechanisms-and-they-differ-by-4x)
+rather than assumed from `i8mm` being absent from the kernel's reach.
+
+Not run here: the deployment flags (`--api-key`, `--cors-origins`), the
+local-directory form, the vLLM handover, and anything above 135M. The first two
+are transport middleware and target-independent, and were checked on the two CPU
+targets above.
 
 Still unrun anywhere: `intel:npu` and `tpu`, and the ROCm and TPU vLLM handovers.
 Nothing above 1B has been served on any target. **No timing on this page is a

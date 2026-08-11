@@ -109,7 +109,7 @@ the host above:
 
 | Extra | aarch64 Linux wheel | Run on the N3 |
 | --- | --- |
-| `openvino`, `nncf` | resolves | `tests/test_openvino_integration.py`: 11 passed, 2 NPU skips |
+| `openvino`, `nncf` | resolves | `tests/test_openvino_integration.py`: 11 passed, 2 NPU skips; IR path [measured 4.16x over eager](openvino-evaluation.md#arm-neoverse-n3-linux-aarch64) |
 | `onnxruntime` | resolves | `tests/test_onnxruntime_integration.py`: 3 passed, 2 skips |
 | `executorch` | resolves | `tests/test_executorch_integration.py`: 6 passed |
 | `tvm` | **run** — suite passes, artifact validated, see [TVM](tvm.md#linux-aarch64-neoverse-servers) | `tests/test_tvm_integration.py`: 15 passed |
@@ -184,8 +184,13 @@ read ratios rather than absolute milliseconds, and run on an idle host.
   where a tiny MoE compiles 1.4-1.5x faster on the same host that gets nothing
   from compiling the FP32 MLP.
 
+- [OpenVINO](openvino-evaluation.md#arm-neoverse-n3-linux-aarch64), whose CPU
+  plugin loads on Arm and whose IR path is the fastest thing measured on this
+  host — 4.16x over eager, more than it manages on Intel or Apple — while its
+  INT8 route is the one that does *not* transfer from Intel.
+
 Not measured on Arm: LiteRT conversion in its older-Torch environment, Mali
-Vulkan execution, wider-SVE server parts, 512-token prompts on the N3, artifact
-portability for ONNX Runtime or ExecuTorch built on Arm, and `--quantize int8`
-through `lm7 model serve`. Mixtral-8x7B does not fit: ~93 GB at BF16 against
-31 GB of RAM. See [limitations](limitations.md).
+Vulkan execution, wider-SVE server parts, 512-token prompts on the N3, and
+artifact portability for ONNX Runtime or ExecuTorch built on Arm. Mixtral-8x7B
+does not fit: ~93 GB at BF16 against 31 GB of RAM. See
+[limitations](limitations.md).

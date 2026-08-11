@@ -298,6 +298,41 @@ is an ARM host, so it says nothing about Intel deployment speed.
   `Core().compile_model()` and inferred correctly in a fresh process with
   `torch` never imported, which no LM7 artifact path currently offers.
 
+### Arm Neoverse N3 (Linux aarch64)
+
+The third host shape, and the one that answers whether "OpenVINO" means "Intel".
+GCP `n4a-standard-8`, `openvino` 2026.3.0, PyTorch 2.13.0+cpu, FP32, the
+harness's default 30 warmup calls; all four paths reported steady state with
+drift ratios of 1.00-1.06.
+
+OpenVINO installs from the aarch64 wheel and its CPU plugin loads: `available_devices`
+is `['CPU']` and the device names itself **`ARM (0xd8e)`** — the raw part number,
+where LM7's own detection maps `0xd8e` to "Arm Neoverse N3".
+
+| workload | eager | inductor | openvino | openvino_ir |
+| --- | --- | --- | --- | --- |
+| `smollm2`, batch 1, 5 tokens | 45.71 | 33.39 | 38.46 | **10.99** |
+
+- **`openvino_ir` wins by more here than on either other host** — 4.16x against
+  eager and 3.04x against Inductor, where Intel and Apple both landed near 2.2x.
+  That extends "the artifact path is where OpenVINO's value is" to a third
+  architecture, and to the one where it had least reason to hold, since the
+  plugin's reputation is Intel's.
+- **The `torch.compile` path stays not worth adopting**, consistent with both
+  other hosts: 38.46 ms against eager's 45.71 ms is a win, but it loses to
+  Inductor, which is the comparison that decides ranking.
+- **Inductor beats eager here, 1.37x.** Worth noting because the same host gets
+  *nothing* from Inductor on the FP32 MLP — that workload is 97-99% GEMM, and a
+  causal LM is not. See [CPU inference](cpu.md#latency-on-a-neoverse-n3).
+- **One workload, one model.** Intel and Apple each carry several; this is
+  SmolLM2 alone, so it establishes that the path works and is fast on Arm, not
+  that the 4.16x is representative of Arm generally.
+
+**INT8 does not follow.** [Quantization](quantization.md#int8-on-cpu-has-two-mechanisms-and-they-differ-by-4x)
+has the numbers: the NNCF route is 1.83-2.53x faster than FP32 on Intel and
+1.08x *slower* on this part, while still compressing compiled weights by 74.9%.
+The IR path's FP32 speed is not an INT8 speed, and on Arm the two come apart.
+
 Remaining work:
 
 - Run `llama32-1b` and `qwen35-0.8b`, the two causal-LM ids still uncovered. The

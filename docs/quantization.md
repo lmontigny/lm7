@@ -683,14 +683,32 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu \
 SmolLM2-135M, 5-token prompt, each mechanism against its own FP32 baseline on the
 same host:
 
-| mechanism | i7-8086K (AVX2) | Cascade Lake Xeon (VNNI) |
-| --- | --- | --- |
-| TorchAO weight-only (`inductor`) | 1.5x **slower** | 1.4x **slower** |
-| NNCF (`openvino`) | 1.83x faster | **2.53x faster** |
+| mechanism | i7-8086K (AVX2) | Cascade Lake Xeon (VNNI) | Arm Neoverse N3 (`i8mm`) |
+| --- | --- | --- | --- |
+| TorchAO weight-only (`inductor`) | 1.5x **slower** | 1.4x **slower** | 1.35x **slower** |
+| NNCF (`openvino`) | 1.83x faster | **2.53x faster** | 1.08x **slower** |
 
 So on Intel CPU the OpenVINO route is the one to reach for, and the gap widens with
 VNNI. Absolute INT8 times were 16.0 ms on the i7 and 16.2 ms on the Xeon — the
 2.6 GHz part matches the 4.0 GHz one, which is VNNI closing a 1.5x clock deficit.
+
+**The OpenVINO advantage is Intel's, not INT8's.** On an Arm Neoverse N3 the
+NNCF route is 13.06 ms against a 12.13 ms FP32 baseline — a small regression
+rather than the 1.83–2.53x win it is on Intel, measured through `lm7 model run`
+on the same host. So **neither** mechanism is faster than FP32 on Arm, and the
+sentence above ("the OpenVINO route is the one to reach for") is a statement
+about Intel CPUs that should not be carried onto a Graviton or Axion.
+
+What does transfer is the footprint. NNCF still reports compiled weights at
+513.1 → 129.0 MiB, a 74.9% reduction, and the greedy next token is unchanged
+(`' Paris'`). Both mechanisms shrink the model on Arm; neither speeds it up.
+
+That is consistent with [the kernel evidence
+above](#i8mm-does-not-rescue-it-either-and-here-is-the-kernel-proving-why) for
+the TorchAO path, but it is *not* the same explanation and is not claimed to be:
+NNCF compresses the OpenVINO IR rather than converting torch modules, and no
+equivalent kernel-level check was run on the OpenVINO plugin. What is measured
+is the latency, on one model at one prompt length.
 
 The saving is reported differently for the two, because the OpenVINO path never
 modifies the torch module: it prints `Compiled weights: 513.1 -> 129.0 MiB (74.9%
