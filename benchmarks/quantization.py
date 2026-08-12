@@ -52,6 +52,20 @@ HF_MODELS = {
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
     "deepseek-coder-1.3b": "deepseek-ai/deepseek-coder-1.3b-instruct",
     "llama31-8b": "unsloth/Llama-3.1-8B-Instruct",
+    # The dense validation ladder, reachable by name and *not yet measured
+    # through this harness* -- see docs/limitations.md#model-coverage. Each
+    # answers something the entries above do not:
+    #
+    #   a second size of an architecture already here, so scale varies alone
+    "lfm25-350m": "LiquidAI/LFM2.5-350M",
+    #   Qwen3 rather than the Qwen3.5-0.8B elsewhere in these dicts; 2.03B
+    #   parameters including embeddings, despite the name
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    #   the first *dense* 7B -- Mixtral-8x7B is sparse and lives in moe.py.
+    #   7.25B parameters, ~14.5 GB at BF16 and ~29 GB at FP32, so it does not
+    #   fit either CPU host in docs/tested-hardware.md at this repo's FP32 CPU
+    #   compute dtype
+    "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
 }
 
 # The four prompts behind the sm89 validation table were never recorded, so these

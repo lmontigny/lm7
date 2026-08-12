@@ -15,6 +15,13 @@ HF_MODELS = {
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
     "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
     "deepseek-coder-1.3b": "deepseek-ai/deepseek-coder-1.3b-instruct",
+    # The dense validation ladder, reachable by name and not yet measured here.
+    # See docs/limitations.md#model-coverage.
+    "lfm25-350m": "LiquidAI/LFM2.5-350M",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    # The first dense 7B in these dicts; ~14.5 GB at BF16, so it needs a card
+    # larger than the 12 GiB sm89 dev GPU.
+    "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
 }
 
 

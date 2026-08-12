@@ -47,6 +47,11 @@ HF_MODELS = {
     "smollm2-135m": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "lfm2.5-230m": "LiquidAI/LFM2.5-230M",
     "llama-3.2-1b": "unsloth/Llama-3.2-1B-Instruct",
+    # The dense validation ladder, reachable by name and not yet measured here.
+    # See docs/limitations.md#model-coverage.
+    "lfm2.5-350m": "LiquidAI/LFM2.5-350M",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    "mistral-7b-v0.3": "mistralai/Mistral-7B-Instruct-v0.3",
 }
 
 

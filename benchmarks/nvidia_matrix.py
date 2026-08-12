@@ -53,6 +53,13 @@ HF_MODELS = {
     "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
     "llama31-8b": "unsloth/Llama-3.1-8B-Instruct",
+    # The dense validation ladder, reachable by name and not yet measured here.
+    # See docs/limitations.md#model-coverage. Mistral-7B is the first dense 7B
+    # in these dicts -- the Mixtral below it is sparse, and the two are not
+    # interchangeable as "a 7B".
+    "lfm25-350m": "LiquidAI/LFM2.5-350M",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
     # Sparse MoE. OLMoE is 6.92B total / 1B active and fits anywhere; the other
     # two are here so a large card can reach them, and they are deliberately not
     # in the `moe` plan -- Mixtral-8x7B peaks at 93.4 GB in BF16, which is more

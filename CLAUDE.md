@@ -52,6 +52,7 @@ answer a question the ladder does not.
 | LFM2.5-230M, Qwen3.5-0.8B, DeepSeek-Coder-1.3B | architecture variety at low cost |
 | Llama-3.2-1B | the reference model for quantization; most modes are validated here first |
 | Llama-3.1-8B | the smallest model large enough that GEMM time dominates |
+| LFM2.5-350M, Qwen3-1.7B, Mistral-7B-Instruct-v0.3 | **named but unmeasured** — added to the ladder so they can be reached by name; nothing here has run them, so say "not measured", not "supported". See [limitations](docs/limitations.md#model-coverage) |
 
 **Sparse MoE** is tracked separately because it behaves differently, and
 because this repo's most-corrected claims are about it — see
