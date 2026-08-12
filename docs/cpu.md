@@ -334,6 +334,51 @@ are deploying to Intel hardware specifically. See the
 [OpenVINO evaluation](openvino-evaluation.md) for the measurements behind that
 and for the backend's documented limits.
 
+### OpenVINO on GCP C4 / Emerald Rapids
+
+Measured on a GCP `c4-standard-8` VM with an Intel Xeon Platinum 8581C
+(Emerald Rapids), 8 vCPU / 4 physical cores, `torch 2.13.0+cpu`, and
+`openvino 2026.3.0`. The CPU reported AVX-512 BF16/VNNI and AMX BF16/INT8, and
+OpenVINO reported one available device: `CPU`.
+
+Validation first: `lm7 targets` detected `cpu:x86_64`, `lm7 explain --target
+cpu` selected Inductor while reporting OpenVINO as supported, and
+`tests/test_openvino_integration.py -k "not npu"` passed 11 tests. Those tests
+cover OpenVINO compile, IR export/reload, checksum validation, unavailable-device
+rejection, FP32 weight preservation, and INT8 export.
+
+Then bounded, non-sweep runs of
+[`benchmarks/openvino_eval.py`](../benchmarks/openvino_eval.py) measured the
+FP32 synthetic MLP with `--warmup 10 --repeats 10 --device CPU --require-all`.
+Median latency, synthetic MLP:
+
+| batch | eager | Inductor | OpenVINO Dynamo | OpenVINO IR |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 0.918 ms | 0.938 ms | 1.295 ms | **0.535 ms** |
+| 32 | 2.396 ms | 2.494 ms | not run | **1.064 ms** |
+
+The same harness also ran SmolLM2-135M-Instruct as a single causal-LM prefill
+forward (`use_cache=False`) with the prompt `"The capital of France is"`,
+`--batch-size 1 --warmup 2 --repeats 5 --device CPU --require-all`:
+
+| model | input tokens | eager | Inductor | OpenVINO IR |
+| --- | ---: | ---: | ---: | ---: |
+| SmolLM2-135M-Instruct | 5 | 20.419 ms | 16.316 ms | **13.903 ms** |
+
+The config preflight reported CPU/Inductor compatibility:
+
+```bash
+lm7 model compatibility hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target cpu --backend auto
+```
+
+`lm7 model run` on the same prompt selected Inductor, returned next token
+`" Paris"`, and measured 17.936 ms after an 8.550 s first call.
+
+This is evidence that the OpenVINO IR path works and wins on these bounded Intel
+CPU workloads. It is not a broad performance claim: no model suite, dtype sweep,
+generation/decode benchmark, or long benchmark run was performed.
+
 ## Is there an AMD equivalent?
 
 For AMD CPUs generally — what PyTorch already uses there, whether Intel's MKL
