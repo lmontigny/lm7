@@ -102,6 +102,7 @@ file stays a index rather than a second, drifting description.
 | [#105](https://github.com/lmontigny/lm7/pull/105) | Find where the H100's flat-latency regime ends, and where compiling stops paying |
 | [#134](https://github.com/lmontigny/lm7/pull/134) | Measure Arm latency at last, and find nothing to compile |
 | [#136](https://github.com/lmontigny/lm7/pull/136) | Put the dtype question to a second ISA, and get a different answer |
+| [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 
 ## Detection and diagnostics
 
