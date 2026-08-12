@@ -48,13 +48,30 @@ targets with continuous-integration coverage.
   exports on `ubuntu-24.04-arm` and `cross-arch-load` gets it refused on x86-64.
   See [artifact
   compatibility](aot-artifact-compatibility.md#cpu-packages-are-architecture-bound-too).
-- **Exported causal-LM artifacts are prefill-only.** `--dynamic-seq` makes the
-  sequence length variable within recorded bounds; the batch dimension stays
-  fixed, and a KV-cache decode loop is not captured. LM7 captures a logits-only
-  graph, because `CausalLMOutputWithPast` cannot be deserialized by
-  `torch.export.load`. A compiled decode loop does exist — see
-  [prefill and KV-cache decode](kv-cache-decode.md) — but it is JIT only and dies
-  with the process, like every other `lm7.compile` result.
+- **Exported causal-LM artifacts are prefill-only unless `--decode` says
+  otherwise.** The default capture is a logits-only prefill graph:
+  `--dynamic-seq` makes the sequence length variable within recorded bounds, the
+  batch dimension stays fixed, and no KV cache is in it. LM7 captures logits
+  rather than the model's own output object because `CausalLMOutputWithPast`
+  cannot be deserialized by `torch.export.load` — a constraint on the *output*,
+  which was for a long time recorded here as the reason a decode loop could not
+  be exported. It was not. See [exported decode](exported-decode.md).
+- **An exported decode step is one token per call, on two backends.**
+  `lm7 model export --decode` captures a KV-cache decode step that survives the
+  process, holding its cache as buffers inside the artifact. It is validated on
+  `export` and `aot_inductor` only, on CPU and float32 only, at batch 1 with the
+  cache length fixed at export — and the prompt goes through it a token at a
+  time, because there is no exported prefill graph. Every other export backend is
+  refused rather than guessed at: a backend that drops the cache writes during
+  lowering returns a correct first token and then diverges without raising.
+- **A decode artifact is stateful, and nothing else LM7 writes is.** Two
+  concurrent callers share one cache. `cache_position=0` re-anchors the write
+  pointer but does not zero the slots behind it, and whether that leaks has not
+  been tested.
+- **The JIT decode loop is still the faster and more capable one.**
+  [`lm7.compile_generation`](kv-cache-decode.md) takes a whole prompt in one
+  call and reaches 1.77 ms/token on an H100; it dies with the process. Neither
+  path is the other's superset.
 - See [JIT vs. AOT](jit-vs-aot.md) for the export levels, bundles, and the
   signature rules an artifact is pinned to.
 - **Saved compiler output is deep for AOTInductor and shallow for every other

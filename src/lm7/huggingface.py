@@ -26,6 +26,18 @@ from .targets import TargetSpec
 # The tensors _LogitsOnly forwards, and therefore the only ones captured.
 _CAPTURED_INPUTS = ("input_ids", "attention_mask")
 
+# Tokens of KV cache a decode artifact carries when nobody says otherwise. Matches
+# `compile_generation`'s own default, so the JIT and AOT paths do not disagree
+# about how long a sequence is by default. It is a hard bound, not a hint: the
+# cache is buffers inside the artifact and cannot grow after export.
+DEFAULT_MAX_CACHE_LEN = 2048
+
+# The same, for _DecodeStep. No attention mask: the decode graph's mask is built
+# against the whole static cache from `cache_position`, so there is nothing for a
+# caller to pass and nothing to capture. A padded batch is out of scope here for
+# exactly that reason -- see docs/exported-decode.md.
+_DECODE_CAPTURED_INPUTS = ("input_ids", "cache_position")
+
 INT8 = "int8"
 FP8 = "fp8"
 NVFP4 = "nvfp4"
@@ -577,6 +589,95 @@ class _LogitsOnly(torch.nn.Module):
         ).logits
 
 
+class _DecodeStep(torch.nn.Module):
+    """One token in, one position of logits out, against a cache the graph owns.
+
+    The reason a decode loop was never exportable was recorded as the pytree
+    problem ``_LogitsOnly`` solves -- ``CausalLMOutputWithPast`` cannot be
+    deserialized by ``torch.export.load``. That is true, and it is about the
+    *output*: it is not what stopped the cache from being captured. A ``Cache``
+    is not a tensor and cannot be a graph input, so the question was always where
+    to put the state, and the answer is Transformers' own: hold the cache as
+    **buffers on the exported module**. ``torch.export`` lifts buffers, and the
+    writes survive as ``index_copy_`` on them.
+
+    LM7 still owns no cache. ``TorchExportableModuleWithStaticCache`` is
+    Transformers', it is the module ExecuTorch's LLM export already uses, and the
+    reason it works for a stateful graph is one line inside it:
+
+        layer.cumulative_length.copy_(cache_position[0])
+
+    The write position is re-derived from an *input* on every call rather than
+    advanced by one per execution. So unlike the JIT path -- where an extra
+    execution silently spends a cache slot, which is what ``warmup: False``
+    exists to prevent -- calling this graph twice at the same ``cache_position``
+    writes the same slot twice and stays correct.
+
+    The signature names its two tensors for the same reason ``_LogitsOnly`` does,
+    and takes no ``inputs_embeds``: the wrapped module accepts one or the other,
+    and an optional input that is always ``None`` is one more thing for a shape
+    profile and an artifact signature to carry for no benefit.
+    """
+
+    def __init__(self, static_cache_module: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = static_cache_module
+
+    def forward(self, input_ids: torch.Tensor, cache_position: torch.Tensor) -> torch.Tensor:
+        return self.model(input_ids=input_ids, cache_position=cache_position)
+
+
+def _decode_module(model: torch.nn.Module, *, batch_size: int, max_cache_len: int) -> _DecodeStep:
+    """Wrap a causal LM into an exportable decode step, or say why it cannot be.
+
+    The two ``generation_config`` fields are set here rather than demanded of the
+    caller. Transformers reads them off the config instead of the call and raises
+    a bare ``AssertionError`` when they disagree, which is a confusing thing to
+    hand someone who asked LM7 to export a model, not to configure generation.
+    """
+    # Imported by name rather than with a plain `import`, like every other
+    # optional dependency here: CI type-checks a `[dev]` install, where
+    # Transformers is absent, and a plain import would have to be excused with a
+    # mypy override instead of simply not being resolved.
+    try:
+        integration = importlib.import_module("transformers.integrations.executorch")
+        exportable_static_cache = integration.TorchExportableModuleWithStaticCache
+    except (ImportError, AttributeError) as exc:
+        raise UnsupportedModelError(
+            "Exporting a decode step needs Transformers' static-cache export wrapper "
+            "(transformers.integrations.executorch). Install or upgrade the Hugging Face "
+            'extra with: pip install -U "lm7[hf]".'
+        ) from exc
+
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        raise UnsupportedModelError(
+            "Exporting a decode step needs model.generation_config, which this model has none of."
+        )
+    generation_config.use_cache = True
+    generation_config.cache_implementation = "static"
+    try:
+        wrapped = exportable_static_cache(model, batch_size=batch_size, max_cache_len=max_cache_len)
+    except Exception as exc:
+        raise UnsupportedModelError(
+            f"Could not build an exportable static-cache decode step for this model: {exc}."
+        ) from exc
+    return _DecodeStep(wrapped).eval()
+
+
+def _decode_cache_bytes(module: torch.nn.Module) -> int:
+    """Bytes of KV cache the artifact carries, which is bytes it will not reload.
+
+    Worth reporting because it is the part of the artifact's size that is not
+    weights, and the part a caller chose with ``max_cache_len``.
+    """
+    return sum(
+        buffer.numel() * buffer.element_size()
+        for name, buffer in module.named_buffers()
+        if "key_cache" in name or "value_cache" in name
+    )
+
+
 @dataclass(frozen=True)
 class HuggingFaceExportResult:
     model_uri: str
@@ -593,6 +694,11 @@ class HuggingFaceExportResult:
     files: tuple[str, ...]
     quantization: str = NO_QUANTIZATION
     sequence_bounds: tuple[int, int] | None = None
+    # A decode artifact reports `input_tokens: 1` -- it takes one token per call
+    # by construction -- so the prompt length it was captured from is not a
+    # meaningful number here, and `max_cache_len` is the one that bounds a run.
+    decode: bool = False
+    max_cache_len: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -635,6 +741,8 @@ def export_hf_model(
     dtype: str = "auto",
     quantization: str = NO_QUANTIZATION,
     dynamic_sequence: bool | tuple[int, int] = False,
+    decode: bool = False,
+    max_cache_len: int = DEFAULT_MAX_CACHE_LEN,
 ) -> HuggingFaceExportResult:
     """Capture a Hugging Face causal LM into an LM7 artifact.
 
@@ -643,10 +751,45 @@ def export_hf_model(
     sequence length as a bounded dynamic dimension instead, so one artifact
     serves prompts of any length inside those bounds — either ``True`` for
     bounds derived from the model config, or an explicit ``(min, max)``.
+
+    ``decode=True`` captures a **KV-cache decode step** instead of a prefill
+    forward pass: one token in, one position of logits out, against a static
+    cache the artifact carries as buffers and writes into. ``max_cache_len``
+    sizes that cache, is fixed at export, and bounds prompt plus completion
+    together. The artifact is stateful, which no other artifact LM7 writes is —
+    see ``docs/exported-decode.md`` for what that costs a caller.
     """
     from .exporting import export as export_artifact
 
     model_id = _model_id(model_uri)
+    if decode:
+        from .exporting import DECODE_BACKENDS
+
+        if backend not in DECODE_BACKENDS:
+            choices = ", ".join(sorted(DECODE_BACKENDS))
+            raise UnsupportedModelError(
+                f"Exporting a decode step is currently validated for these backends: {choices}. "
+                f"Backend {backend!r} has never been run against a graph that writes into a KV "
+                "cache, and a backend that drops those writes returns a correct first token and "
+                "then diverges without raising."
+            )
+        if dynamic_sequence is not False and dynamic_sequence is not None:
+            raise UnsupportedModelError(
+                "A decode artifact takes exactly one token per call, so there is no sequence "
+                "dimension for --dynamic-seq to vary. The cache length is what bounds a "
+                "sequence here; set it with max_cache_len."
+            )
+        if quantization != NO_QUANTIZATION:
+            raise UnsupportedModelError(
+                "Quantized decode export is not implemented. The quantizing export backends are "
+                f"{', '.join(sorted(QUANTIZING_EXPORT_BACKENDS))}, neither of which is validated "
+                "for a stateful graph."
+            )
+        if max_cache_len < 2:
+            raise UnsupportedModelError(
+                "max_cache_len must be at least 2: one slot for a prompt token and one for a "
+                "decoded token, or there is no decode step to export."
+            )
     if quantization not in {NO_QUANTIZATION, "int8"}:
         raise UnsupportedModelError(
             f"Unsupported export quantization {quantization!r}; expected 'none' or 'int8'."
@@ -704,6 +847,66 @@ def export_hf_model(
             "the tokenizer did not return batched input_ids."
         )
 
+    if decode:
+        # The example is the prompt's *first* token at slot zero. A real token id
+        # rather than an arbitrary one because torch.export traces the example it
+        # is given, and the cache position is a tensor whose value changes per
+        # call and whose shape does not -- which is what makes one graph serve
+        # every step.
+        decode_module = _decode_module(model, batch_size=1, max_cache_len=max_cache_len)
+        decode_inputs = {
+            "input_ids": input_ids[:, :1],
+            "cache_position": torch.zeros(1, dtype=torch.long),
+        }
+        decode_metadata: dict[str, Any] | None = {
+            "batch_size": 1,
+            "max_cache_len": max_cache_len,
+            "cache_bytes": _decode_cache_bytes(decode_module),
+            "inputs": list(_DECODE_CAPTURED_INPUTS),
+        }
+        started = time.perf_counter()
+        artifact = export_artifact(
+            decode_module,
+            args=(),
+            kwargs=decode_inputs,
+            target=resolved_target,
+            backend=backend,
+            output=output,
+            decode=decode_metadata,
+            # Strict, where the prefill path is not, and not a preference. Under
+            # non-strict export the cache tensors arrive as *lifted constants*
+            # rather than buffers, and lowering one then dies inside
+            # functionalization with
+            #
+            #     mutating a non-functional tensor with a functional tensor
+            #     is not allowed
+            #
+            # from `cumulative_length.copy_`. Dynamo's tracing keeps them as
+            # buffers, which is what makes the writes survive. Measured both
+            # ways: `export` tolerates non-strict and `aot_inductor` does not, so
+            # capturing strictly for both keeps the artifact independent of which
+            # backend was asked for. It is also what Transformers' own
+            # `TorchExportableModuleForDecoderOnlyLM.export` defaults to.
+            strict=True,
+        )
+        export_ms = (time.perf_counter() - started) * 1000
+        return _export_result(
+            artifact,
+            model_uri=model_uri,
+            model_id=model_id,
+            target=resolved_target,
+            backend=backend,
+            torch_dtype=torch_dtype,
+            prompt=prompt,
+            input_tokens=1,
+            model=model,
+            export_ms=export_ms,
+            quantization=quantization,
+            sequence_bounds=None,
+            decode=True,
+            max_cache_len=max_cache_len,
+        )
+
     # _LogitsOnly names the two tensors it forwards, so anything else the
     # tokenizer produced (token_type_ids, offsets) is not part of the graph.
     inputs = {name: value for name, value in inputs.items() if name in _CAPTURED_INPUTS}
@@ -737,24 +940,59 @@ def export_hf_model(
         options=({"quantization": quantization} if backend in QUANTIZING_EXPORT_BACKENDS else None),
     )
     export_ms = (time.perf_counter() - started) * 1000
+    return _export_result(
+        artifact,
+        model_uri=model_uri,
+        model_id=model_id,
+        target=resolved_target,
+        backend=backend,
+        torch_dtype=torch_dtype,
+        prompt=prompt,
+        input_tokens=int(input_ids.shape[-1]),
+        model=model,
+        export_ms=export_ms,
+        quantization=quantization,
+        sequence_bounds=bounds,
+    )
 
+
+def _export_result(
+    artifact: Any,
+    *,
+    model_uri: str,
+    model_id: str,
+    target: TargetSpec,
+    backend: str,
+    torch_dtype: torch.dtype,
+    prompt: str,
+    input_tokens: int,
+    model: torch.nn.Module,
+    export_ms: float,
+    quantization: str,
+    sequence_bounds: tuple[int, int] | None,
+    decode: bool = False,
+    max_cache_len: int | None = None,
+) -> HuggingFaceExportResult:
+    """Measure what landed on disk and describe it, for either kind of artifact."""
     files = tuple(sorted(item.name for item in artifact.path.iterdir() if item.is_file()))
     artifact_bytes = sum(item.stat().st_size for item in artifact.path.rglob("*") if item.is_file())
     return HuggingFaceExportResult(
         model_uri=model_uri,
         model_id=model_id,
-        target=str(resolved_target),
+        target=str(target),
         backend=backend,
         dtype=str(torch_dtype).removeprefix("torch."),
         output=str(artifact.path),
         prompt=prompt,
-        input_tokens=int(input_ids.shape[-1]),
+        input_tokens=input_tokens,
         parameter_count=sum(parameter.numel() for parameter in model.parameters()),
         export_ms=export_ms,
         artifact_bytes=artifact_bytes,
         files=files,
         quantization=quantization,
-        sequence_bounds=bounds,
+        sequence_bounds=sequence_bounds,
+        decode=decode,
+        max_cache_len=max_cache_len,
     )
 
 

@@ -352,6 +352,35 @@ jobs:
       - name: Load and serve a real model
         run: python -m pytest -m serve_load -v
 
+  exported-decode:
+    name: Exported KV-cache decode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # AOTInductor compiles a C++ wrapper, so this job needs the Python headers
+      # the same way the Inductor jobs do.
+      - name: Install LM7 with the Hugging Face extra
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3.12-dev
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,hf]"
+
+      # A decode artifact whose cache writes were dropped in lowering does not
+      # raise -- it returns a correct first token and then diverges -- so the
+      # only check worth running is a reloaded artifact against eager, token for
+      # token. ~15 MB of random weights, and under a minute for both backends.
+      - name: Export a decode step and decode from the artifact
+        run: python -m pytest -m export_decode -v
+
   torchbench-compile:
     name: TorchBench CPU torch.compile
     runs-on: ubuntu-24.04

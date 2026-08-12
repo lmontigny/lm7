@@ -22,6 +22,7 @@ from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
 from .hexagon import HexagonToolchainDiagnostics, diagnose_hexagon_toolchain
 from .huggingface import (
+    DEFAULT_MAX_CACHE_LEN,
     HuggingFaceExportResult,
     HuggingFaceGenerateResult,
     HuggingFaceRunResult,
@@ -284,6 +285,14 @@ def _print_artifact_inspection(result: ArtifactInspection) -> None:
     print(f"Target:           {result.target}")
     print(f"Payload:          {result.payload or 'none'}")
     print(f"Device-bound:     {'yes' if result.device_bound else 'no'}")
+    if result.decode:
+        cache_bytes = result.decode.get("cache_bytes")
+        held = f", {cache_bytes / 1024**2:.1f} MiB" if isinstance(cache_bytes, int) else ""
+        print(
+            f"Kind:             KV-cache decode step (stateful; "
+            f"{result.decode.get('max_cache_len')} tokens, "
+            f"batch {result.decode.get('batch_size')}{held})"
+        )
     if precision := requirements.get("precision"):
         print(f"Precision:        {precision}")
     if result.delegated_calls is not None and result.total_calls is not None:
@@ -392,7 +401,13 @@ def _print_model_export(result: HuggingFaceExportResult) -> None:
     print(f"Dtype: {result.dtype}")
     print(f"Quantization: {result.quantization}")
     print(f"Parameters: {result.parameter_count:,}")
-    if result.sequence_bounds is None:
+    if result.decode:
+        # The captured shape is one token by construction, so what a reader needs
+        # instead is how long a sequence this artifact can hold and that it is
+        # stateful at all.
+        print("Captured shape: 1 token (KV-cache decode step)")
+        print(f"Cache: {result.max_cache_len} tokens, batch 1, fixed at export")
+    elif result.sequence_bounds is None:
         print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
     else:
         minimum, maximum = result.sequence_bounds
@@ -698,6 +713,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "artifact serves many prompt lengths; bounds default to the model config"
         ),
     )
+    export_parser.add_argument(
+        "--decode",
+        action="store_true",
+        help=(
+            "capture a KV-cache decode step instead of a prefill forward pass: one token "
+            "in, one position of logits out, against a static cache the artifact carries "
+            "and writes into. The result is stateful, unlike every other artifact LM7 "
+            "writes; see docs/exported-decode.md"
+        ),
+    )
+    export_parser.add_argument(
+        "--max-cache-len",
+        type=int,
+        default=DEFAULT_MAX_CACHE_LEN,
+        help=(
+            f"tokens of KV cache a --decode artifact carries (default: {DEFAULT_MAX_CACHE_LEN}). "
+            "Fixed at export and never grows, so it bounds prompt plus completion together"
+        ),
+    )
     export_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
     export_parser.add_argument(
         "--backend",
@@ -852,6 +886,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dtype=args.dtype,
                 quantization=args.quantization,
                 dynamic_sequence=_dynamic_sequence(args.dynamic_seq),
+                decode=args.decode,
+                max_cache_len=args.max_cache_len,
             )
             (
                 _emit_json(export_result.to_dict())

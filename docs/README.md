@@ -79,6 +79,10 @@ This index covers everything else.
 - [Prefill and KV-cache decode](kv-cache-decode.md) — `lm7.compile_generation`:
   two separately compiled graphs, one device-resident cache, and per-phase
   compile counters. Measured on an H100.
+- [Exported KV-cache decode](exported-decode.md) — `lm7 model export --decode`:
+  the AOT counterpart, a decode step that outlives the process by carrying its
+  cache as buffers. Why the blocker was never the one recorded, why it is
+  captured strictly, and why only two backends are allowed to try.
 
 ## Evaluations
 
