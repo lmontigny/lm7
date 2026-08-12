@@ -15,10 +15,12 @@ empty then, so there is nothing to have lost -- and diverges from the second.
 Timing such an artifact without comparing its tokens measures a model that is not
 answering the question.
 
-There is one graph here, not two: it takes exactly one token per call, so the
-prompt goes through it a token at a time. That is fine for a short prompt and the
-wrong shape for a long one -- see docs/exported-decode.md for why prefill is a
-separate problem and what it would cost to solve.
+There is one graph here, not two, and that is not a shortcut: each exported
+program carries its own cache buffers, so a separate prefill artifact would fill
+a cache this one never sees. Sharing a cache means sharing a graph, and a bounded
+dynamic sequence dimension is what lets that one graph take a whole prompt in a
+single call and then one token at a time. Pass ``--decode-shape single-token``
+to compare against the fixed capture, which feeds the prompt a token at a time.
 """
 
 from __future__ import annotations
@@ -35,11 +37,20 @@ from lm7.huggingface import _decode_module, _load_transformers, _model_id, expor
 DEFAULT_MODEL = "hf://HuggingFaceTB/SmolLM2-135M-Instruct"
 
 
-def greedy(step, prompt_ids: torch.Tensor, new_tokens: int) -> list[int]:
-    """Feed the prompt a token at a time, then decode greedily from the logits."""
+def greedy(step, prompt_ids: torch.Tensor, new_tokens: int, one_call: bool) -> list[int]:
+    """Prefill, then decode a token at a time from the logits.
+
+    ``one_call`` is the difference a dynamic capture makes: the whole prompt goes
+    through the graph at once instead of a forward pass per token. Both fill the
+    same cache to the same state, so the tokens that follow are identical -- only
+    the time taken differs.
+    """
     logits = None
-    for position, token_id in enumerate(prompt_ids.tolist()):
-        logits = step(torch.tensor([[token_id]]), torch.tensor([position]))
+    if one_call:
+        logits = step(prompt_ids.unsqueeze(0), torch.arange(len(prompt_ids)))
+    else:
+        for position, token_id in enumerate(prompt_ids.tolist()):
+            logits = step(torch.tensor([[token_id]]), torch.tensor([position]))
     token = int(logits[:, -1].argmax(-1))
     tokens = [token]
     for position in range(len(prompt_ids), len(prompt_ids) + new_tokens - 1):
@@ -59,6 +70,12 @@ def main() -> None:
         help="export backend (default: export)",
     )
     parser.add_argument("--prompt", default="The capital of France is")
+    parser.add_argument(
+        "--decode-shape",
+        default="dynamic",
+        choices=("dynamic", "single-token"),
+        help="dynamic prefills the whole prompt in one call (default: dynamic)",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=12)
     parser.add_argument("--max-cache-len", type=int, default=128)
     parser.add_argument("--output", default="build/decode.lm7")
@@ -78,10 +95,13 @@ def main() -> None:
         # arithmetic is, and this script gates on token equality.
         dtype="float32",
         decode=True,
+        decode_shape=args.decode_shape,
         max_cache_len=args.max_cache_len,
     )
     print(f"Exported {result.output} ({result.artifact_bytes / 1024**2:.1f} MiB)")
-    print(f"Cache: {result.max_cache_len} tokens, batch {1}")
+    print(f"Cache: {result.max_cache_len} tokens, batch 1")
+    print(f"Shape: {result.decode_shape}, up to {result.max_tokens_per_call} token(s) per call")
+    one_call = result.decode_shape == "dynamic"
 
     transformers = _load_transformers()
     model_id = _model_id(args.model)
@@ -94,6 +114,7 @@ def main() -> None:
             lambda ids, pos: artifact(input_ids=ids, cache_position=pos),
             prompt_ids,
             args.max_new_tokens,
+            one_call,
         )
 
     # The reference: the same weights, the same one-token-at-a-time loop, no
@@ -101,8 +122,11 @@ def main() -> None:
     model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).eval()
     reference_module = _decode_module(model, batch_size=1, max_cache_len=args.max_cache_len)
     with torch.inference_mode():
+        # The reference always feeds the prompt a token at a time, so a dynamic
+        # artifact is checked against a *different* way of filling the cache
+        # rather than against itself.
         expected = greedy(
-            lambda ids, pos: reference_module(ids, pos), prompt_ids, args.max_new_tokens
+            lambda ids, pos: reference_module(ids, pos), prompt_ids, args.max_new_tokens, False
         )
 
     print(f"Artifact: {tokenizer.decode(tokens)!r}")

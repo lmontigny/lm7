@@ -31,15 +31,20 @@ PROMPT_IDS = [1, 4, 9, 16]
 NEW_TOKENS = 6
 
 
-def greedy(step, prompt_ids: list[int], new_tokens: int) -> list[int]:
-    """One token per call, prompt included -- what a fixed-shape decode graph gives.
+def greedy(step, prompt_ids: list[int], new_tokens: int, one_call: bool = False) -> list[int]:
+    """Prefill, then decode a token at a time.
 
-    The prompt goes through the same graph a token at a time, which is the honest
-    shape of this artifact rather than a shortcut for the test.
+    ``one_call`` sends the whole prompt through in a single call, which only a
+    dynamic capture accepts. The reference never uses it, so a dynamic artifact
+    is always compared against a *different* way of filling the same cache rather
+    than against itself — which is what makes the comparison worth running.
     """
     logits = None
-    for position, token_id in enumerate(prompt_ids):
-        logits = step(torch.tensor([[token_id]]), torch.tensor([position]))
+    if one_call:
+        logits = step(torch.tensor([prompt_ids]), torch.arange(len(prompt_ids), dtype=torch.long))
+    else:
+        for position, token_id in enumerate(prompt_ids):
+            logits = step(torch.tensor([[token_id]]), torch.tensor([position]))
     token = int(logits[:, -1].argmax(-1))
     tokens = [token]
     for position in range(len(prompt_ids), len(prompt_ids) + new_tokens - 1):
@@ -61,10 +66,13 @@ def eager_tokens() -> list[int]:
 
 
 @pytest.mark.parametrize("backend", ("export", "aot_inductor"))
-def test_a_reloaded_decode_artifact_matches_eager_token_for_token(backend, tmp_path, eager_tokens):
+@pytest.mark.parametrize("shape", ("dynamic", "single-token"))
+def test_a_reloaded_decode_artifact_matches_eager_token_for_token(
+    backend, shape, tmp_path, eager_tokens
+):
     result = export_hf_model(
         f"hf://{TINY_MODEL}",
-        output=str(tmp_path / f"{backend}.lm7"),
+        output=str(tmp_path / f"{backend}-{shape}.lm7"),
         target="cpu",
         backend=backend,
         # float32 because the comparison is an argmax: in a narrower format a
@@ -72,22 +80,67 @@ def test_a_reloaded_decode_artifact_matches_eager_token_for_token(backend, tmp_p
         # measuring the number format instead of the cache.
         dtype="float32",
         decode=True,
+        decode_shape=shape,
         max_cache_len=MAX_CACHE_LEN,
     )
     assert result.decode is True
     assert result.max_cache_len == MAX_CACHE_LEN
-    assert result.input_tokens == 1
+    assert result.decode_shape == shape
+    assert result.max_tokens_per_call == (MAX_CACHE_LEN - 1 if shape == "dynamic" else 1)
 
     artifact = load_artifact(result.output)
     assert artifact.manifest.decode is not None
     assert artifact.manifest.decode["max_cache_len"] == MAX_CACHE_LEN
+    assert artifact.manifest.decode["shape"] == shape
     assert artifact.manifest.decode["cache_bytes"] > 0
 
     with torch.inference_mode():
         tokens = greedy(
-            lambda ids, pos: artifact(input_ids=ids, cache_position=pos), PROMPT_IDS, NEW_TOKENS
+            lambda ids, pos: artifact(input_ids=ids, cache_position=pos),
+            PROMPT_IDS,
+            NEW_TOKENS,
+            one_call=shape == "dynamic",
         )
     assert tokens == eager_tokens
+
+
+def test_one_dynamic_capture_serves_many_prompt_lengths(tmp_path):
+    """The traced length must not be the only one the artifact accepts.
+
+    Exported with a 4-token example and asked for 1, 2, 9 and 17 — each compared
+    against a token-at-a-time eager run of that same prompt, so a length that
+    silently prefills the wrong number of slots shows up as different tokens
+    rather than as a shape error.
+    """
+    transformers = _load_transformers()
+    result = export_hf_model(
+        f"hf://{TINY_MODEL}",
+        output=str(tmp_path / "dynamic.lm7"),
+        target="cpu",
+        backend="export",
+        dtype="float32",
+        decode=True,
+        decode_shape="dynamic",
+        max_cache_len=MAX_CACHE_LEN,
+    )
+    artifact = load_artifact(result.output)
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        TINY_MODEL, dtype=torch.float32
+    ).eval()
+    reference = _decode_module(model, batch_size=1, max_cache_len=MAX_CACHE_LEN)
+
+    for length in (1, 2, 9, 17):
+        prompt = [(index * 7) % 900 + 3 for index in range(length)]
+        with torch.inference_mode():
+            expected = greedy(lambda ids, pos: reference(ids, pos), prompt, NEW_TOKENS)
+            tokens = greedy(
+                lambda ids, pos: artifact(input_ids=ids, cache_position=pos),
+                prompt,
+                NEW_TOKENS,
+                one_call=True,
+            )
+        assert tokens == expected, f"diverged at prompt length {length}"
 
 
 def test_the_cache_actually_accumulates(tmp_path):

@@ -16,10 +16,17 @@ that never had the checkpoint, and decodes.
 import torch, lm7
 
 artifact = lm7.load_artifact("build/decode.lm7")
-logits = artifact(input_ids=torch.tensor([[42]]), cache_position=torch.tensor([0]))
+
+# Prefill: the whole prompt in one call.
+prompt = torch.tensor([[1, 5079, 2079, 288, 253]])
+logits = artifact(input_ids=prompt, cache_position=torch.arange(prompt.shape[-1]))
+
+# Decode: one token at a time, against the cache the prompt just filled.
+token = logits[:, -1].argmax(-1, keepdim=True)
+logits = artifact(input_ids=token, cache_position=torch.tensor([prompt.shape[-1]]))
 ```
 
-`cache_position` is where in the cache this token belongs. It is an input rather
+`cache_position` is where in the cache these tokens belong. It is an input rather
 than internal state, which is the whole reason this works — see
 [below](#why-the-cache-can-be-a-buffer-but-not-an-input).
 
@@ -68,6 +75,66 @@ cache dies in a device-side assert. See [that page](kv-cache-decode.md#a-backend
 Here, calling the same graph twice at the same `cache_position` writes the same
 slot twice and stays correct. `tests/test_export_decode_integration.py::test_the_cache_actually_accumulates`
 pins both halves: idempotent at one slot, different one slot on.
+
+## Prefill in one call
+
+The obvious way to add prefill would be a second, wider graph. It cannot work
+here, and the reason is the same fact that makes any of this work: **each
+exported program carries its own cache buffers**. A separate prefill artifact
+would fill a cache the decode artifact never sees. Sharing a cache means sharing
+a graph.
+
+So the sequence length becomes a bounded dynamic dimension instead, and one graph
+serves both phases:
+
+```text
+prefill   N tokens  + cache_position [0 .. N-1]   -> logits, N cache slots written
+decode    1 token   + cache_position [N]          -> logits, 1 more slot written
+```
+
+`--decode-shape dynamic` is the default. `--decode-shape single-token` fixes the
+graph at one token, which is what this page described before prefill existed.
+
+### Which shape to ask for
+
+Neither dominates. Measured with `benchmarks/exported_decode.py` — one artifact
+per shape, written by `lm7 model export --decode` and reloaded through
+`lm7.load_artifact`, on **Apple M-series `cpu:arm64`, float32**, SmolLM2-135M,
+`aot_inductor`, 512-slot cache, best of 3:
+
+| prompt | `dynamic` prefill | `single-token` prefill | speedup |
+| --- | --- | --- | --- |
+| 32 tokens | 56.7 ms | 605.3 ms | **10.7x** |
+| 128 tokens | 104.2 ms | 2197.0 ms | **21.1x** |
+| 250 tokens | 134.2 ms | 4130.3 ms | **30.8x** |
+
+The fixed graph has no way to take a prompt at once, so its "prefill" is a
+forward pass per token — that is the cost being compared, not a handicap.
+
+But the dynamic graph decodes **slower**, because its kernels are compiled for a
+range rather than for one shape:
+
+| | ms per decoded token |
+| --- | --- |
+| `single-token` | 16.20 |
+| `dynamic` | 20.88 — **1.29x** |
+
+Prefill happens once and decode happens per token, so the answer depends on how
+much you generate:
+
+| prompt | `dynamic` wins below | above it, `single-token` wins |
+| --- | --- | --- |
+| 32 tokens | 117 generated tokens | |
+| 128 tokens | 448 generated tokens | |
+| 250 tokens | 855 generated tokens | |
+
+For chat-shaped work — a prompt of hundreds of tokens and a reply of tens —
+`dynamic` wins comfortably, which is why it is the default. For long generation
+from a short prompt, `single-token` is the better artifact and is why it is kept.
+
+**One machine, one model, CPU, float32.** The break-even points are arithmetic
+from two measured numbers, not a separate measurement, and they will move on
+other hardware.
 
 ## Strict export, and what non-strict costs
 
@@ -121,11 +188,15 @@ tokens after a 5-token prompt.
 | `aot_inductor` | 47.7 s | 1045.6 MiB | 12/12 exact |
 
 Both produced `' Paris. Paris is the largest city in France and the capital'`,
-matching an eager run of the same weights through the same one-token-at-a-time
-loop. Reproduce with:
+matching an eager run of the same weights. That comparison is worth more for the
+dynamic shape than it looks: the artifact prefills the prompt in **one** call
+while the reference feeds it a token at a time, so the two agree only if one-call
+prefill fills the cache to exactly the state N separate calls would. Reproduce
+with:
 
 ```bash
 python examples/exported_decode.py --backend aot_inductor
+python examples/exported_decode.py --decode-shape single-token
 ```
 
 The artifact is roughly the weights plus the cache: 134.5M float32 parameters is
@@ -133,20 +204,23 @@ The artifact is roughly the weights plus the cache: 134.5M float32 parameters is
 that number. `aot_inductor` doubles the total because the package holds the
 compiled wrapper *and* the source program.
 
-**No speed claim is made here.** These numbers are export cost and size, not
-throughput, and nothing on this page has been compared against
-`lm7.compile_generation` or run on a GPU.
+The artifact numbers above are export cost and size. The throughput measurements
+are [in their own section](#which-shape-to-ask-for) and compare the two shapes
+against **each other** — nothing on this page has been compared against
+`lm7.compile_generation`, or run on a GPU.
 
 ## Limits
 
-- **One token per call.** The prompt goes through the same graph a token at a
-  time. That is fine at 5 tokens and the wrong shape at 512: a prompt costs a
-  forward pass per token instead of one batched call. A separate exported prefill
-  graph is the obvious next step — the same wrapper captures a multi-token
-  example — and it is not built here.
+- **A call carries at most `max_cache_len - 1` tokens**, because the cache keeps
+  a slot for the token being decoded. A prompt longer than that has to be split
+  across calls at consecutive cache positions, which works but is not what the
+  bound is for: raise `--max-cache-len`.
 - **Batch 1, cache length fixed at export.** `--max-cache-len` bounds prompt plus
   completion together and cannot grow afterwards, because the cache is buffers
   inside the artifact.
+- **The shape is chosen at export, not at load.** An artifact cannot switch
+  between prefilling in one call and decoding fastest; that is two artifacts. See
+  [which shape to ask for](#which-shape-to-ask-for).
 - **The artifact is a single session.** State lives in the payload, so two
   concurrent callers share one cache. Re-anchoring with `cache_position=0`
   restarts the write pointer but does not zero the stale slots behind it;

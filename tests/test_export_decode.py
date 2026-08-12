@@ -19,7 +19,7 @@ import torch
 from lm7.cli import _build_parser
 from lm7.errors import BackendUnavailableError, UnsupportedModelError
 from lm7.exporting import DECODE_BACKENDS, ArtifactManifest, export
-from lm7.huggingface import DEFAULT_MAX_CACHE_LEN, export_hf_model
+from lm7.huggingface import DEFAULT_DECODE_SHAPE, DEFAULT_MAX_CACHE_LEN, export_hf_model
 from lm7.inspection import inspect_artifact
 
 TINY = "hf://hf-internal-testing/tiny-random-LlamaForCausalLM"
@@ -57,6 +57,26 @@ def test_decode_export_refuses_quantization():
 def test_decode_export_refuses_a_cache_with_no_room_to_decode():
     with pytest.raises(UnsupportedModelError, match="max_cache_len must be at least 2"):
         export_hf_model(TINY, output="unused.lm7", decode=True, max_cache_len=1)
+
+
+def test_decode_export_refuses_an_unknown_shape():
+    with pytest.raises(UnsupportedModelError, match="decode_shape must be one of"):
+        export_hf_model(TINY, output="unused.lm7", decode=True, decode_shape="two-tokens")
+
+
+def test_a_decode_shape_without_a_decode_capture_is_refused():
+    """Silently ignoring it would be worse: it reads as a request that was honoured."""
+    with pytest.raises(UnsupportedModelError, match="only describes a decode capture"):
+        export_hf_model(TINY, output="unused.lm7", decode_shape="single-token")
+
+
+def test_a_dynamic_capture_refuses_a_cache_too_small_to_bound(tmp_path):
+    """The prompt dimension is bounded one below the cache, and a range needs room.
+
+    `single-token` is still available at that size, which the message says.
+    """
+    with pytest.raises(UnsupportedModelError, match="single-token"):
+        export_hf_model(TINY, output=str(tmp_path / "a.lm7"), decode=True, max_cache_len=3)
 
 
 def test_the_export_api_refuses_decode_metadata_on_an_unmeasured_backend(tmp_path):
@@ -166,6 +186,17 @@ def test_the_cli_exposes_decode_and_a_cache_length():
     )
     assert args.decode is True
     assert args.max_cache_len == 256
+
+
+def test_the_cli_defaults_to_the_shape_that_can_prefill():
+    """A one-token graph is the specialised choice, so it is the one you ask for."""
+    args = _build_parser().parse_args(["model", "export", TINY, "out.lm7", "--decode"])
+    assert args.decode_shape == DEFAULT_DECODE_SHAPE == "dynamic"
+
+    fixed = _build_parser().parse_args(
+        ["model", "export", TINY, "out.lm7", "--decode", "--decode-shape", "single-token"]
+    )
+    assert fixed.decode_shape == "single-token"
 
 
 def test_the_cache_length_defaults_to_the_same_number_compile_generation_uses():

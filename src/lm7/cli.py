@@ -22,6 +22,8 @@ from .errors import LM7Error
 from .exporting import EXPORT_BACKENDS
 from .hexagon import HexagonToolchainDiagnostics, diagnose_hexagon_toolchain
 from .huggingface import (
+    DECODE_SHAPES,
+    DEFAULT_DECODE_SHAPE,
     DEFAULT_MAX_CACHE_LEN,
     HuggingFaceExportResult,
     HuggingFaceGenerateResult,
@@ -288,11 +290,15 @@ def _print_artifact_inspection(result: ArtifactInspection) -> None:
     if result.decode:
         cache_bytes = result.decode.get("cache_bytes")
         held = f", {cache_bytes / 1024**2:.1f} MiB" if isinstance(cache_bytes, int) else ""
+        per_call = result.decode.get("max_tokens_per_call")
+        shape = result.decode.get("shape", "single-token")
         print(
-            f"Kind:             KV-cache decode step (stateful; "
+            f"Kind:             KV-cache decode step, {shape} (stateful; "
             f"{result.decode.get('max_cache_len')} tokens, "
             f"batch {result.decode.get('batch_size')}{held})"
         )
+        if per_call:
+            print(f"Tokens per call:  up to {per_call}")
     if precision := requirements.get("precision"):
         print(f"Precision:        {precision}")
     if result.delegated_calls is not None and result.total_calls is not None:
@@ -405,7 +411,12 @@ def _print_model_export(result: HuggingFaceExportResult) -> None:
         # The captured shape is one token by construction, so what a reader needs
         # instead is how long a sequence this artifact can hold and that it is
         # stateful at all.
-        print("Captured shape: 1 token (KV-cache decode step)")
+        per_call = (
+            f"up to {result.max_tokens_per_call} tokens per call"
+            if result.decode_shape == "dynamic"
+            else "1 token per call"
+        )
+        print(f"Captured shape: KV-cache decode step, {result.decode_shape} ({per_call})")
         print(f"Cache: {result.max_cache_len} tokens, batch 1, fixed at export")
     elif result.sequence_bounds is None:
         print(f"Captured shape: {result.input_tokens} tokens from {result.prompt!r}")
@@ -724,6 +735,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     export_parser.add_argument(
+        "--decode-shape",
+        choices=DECODE_SHAPES,
+        default=DEFAULT_DECODE_SHAPE,
+        help=(
+            f"how many tokens a --decode graph takes per call (default: {DEFAULT_DECODE_SHAPE}). "
+            "'dynamic' serves a whole prompt in one call and then one token at a time against "
+            "the same cache; 'single-token' fixes it at one, costing a forward pass per prompt "
+            "token and buying a faster decode step. See docs/exported-decode.md"
+        ),
+    )
+    export_parser.add_argument(
         "--max-cache-len",
         type=int,
         default=DEFAULT_MAX_CACHE_LEN,
@@ -888,6 +910,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dynamic_sequence=_dynamic_sequence(args.dynamic_seq),
                 decode=args.decode,
                 max_cache_len=args.max_cache_len,
+                decode_shape=args.decode_shape,
             )
             (
                 _emit_json(export_result.to_dict())

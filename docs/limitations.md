@@ -56,14 +56,19 @@ targets with continuous-integration coverage.
   cannot be deserialized by `torch.export.load` — a constraint on the *output*,
   which was for a long time recorded here as the reason a decode loop could not
   be exported. It was not. See [exported decode](exported-decode.md).
-- **An exported decode step is one token per call, on two backends.**
+- **An exported decode step runs on two backends, and prefills in one call.**
   `lm7 model export --decode` captures a KV-cache decode step that survives the
-  process, holding its cache as buffers inside the artifact. It is validated on
-  `export` and `aot_inductor` only, on CPU and float32 only, at batch 1 with the
-  cache length fixed at export — and the prompt goes through it a token at a
-  time, because there is no exported prefill graph. Every other export backend is
-  refused rather than guessed at: a backend that drops the cache writes during
-  lowering returns a correct first token and then diverges without raising.
+  process, holding its cache as buffers inside the artifact. The default
+  `--decode-shape dynamic` binds the sequence length as a bounded dimension, so
+  one graph takes a whole prompt at once and then one token at a time against the
+  same cache; `--decode-shape single-token` fixes it at one token, decoding 1.29x
+  faster and paying a forward pass per prompt token. There is no separate prefill
+  *artifact* and cannot be: each exported program carries its own cache buffers,
+  so a second artifact would fill a cache the first never sees. Validated on
+  `export` and `aot_inductor` only, on CPU and float32 only, at batch 1. Every
+  other export backend is refused rather than guessed at: a backend that drops the
+  cache writes during lowering returns a correct first token and then diverges
+  without raising.
 - **A decode artifact is stateful, and nothing else LM7 writes is.** Two
   concurrent callers share one cache. `cache_position=0` re-anchors the write
   pointer but does not zero the slots behind it, and whether that leaks has not
