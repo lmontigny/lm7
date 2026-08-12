@@ -376,6 +376,36 @@ Apple artifacts still record nothing new. An `apple` target's architecture is
 `metal`, which describes the GPU rather than the CPU the payload was compiled
 for, so the same reasoning does not transfer without its own measurement.
 
+#### The x86-64 side of the same pair
+
+The section above is the Arm half. Running the full lifecycle on a GCP
+`c4-standard-8` (Intel Xeon Platinum 8581C, Emerald Rapids, 8 vCPU / 4 physical
+cores, Python 3.12.13, `torch 2.13.0+cpu`) puts the other end of that
+architecture pair on record — SmolLM2 at FP16, 15 repeats:
+
+| stage | wall | detail |
+| --- | ---: | --- |
+| export | 41.61 s | 34.30 s build (31.91 s compile, 2.39 s capture), 545,639,826 B artifact |
+| load, `lm7` API | 8.22 s | 4.18 s load, 5.04 s first inference |
+| load, `torch` API | 3.98 s | 1.98 s load, 2.88 s first inference |
+| JIT, cold cache | 35.05 s | 34.11 s to first inference |
+| JIT, warm cache | 9.81 s | 9.13 s to first inference |
+
+The manifest records `target.architecture: "x86_64"`, so the recording fix
+described above is not Arm-only, and all six mismatch cases were rejected with a
+clear message — including the architecture guard, which reported that the payload
+`was built for cpu:sm89, but this machine is cpu:x86_64`. Numerics matched the
+saved reference to `1.836e-01` at FP16 on every load, agreeing on the greedy
+token, which is the same weak check used everywhere else on this page.
+
+**The steady-state medians on this host should not be read closely.** The `lm7`
+API measured 15.6 ms cold and 24.2 ms warm for a number that the cold/warm split
+cannot legitimately change, while the `torch` API measured 24.33 ms and 24.35 ms
+across the same pair. The `torch` numbers agreeing to two decimal places is what
+this measurement looks like when it is behaving, so the 15.6 ms is noise on a
+shared 4-core VM rather than an artifact-loading advantage. The load and export
+seconds above are large enough not to be in question.
+
 ## Scope
 
 - **Three models, one prompt, one shape, one dtype.** A 5-token prefill at batch

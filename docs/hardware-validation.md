@@ -150,6 +150,62 @@ Do not describe this as generation validation. `model run` checks the forward
 path and next-token logits. Use `lm7 model generate` or the generation
 benchmarks if the claim is about decode.
 
+## Decode, if the claim is about generation
+
+The forward-pass benchmarks above say nothing about the memory-bound half of
+generation, and compiling is worth a different amount to each:
+
+```bash
+python benchmarks/decode.py --model HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target cpu --sequence-length 128 512 --batch-size 1 \
+  --decode-steps 32 --warmup-steps 4 \
+  --output artifacts/benchmarks/decode.json
+```
+
+Read `recompiled` and `same tokens` before reading the latencies. A recompile
+during the steady loop invalidates the number rather than being jitter.
+
+## What the matrix unit is doing, on a part that has one
+
+Any x86 host advertising `amx_*` or an Arm host advertising `bf16`/`i8mm` should
+get this, because the flags alone say nothing — LM7 pins the CPU compute dtype to
+FP32, so the hardware may be entirely idle:
+
+```bash
+python benchmarks/cpu_matrix_unit.py --model mlp --backend eager \
+  --rows 1 8 64 512 --repeats 30 \
+  --output artifacts/benchmarks/matrix-mlp.json
+
+python benchmarks/cpu_matrix_unit.py --model smollm2 --backend eager inductor \
+  --rows 5 64 --repeats 20 \
+  --output artifacts/benchmarks/matrix-smollm2.json
+```
+
+Split the run by model and row count rather than sweeping everything at once —
+each cell re-runs under `ONEDNN_VERBOSE=all` in a child process, and a 512-token
+causal LM is the expensive case. Three things to read out of the JSON:
+
+- `matrix_matmul` — `yes`/`no` on x86, where the kernel name carries the proof,
+  and `unknown` on AArch64, where it does not. Do not write `no` for `unknown`.
+- `onednn_isa` — `null` means oneDNN never ran for that cell at all, which is a
+  real outcome (ATen/MKL served the linears) and a limit on every later
+  kernel-level question about that model on that host.
+- `rejected_matmul` — what oneDNN declined and why, which is the only evidence
+  left when the chosen kernel's name is uninformative.
+
+## Artifact lifecycle, if the host will export
+
+One process cannot see the failures that matter for a shipped artifact, so this
+runs export, reload and the mismatch cases as separate processes:
+
+```bash
+python benchmarks/aot_artifact_lifecycle.py run --model smollm2 \
+  --target cpu --results-dir artifacts/aoti-<host> --repeats 15
+```
+
+Every mismatch case should be `rejected` with a message naming the cause. A case
+that loads is the finding.
+
 ## What to write down
 
 Record:

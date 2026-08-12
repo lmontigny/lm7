@@ -149,6 +149,58 @@ Two things to know before repeating this:
   [quantization](quantization.md)-shaped decision, with the validation that
   implies, rather than a free switch.
 
+### Repeated on a second Emerald Rapids part, which does not agree
+
+The section above is one Xeon. Repeating the same benchmark on a second part of
+the *same* microarchitecture — an Intel Xeon Platinum 8581C on a GCP
+`c4-standard-8`, 8 vCPU / 4 physical cores, 4 torch threads, `torch 2.13.0+cpu`
+— reproduces the mechanism and disagrees on the size of it.
+
+oneDNN names the ISA here `Intel AVX10.1 and Intel AMX with bfloat16 and 8-bit
+integer support`, `torch._C._cpu._init_amx()` returns true, and every BF16 matmul
+in every cell below reached `matmul:brg_matmul:avx10_1_512_amx` while every FP32
+matmul reached none. So the tile units ran, and the question is only what they
+were worth. Synthetic MLP, eager, median latency:
+
+| rows | FP32 | BF16 (AMX) | | 8559C, for contrast |
+| --- | --- | --- | --- | --- |
+| 1 | 0.316 ms | 0.700 ms | **0.45x — slower** | 0.77x — slower |
+| 8 | 0.919 ms | 0.380 ms | 2.42x | 2.22x |
+| 64 | 3.203 ms | 0.658 ms | **4.87x** | 4.87x |
+| 512 | 17.038 ms | 2.640 ms | **6.45x** | 3.16x |
+
+**The 16-row story holds and its edges move.** One row is a larger loss here
+(0.45x against 0.77x) and 512 rows a much larger win (6.45x against 3.16x), so
+the two parts differ by roughly 2x at both ends of the same curve while agreeing
+exactly at 64. The 8559C row had 8 physical cores against this part's 4, which is
+one obvious difference among several, and nothing here isolates it. The usable
+conclusion is the narrower one: **"Emerald Rapids" does not name a number.** A
+dtype policy read off the microarchitecture would have been mis-tuned by 2x on
+the second machine that shares it.
+
+SmolLM2-135M on the same host, median latency:
+
+| prompt | eager FP32 | eager BF16 | inductor FP32 | inductor BF16 |
+| --- | --- | --- | --- | --- |
+| 5 tokens | 21.621 ms | 18.529 ms | 17.502 ms | 13.935 ms |
+| 64 tokens | 53.853 ms | 36.453 ms | 45.554 ms | 26.830 ms |
+| 512 tokens | 377.450 ms | 98.548 ms | 321.961 ms | **87.403 ms** |
+
+The real model is tamer than the MLP at both ends — 1.17x at 5 tokens rather than
+a loss, 3.83x at 512 rather than 6.45x — which is the same ordering the 8559C
+showed. Logit movement reproduces too: 1.949 absolute in eager and 0.37–0.48
+under Inductor, against the "1.9 and roughly 0.4" recorded above.
+
+One thing this host adds that the earlier one did not surface:
+
+- **oneDNN is not on the FP32 path for this model at all.** Every FP32 SmolLM2
+  cell reports no oneDNN ISA line and no executed primitives, while the FP32 MLP
+  on the same machine reports both. So SmolLM2's FP32 linears are served by
+  ATen/MKL and never enter oneDNN, and `ONEDNN_VERBOSE` is silent for that
+  configuration — which is a limit on what any oneDNN-based kernel check can be
+  asked about this model here, and it is why the INT8 question below is left
+  without kernel evidence rather than answered.
+
 ### The same question on Arm, where the logs cannot answer it
 
 Repeated on a GCP `n4a-standard-8` (Google Axion, Arm Neoverse N3, 8 vCPU,
@@ -377,7 +429,40 @@ lm7 model compatibility hf://HuggingFaceTB/SmolLM2-135M-Instruct \
 
 This is evidence that the OpenVINO IR path works and wins on these bounded Intel
 CPU workloads. It is not a broad performance claim: no model suite, dtype sweep,
-generation/decode benchmark, or long benchmark run was performed.
+or long benchmark run was performed. The decode half is covered separately
+below.
+
+### Prefill and decode on the same host
+
+Everything above is a forward pass. Generation splits into a matmul-bound
+prefill and a stream of memory-bound single-token decode steps, and compiling is
+worth different amounts to each.
+[`benchmarks/decode.py`](../benchmarks/decode.py) on SmolLM2-135M, FP32, batch 1,
+32 decode steps after 4 warmup steps:
+
+| prompt | arm | prefill | decode | throughput |
+| --- | --- | ---: | ---: | ---: |
+| 128 | eager | 77.3 ms | 16.523 ms/tok | 60.5 tok/s |
+| 128 | Inductor | 69.9 ms | **12.528 ms/tok** | **79.8 tok/s** |
+| 512 | eager | 327.6 ms | 19.130 ms/tok | 52.3 tok/s |
+| 512 | Inductor | 275.2 ms | **14.927 ms/tok** | **67.0 tok/s** |
+
+Both arms produced the same tokens, and nothing recompiled during the steady
+loop. **Compiling is worth more to decode than to prefill** — 1.32x and 1.28x
+against 1.11x and 1.19x — which is the expected shape: a decode step is small
+enough that launch overhead dominates it, and that is what Inductor removes.
+
+Two things worth reading alongside it:
+
+- **This is the row count where AMX is idle.** Decode is one row per step, and
+  [the section above](#repeated-on-a-second-emerald-rapids-part-which-does-not-agree)
+  measures BF16 at one row as a 0.45x *loss* on this part. So the workload with
+  the best compile speedup here is also the one a naive "the host reports
+  `amx_bf16`" dtype policy would damage most.
+- **The compile has to be amortized.** The cold decode phase cost 17.5 s at
+  128 tokens against 0.40 s for the same 32 steps warm, so roughly 17 s of
+  compilation buys about 4 ms per token — on the order of 4,000 decoded tokens
+  before it breaks even. Fine for a served process, not for a one-shot call.
 
 ## Is there an AMD equivalent?
 
