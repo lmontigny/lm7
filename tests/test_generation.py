@@ -173,6 +173,67 @@ def test_rejects_impossible_configurations(fake_cache, kwargs, message):
         build(**kwargs)
 
 
+@pytest.fixture
+def usurping_backend():
+    """Register a backend that outranks Inductor, then take it away again.
+
+    The planner selects by priority, so this is what a target whose highest-priority
+    backend is not Inductor looks like — `tpu` selects `openxla`, `tenstorrent`
+    selects its own, `intel:npu` selects `openvino` — without needing any of those
+    SDKs, or that hardware, to be present.
+    """
+    from lm7.backends import registry
+    from lm7.backends.base import BackendInfo, Support
+
+    class Usurper:
+        name = "usurper"
+
+        def probe(self):
+            return BackendInfo(self.name, "0", True, "installed")
+
+        def supports(self, request):
+            del request
+            return Support(True, "Claims every target.", priority=1000)
+
+        def compile(self, request, example_args, example_kwargs):
+            raise AssertionError("compile_generation must refuse before it compiles anything.")
+
+        def load(self, artifact):
+            raise AssertionError("compile_generation must refuse before it loads anything.")
+
+    registry.register(Usurper())
+    try:
+        yield
+    finally:
+        # The registry is a process-wide singleton and offers no unregister,
+        # which is right for a shipped backend list and inconvenient for exactly
+        # one test.
+        registry._backends.pop(Usurper.name)
+
+
+def test_auto_refuses_a_backend_that_has_never_driven_a_cache(fake_cache, usurping_backend):
+    """`backend='auto'` is checked against what it selects, not just the string.
+
+    Validating the argument alone let `auto` land on whatever the planner ranked
+    highest for the target — a backend with no `warmup: False`, so one that
+    compiles by executing and spends KV cache slots the caller never asked for.
+    """
+    with pytest.raises(lm7.errors.BackendUnavailableError, match="usurper"):
+        build(backend="auto")
+
+
+def test_an_explicit_backend_is_not_second_guessed(fake_cache, usurping_backend):
+    """Only `auto` consults the planner, so the usurper never enters the picture."""
+    build(backend="eager")
+
+
+def test_auto_is_accepted_where_it_lands_on_a_backend_this_path_supports(fake_cache):
+    from lm7.detection import resolve_target
+
+    assert lm7.generation._planned_backend(resolve_target("cpu")) in {"eager", "inductor"}
+    build(backend="auto")
+
+
 def test_cache_is_allocated_before_the_first_call(fake_cache):
     runner = build()
     assert runner.cache_sequence_length == 0

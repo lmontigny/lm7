@@ -28,7 +28,7 @@ import lm7.serve.cli as serve_cli_module
 import lm7.serve.trtllm as trtllm_module
 import lm7.serve.vllm as vllm_module
 from lm7.cli import _build_parser, _cors_origins
-from lm7.errors import UnsupportedModelError
+from lm7.errors import BackendUnavailableError, UnsupportedModelError
 from lm7.serve.cli import serve_plan
 from lm7.serve.engine import (
     LM7ServeEngine,
@@ -1074,6 +1074,40 @@ def test_serving_a_local_directory_unquantized_is_not_blocked_by_that(tmp_path: 
     with pytest.raises(Exception) as caught:
         LM7ServeEngine.load(config)
     assert "not available for a local directory" not in str(caught.value)
+
+
+def test_a_backend_auto_cannot_reach_is_refused_before_the_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Which backend `auto` selects is a property of the target, so it beats the load.
+
+    The same reasoning as the quantization gate beside it: the answer is knowable
+    before a byte is downloaded, and finding out after `from_pretrained` costs a
+    multi-gigabyte checkpoint to learn something the target already said. The
+    fakes here raise rather than return, so moving the check back below the
+    download fails this test instead of merely slowing it down.
+    """
+    import lm7.generation
+    import lm7.serve.engine as engine_module
+
+    class NeverLoaded:
+        class AutoTokenizer:
+            @staticmethod
+            def from_pretrained(model_id: str) -> object:
+                raise AssertionError("the backend refusal must come before the download")
+
+        class AutoModelForCausalLM:
+            @staticmethod
+            def from_pretrained(model_id: str, dtype: torch.dtype) -> object:
+                raise AssertionError("the backend refusal must come before the download")
+
+    # The planner's own answer is tested in test_generation.py; what matters here
+    # is only that a refusal arrives ahead of the checkpoint.
+    monkeypatch.setattr(engine_module, "_load_transformers", lambda: NeverLoaded)
+    monkeypatch.setattr(lm7.generation, "_planned_backend", lambda _: "openxla")
+
+    with pytest.raises(BackendUnavailableError, match="openxla"):
+        LM7ServeEngine.load(ServeConfig(model="hf://owner/model", target="cpu"))
 
 
 def test_a_quantized_load_asks_for_the_quantized_compute_dtype(

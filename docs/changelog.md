@@ -67,6 +67,7 @@ file stays a index rather than a second, drifting description.
 | [#132](https://github.com/lmontigny/lm7/pull/132) | Say what the model is made of, and what it is occupying |
 | [#110](https://github.com/lmontigny/lm7/pull/110) | Add experimental TensorRT-LLM serving backend for NVIDIA |
 | [#138](https://github.com/lmontigny/lm7/pull/138) | Gate the CPU artifact that was as architecture-bound as the GPU one |
+| [#160](https://github.com/lmontigny/lm7/pull/160) | Gate the decode path's backend selection, and correct the Apple claim |
 
 ## On-device validation
 

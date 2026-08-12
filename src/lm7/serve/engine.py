@@ -314,7 +314,7 @@ class LM7ServeEngine:
         # Imported at call time. `huggingface` pulls in Transformers and the
         # whole compile stack, and `lm7.serve` is imported by the CLI parser
         # before anyone has asked to serve anything.
-        from ..generation import compile_generation
+        from ..generation import _check_planned_backend, compile_generation
         from ..huggingface import (
             _apply_quantization,
             _resolve_dtype,
@@ -350,6 +350,12 @@ class LM7ServeEngine:
                 "quantize it, or drop --quantize to serve this directory unquantized."
             )
         _validate_quantization(quantization, target, config.backend, config.dtype, model_id)
+        # Gated here for the same reason, and it is the same kind of fact: which
+        # backend `backend="auto"` selects is a property of the target alone, so
+        # it is knowable before a byte is downloaded. `compile_generation` asks
+        # again below -- that one guards every other caller, this one guards the
+        # checkpoint.
+        _check_planned_backend(config.backend, target)
         transformers = _load_transformers()
         try:
             tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
