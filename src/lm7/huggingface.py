@@ -38,6 +38,30 @@ DEFAULT_MAX_CACHE_LEN = 2048
 # exactly that reason -- see docs/exported-decode.md.
 _DECODE_CAPTURED_INPUTS = ("input_ids", "cache_position")
 
+# How many tokens a decode artifact's graph accepts per call.
+#
+# `dynamic` captures the sequence length as a bounded dynamic dimension, so the
+# *same* graph and the *same* cache serve a whole prompt in one call and then one
+# token per call after it. `single-token` fixes it at one, which makes a prompt
+# cost a forward pass per token.
+#
+# Two graphs would be the obvious alternative and cannot work here: each exported
+# program carries its own cache buffers, so a separate prefill artifact would
+# fill a cache the decode artifact never sees. Sharing a cache means sharing a
+# graph.
+#
+# Which is faster is a property of the workload, not of the capture, and both
+# halves were measured -- `dynamic` wins the prompt by 10-34x and loses every
+# decoded token by 1.38x. See docs/exported-decode.md#prefill-in-one-call.
+DECODE_SHAPES = ("dynamic", "single-token")
+DEFAULT_DECODE_SHAPE = "dynamic"
+
+# A dynamic capture needs a range to bind, and `torch.export.Dim` wants a real
+# one. The cache has to keep a slot for the token being decoded, so the longest
+# prompt is one below the cache; below this a range is degenerate and the fixed
+# capture is what the caller wanted anyway.
+_MINIMUM_DYNAMIC_CACHE_LEN = 4
+
 INT8 = "int8"
 FP8 = "fp8"
 NVFP4 = "nvfp4"
@@ -694,11 +718,13 @@ class HuggingFaceExportResult:
     files: tuple[str, ...]
     quantization: str = NO_QUANTIZATION
     sequence_bounds: tuple[int, int] | None = None
-    # A decode artifact reports `input_tokens: 1` -- it takes one token per call
-    # by construction -- so the prompt length it was captured from is not a
-    # meaningful number here, and `max_cache_len` is the one that bounds a run.
+    # For a decode artifact `input_tokens` is the length actually traced, which a
+    # dynamic capture is not bound by: `max_tokens_per_call` is what one call may
+    # carry, and `max_cache_len` is what a whole sequence may.
     decode: bool = False
     max_cache_len: int | None = None
+    decode_shape: str | None = None
+    max_tokens_per_call: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -743,6 +769,7 @@ def export_hf_model(
     dynamic_sequence: bool | tuple[int, int] = False,
     decode: bool = False,
     max_cache_len: int = DEFAULT_MAX_CACHE_LEN,
+    decode_shape: str = DEFAULT_DECODE_SHAPE,
 ) -> HuggingFaceExportResult:
     """Capture a Hugging Face causal LM into an LM7 artifact.
 
@@ -753,11 +780,18 @@ def export_hf_model(
     bounds derived from the model config, or an explicit ``(min, max)``.
 
     ``decode=True`` captures a **KV-cache decode step** instead of a prefill
-    forward pass: one token in, one position of logits out, against a static
-    cache the artifact carries as buffers and writes into. ``max_cache_len``
-    sizes that cache, is fixed at export, and bounds prompt plus completion
-    together. The artifact is stateful, which no other artifact LM7 writes is —
-    see ``docs/exported-decode.md`` for what that costs a caller.
+    forward pass, against a static cache the artifact carries as buffers and
+    writes into. ``max_cache_len`` sizes that cache, is fixed at export, and
+    bounds prompt plus completion together. The artifact is stateful, which no
+    other artifact LM7 writes is — see ``docs/exported-decode.md`` for what that
+    costs a caller.
+
+    ``decode_shape`` decides how many tokens that graph takes per call.
+    ``"dynamic"`` captures the sequence length as a bounded dimension, so one
+    graph prefills a whole prompt in a single call and then decodes a token at a
+    time against the same cache. ``"single-token"`` fixes it at one, which costs
+    a forward pass per prompt token and buys a faster decode step; the trade is
+    measured in ``docs/exported-decode.md``.
     """
     from .exporting import export as export_artifact
 
@@ -790,6 +824,23 @@ def export_hf_model(
                 "max_cache_len must be at least 2: one slot for a prompt token and one for a "
                 "decoded token, or there is no decode step to export."
             )
+        if decode_shape not in DECODE_SHAPES:
+            choices = ", ".join(repr(name) for name in DECODE_SHAPES)
+            raise UnsupportedModelError(
+                f"decode_shape must be one of {choices}; got {decode_shape!r}."
+            )
+        if decode_shape == "dynamic" and max_cache_len < _MINIMUM_DYNAMIC_CACHE_LEN:
+            raise UnsupportedModelError(
+                f"A dynamic decode capture needs max_cache_len of at least "
+                f"{_MINIMUM_DYNAMIC_CACHE_LEN}, because the prompt dimension is bounded at one "
+                "below the cache and a range that small is degenerate. Use "
+                "decode_shape='single-token' for a cache this size."
+            )
+    elif decode_shape != DEFAULT_DECODE_SHAPE:
+        raise UnsupportedModelError(
+            "decode_shape only describes a decode capture; pass decode=True as well, or leave "
+            "it at its default."
+        )
     if quantization not in {NO_QUANTIZATION, "int8"}:
         raise UnsupportedModelError(
             f"Unsupported export quantization {quantization!r}; expected 'none' or 'int8'."
@@ -848,21 +899,38 @@ def export_hf_model(
         )
 
     if decode:
-        # The example is the prompt's *first* token at slot zero. A real token id
-        # rather than an arbitrary one because torch.export traces the example it
-        # is given, and the cache position is a tensor whose value changes per
-        # call and whose shape does not -- which is what makes one graph serve
-        # every step.
         decode_module = _decode_module(model, batch_size=1, max_cache_len=max_cache_len)
+        # Real token ids rather than arbitrary ones, because torch.export traces
+        # the example it is given. The cache position is a tensor whose values
+        # change per call and whose shape tracks the tokens it accompanies -- one
+        # position per token, which is what lets a single graph write a whole
+        # prompt and then one token at a time.
+        maximum_prompt = max_cache_len - 1 if decode_shape == "dynamic" else 1
+        # A prompt longer than one call may carry is truncated for the *trace*
+        # only; the artifact still serves anything inside the bound.
+        example_tokens = input_ids[:, :maximum_prompt]
         decode_inputs = {
-            "input_ids": input_ids[:, :1],
-            "cache_position": torch.zeros(1, dtype=torch.long),
+            "input_ids": example_tokens,
+            "cache_position": torch.arange(example_tokens.shape[-1], dtype=torch.long),
         }
+        dynamic_shapes = None
+        if decode_shape == "dynamic":
+            # One dimension shared by both tensors: a call carries N tokens and
+            # exactly N positions, so binding them separately would let a caller
+            # describe a state that cannot exist. The cache keeps a slot for the
+            # token being decoded, hence one below its length.
+            sequence = torch.export.Dim("sequence", min=1, max=max_cache_len - 1)
+            dynamic_shapes = {"input_ids": {1: sequence}, "cache_position": {0: sequence}}
         decode_metadata: dict[str, Any] | None = {
             "batch_size": 1,
             "max_cache_len": max_cache_len,
             "cache_bytes": _decode_cache_bytes(decode_module),
             "inputs": list(_DECODE_CAPTURED_INPUTS),
+            "shape": decode_shape,
+            # What one call may carry. The cache length bounds a whole sequence;
+            # this bounds a single call, and the two differ by the slot the next
+            # token needs.
+            "max_tokens_per_call": maximum_prompt,
         }
         started = time.perf_counter()
         artifact = export_artifact(
@@ -873,6 +941,7 @@ def export_hf_model(
             backend=backend,
             output=output,
             decode=decode_metadata,
+            dynamic_shapes=dynamic_shapes,
             # Strict, where the prefill path is not, and not a preference. Under
             # non-strict export the cache tensors arrive as *lifted constants*
             # rather than buffers, and lowering one then dies inside
@@ -898,13 +967,15 @@ def export_hf_model(
             backend=backend,
             torch_dtype=torch_dtype,
             prompt=prompt,
-            input_tokens=1,
+            input_tokens=int(example_tokens.shape[-1]),
             model=model,
             export_ms=export_ms,
             quantization=quantization,
             sequence_bounds=None,
             decode=True,
             max_cache_len=max_cache_len,
+            decode_shape=decode_shape,
+            max_tokens_per_call=maximum_prompt,
         )
 
     # _LogitsOnly names the two tensors it forwards, so anything else the
@@ -972,6 +1043,8 @@ def _export_result(
     sequence_bounds: tuple[int, int] | None,
     decode: bool = False,
     max_cache_len: int | None = None,
+    decode_shape: str | None = None,
+    max_tokens_per_call: int | None = None,
 ) -> HuggingFaceExportResult:
     """Measure what landed on disk and describe it, for either kind of artifact."""
     files = tuple(sorted(item.name for item in artifact.path.iterdir() if item.is_file()))
@@ -993,6 +1066,8 @@ def _export_result(
         sequence_bounds=sequence_bounds,
         decode=decode,
         max_cache_len=max_cache_len,
+        decode_shape=decode_shape,
+        max_tokens_per_call=max_tokens_per_call,
     )
 
 
