@@ -1019,6 +1019,17 @@ def test_a_page_pointed_elsewhere_is_still_self_contained() -> None:
         assert marker not in page
 
 
+def test_the_page_exposes_generation_controls() -> None:
+    from lm7.serve.ui import render
+
+    page = render()
+    assert 'id="stop"' in page
+    assert "AbortController" in page
+    assert 'id="maxtokens"' in page
+    assert "payload.max_tokens" in page
+    assert "context limit" in page
+
+
 def test_the_page_server_serves_only_the_page() -> None:
     import urllib.error
     import urllib.request

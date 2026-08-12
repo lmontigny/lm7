@@ -123,6 +123,12 @@ convenience rather than part of the API contract. The conversation lives in the
 page: LM7's engine is one static KV cache with no notion of a session, so each
 turn resends the transcript exactly as an OpenAI client would.
 
+The page shows the server's `max_model_len`, has a `Max response` input that
+sends `max_tokens`, and has a `Stop` button that aborts the streaming request.
+The server already treats a disconnected streaming client as cancellation, so
+stopping from the page releases the one generation slot instead of waiting for
+the response to finish.
+
 ### What it costs: dtype, weights and memory
 
 The header line says what is loaded and what it is occupying, because the two
@@ -296,6 +302,9 @@ that long. Lower it on a small device; the startup line prints what it took.
 
 `max_tokens` is optional, and leaving it out is not "unlimited" — it is
 `max_model_len − prompt_tokens`, computed per request.
+
+The built-in chat page leaves that value unset when `Max response` is empty, or
+sends it explicitly when you enter a number.
 
 That matters for any client that resends a conversation, which is every chat
 client, because the engine has one static cache and no notion of a session. The
