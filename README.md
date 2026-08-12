@@ -60,8 +60,8 @@ vendor-neutral orchestration layer between them.**
 LM7's architectural bet is that hardware portability does not require owning
 another compiler or runtime. Projects such as ZML and Roofline.ai pursue the
 broader goal of hardware-portable ML with cross-hardware compiler/runtime
-stacks. LM7 makes a narrower bet: keep PyTorch and orchestrate the mature
-compiler stacks that already exist.
+stacks. LM7 makes a different bet: keep PyTorch, own no compiler, and
+orchestrate the mature compiler stacks that already exist.
 
 If one `torch.compile(model)` call already covers your machine and deployment
 needs, you probably do not need LM7. If your PyTorch application needs to
