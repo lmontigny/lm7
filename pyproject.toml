@@ -116,6 +116,7 @@ markers = [
     "serve: requires the FastAPI/Uvicorn HTTP stack from the serve extra",
     "serve_load: requires the serve and hf extras, and downloads a tiny model",
     "trtllm: requires trtllm-serve on PATH and an Ampere-or-newer NVIDIA GPU",
+    "export_decode: requires the hf extra, and downloads a tiny model to export a decode step",
 ]
 
 [tool.ruff]

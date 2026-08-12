@@ -166,7 +166,10 @@ Four things constrain it:
   the generated guard". A fixed export keeps the faster default.
 - **Only the sequence dimension is dynamic.** Batch stays at the captured size,
   and the graph is still prefill-only (`use_cache=False`), so this is not a
-  KV-cache decode loop.
+  KV-cache decode loop. `lm7 model export --decode` captures one of those
+  instead — a fixed one-token graph holding its cache as buffers, on the `export`
+  and `aot_inductor` backends. The two captures are alternatives rather than a
+  progression; see [exported decode](exported-decode.md).
 
 
 ## Bundles

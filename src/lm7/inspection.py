@@ -45,6 +45,11 @@ class ArtifactInspection:
     delegated_calls: int | None = None
     total_calls: int | None = None
     delegation_ratio: float | None = None
+    # Present only for a KV-cache decode artifact. Worth surfacing here and not
+    # only in the manifest, because it is the one property that changes how the
+    # artifact must be *called*: it carries state, so the order of calls matters
+    # and a second run needs the cache re-anchored.
+    decode: Mapping[str, Any] | None = None
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -72,6 +77,7 @@ class ArtifactInspection:
             "delegated_calls": self.delegated_calls,
             "total_calls": self.total_calls,
             "delegation_ratio": self.delegation_ratio,
+            "decode": dict(self.decode) if self.decode else None,
             "warnings": list(self.warnings),
             "errors": list(self.errors),
             "valid": self.valid,
@@ -120,6 +126,7 @@ def inspect_artifact(path: str | Path) -> ArtifactInspection:
         delegated_calls=delegated_calls,
         total_calls=total_calls,
         delegation_ratio=ratio,
+        decode=dict(manifest.decode) if manifest.decode else None,
         warnings=tuple(warnings),
         errors=errors,
     )

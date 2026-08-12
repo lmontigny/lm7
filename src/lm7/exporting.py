@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import MISSING, asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -99,6 +99,14 @@ EXPORT_BACKENDS = frozenset(
     }
 )
 
+# Export backends measured to carry a KV-cache decode graph's buffer writes
+# through to a reloaded artifact. Both were checked the only way this can be
+# checked -- export, save, reload in a *fresh process*, decode, and compare every
+# token against eager -- because a backend that functionalizes the writes away
+# does not raise. It returns the right first token and then drifts. Every other
+# export backend is unmeasured rather than known-bad; see docs/exported-decode.md.
+DECODE_BACKENDS = frozenset({"export", "aot_inductor"})
+
 
 @dataclass(frozen=True)
 class DynamicDimension:
@@ -157,6 +165,12 @@ class ArtifactManifest:
     debug_requested: bool = False
     debug_artifacts: tuple[Mapping[str, str], ...] = ()
     shape_profile: Mapping[str, Any] | None = None
+    # Set only for a KV-cache decode artifact, whose graph writes into buffers it
+    # carries. That makes it the one artifact kind LM7 writes where calling twice
+    # with the same inputs is *supposed* to give different answers, so the fact
+    # has to travel with it rather than be inferred from the input signature.
+    # Holds the cache geometry: `batch_size`, `max_cache_len`, `cache_bytes`.
+    decode: Mapping[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ArtifactManifest:
@@ -180,11 +194,30 @@ class ExportArtifact:
     manifest: ArtifactManifest
     exported_program: torch.export.ExportedProgram
     compiled_callable: Callable[..., Any] | None = None
+    # Set on first use by `module()`, never by a caller. A frozen dataclass with
+    # one mutable slot is worth the awkwardness here -- see below.
+    _unlifted: Callable[..., Any] | None = field(default=None, repr=False, compare=False)
 
     def module(self) -> Callable[..., Any]:
+        """The callable this artifact executes, built once.
+
+        ``ExportedProgram.module()`` is not an accessor: every call re-runs the
+        unlifting pass and hands back a *new* stateful graph module. For a pure
+        forward pass that is invisible waste, which is why it went unnoticed. For
+        a decode artifact it is per-token waste on the one loop whose entire cost
+        model is per-token, and it emits a `_create_stateful_graph_module` warning
+        each time to say so.
+
+        Unlifting shares the program's tensors rather than copying them, so the
+        cache buffers a decode artifact writes into are the same ones either way
+        and the memoization is not what makes it correct. It is what makes it
+        affordable.
+        """
         if self.compiled_callable is not None:
             return self.compiled_callable
-        return self.exported_program.module()
+        if self._unlifted is None:
+            object.__setattr__(self, "_unlifted", self.exported_program.module())
+        return cast(Callable[..., Any], self._unlifted)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         _validate_shape_profile(self.manifest.shape_profile, args, kwargs)
@@ -207,9 +240,26 @@ def export(
     dynamic_shapes: Any = None,
     shape_profile: ShapeProfile | None = None,
     strict: bool = False,
+    decode: Mapping[str, Any] | None = None,
 ) -> ExportArtifact:
-    """Capture and persist a versioned LM7 source artifact."""
+    """Capture and persist a versioned LM7 source artifact.
+
+    ``decode`` marks the result as a KV-cache decode artifact and records the
+    cache geometry in its manifest. It describes what is being captured rather
+    than changing how -- the caller has already wrapped a model whose graph
+    writes into its own buffers -- but it is gated here, because a payload that
+    silently drops those writes would still export, still load, and still return
+    a plausible first token. See ``docs/exported-decode.md``.
+    """
     kwargs = dict(kwargs or {})
+    if decode is not None and backend not in DECODE_BACKENDS:
+        choices = ", ".join(repr(name) for name in sorted(DECODE_BACKENDS))
+        raise BackendUnavailableError(
+            f"A decode artifact carries a graph that mutates the KV cache buffers it owns, "
+            f"and only {choices} are known to preserve those writes through lowering. "
+            f"Backend {backend!r} has never been checked against a stateful graph, and the "
+            "failure mode is a correct first token followed by silent divergence."
+        )
     if dynamic_shapes is not None and shape_profile is not None:
         raise ValueError("dynamic_shapes and shape_profile cannot be supplied together.")
     if backend not in EXPORT_BACKENDS:
@@ -713,6 +763,7 @@ def export(
                     else {}
                 ),
             },
+            decode=dict(decode) if decode is not None else None,
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
             shape_profile=profile_metadata,
