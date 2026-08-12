@@ -58,8 +58,7 @@ multi-gpu?
 multi-node
 inference benchmarks -> show perf vs w/o lm7
 intel Arc gpu
-verify decode path supported (not only prefill)
-
+multimodal
 
 ### Done ###
 test on saturnCloud, AWS, lightningAI
@@ -75,6 +74,8 @@ lm7.serve()  <-- see chatGPT chat details
     ├── SGLang
     └── TensorRT-LLM
 vllm serve Qwen/Qwen2.5-1.5B-Instruct
+verify decode path supported (not only prefill)
+
 
 
 
