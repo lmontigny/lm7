@@ -69,6 +69,11 @@ targets with continuous-integration coverage.
   other export backend is refused rather than guessed at: a backend that drops the
   cache writes during lowering returns a correct first token and then diverges
   without raising.
+- **`lm7 artifact generate` is greedy and single-sequence.** It drives a decode
+  artifact from the manifest — tokenizer, cache length, tokens per call — and
+  offers no sampling, no streaming and no server. Anything else is a caller's
+  loop over the logits. An artifact exported before manifests recorded a
+  `source` needs `--tokenizer` passed by hand.
 - **A decode artifact is stateful, and nothing else LM7 writes is.** Two
   concurrent callers share one cache. `cache_position=0` re-anchors the write
   pointer but does not zero the slots behind it, and whether that leaks has not

@@ -30,6 +30,15 @@ logits = artifact(input_ids=token, cache_position=torch.tensor([prompt.shape[-1]
 than internal state, which is the whole reason this works — see
 [below](#why-the-cache-can-be-a-buffer-but-not-an-input).
 
+Or skip the loop entirely:
+
+```bash
+lm7 artifact generate build/decode.lm7 --prompt "The capital of France is" --max-new-tokens 20
+```
+
+which reads the tokenizer, the cache length and the tokens-per-call off the
+manifest and prints the text. See [driving one](#driving-one).
+
 > [!NOTE]
 > This is the AOT counterpart to [`lm7.compile_generation`](kv-cache-decode.md),
 > not a replacement. That path is faster, takes a whole prompt in one call, and
@@ -75,6 +84,45 @@ cache dies in a device-side assert. See [that page](kv-cache-decode.md#a-backend
 Here, calling the same graph twice at the same `cache_position` writes the same
 slot twice and stays correct. `tests/test_export_decode_integration.py::test_the_cache_actually_accumulates`
 pins both halves: idempotent at one slot, different one slot on.
+
+## Driving one
+
+The artifact returns logits, so something has to own the loop. `lm7 artifact
+generate` is that something:
+
+```console
+$ lm7 artifact generate build/decode.lm7 --prompt "The capital of France is" --max-new-tokens 20
+Artifact: build/decode.lm7
+Backend: export  Shape: dynamic
+Tokenizer: HuggingFaceTB/SmolLM2-135M-Instruct
+Prompt: 'The capital of France is' (5 tokens)
+Generated: 20 tokens, stopped on budget
+Prefill: 698.3 ms   Decode: 473.0 ms (23.65 ms/token)
+
+ Paris. Paris is the largest city in France and the capital of the French department of the Espace
+```
+
+Three things it reads off the manifest rather than asking for, because all three
+are properties of the artifact and getting any of them wrong is quiet:
+
+- **which tokenizer.** The graph emits token ids, and ids are only words under
+  the tokenizer the model was trained with. `manifest.source.tokenizer_id`
+  records it, and `lm7 artifact inspect` prints it. Pair an artifact with the
+  wrong tokenizer and you get fluent text made of the wrong words — no
+  exception. `--tokenizer` overrides it for artifacts exported before manifests
+  carried a source.
+- **how many tokens per call**, so a `dynamic` artifact gets its prompt in one
+  call and a `single-token` one gets it chunked.
+- **how long the cache is.** `prompt + max_new_tokens` above it is refused before
+  any work, and a budget that could not fit an empty prompt is refused before the
+  tokenizer is even fetched.
+
+Writing the loop by hand is still perfectly reasonable — it is about twenty lines
+against `lm7.load_artifact`, and `examples/exported_decode.py` is one. What the
+command adds is that none of the three facts above has to be remembered.
+
+Sampling is not offered: generation is greedy, and anything else is a caller's
+loop over the logits.
 
 ## Prefill in one call
 

@@ -50,6 +50,10 @@ class ArtifactInspection:
     # artifact must be *called*: it carries state, so the order of calls matters
     # and a second run needs the cache re-anchored.
     decode: Mapping[str, Any] | None = None
+    # What the artifact was built from, when the export recorded it. A payload
+    # cannot name its own checkpoint, and for a causal LM the tokenizer half of
+    # this is what makes its token ids mean words.
+    source: Mapping[str, Any] | None = None
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -78,6 +82,7 @@ class ArtifactInspection:
             "total_calls": self.total_calls,
             "delegation_ratio": self.delegation_ratio,
             "decode": dict(self.decode) if self.decode else None,
+            "source": dict(self.source) if self.source else None,
             "warnings": list(self.warnings),
             "errors": list(self.errors),
             "valid": self.valid,
@@ -127,6 +132,7 @@ def inspect_artifact(path: str | Path) -> ArtifactInspection:
         total_calls=total_calls,
         delegation_ratio=ratio,
         decode=dict(manifest.decode) if manifest.decode else None,
+        source=dict(manifest.source) if manifest.source else None,
         warnings=tuple(warnings),
         errors=errors,
     )

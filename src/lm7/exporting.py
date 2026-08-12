@@ -171,6 +171,12 @@ class ArtifactManifest:
     # has to travel with it rather than be inferred from the input signature.
     # Holds the cache geometry: `batch_size`, `max_cache_len`, `cache_bytes`.
     decode: Mapping[str, Any] | None = None
+    # What the artifact was built from, when LM7 knows: `model_uri`, `model_id`,
+    # `tokenizer_id`, `dtype`. Recorded because the payload cannot say it -- a
+    # lowered graph has weights and no name -- and because the failure it prevents
+    # is silent. Feed a causal LM's logits to the wrong tokenizer and you get
+    # fluent text made of the wrong words, not an error.
+    source: Mapping[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ArtifactManifest:
@@ -241,6 +247,7 @@ def export(
     shape_profile: ShapeProfile | None = None,
     strict: bool = False,
     decode: Mapping[str, Any] | None = None,
+    source: Mapping[str, Any] | None = None,
 ) -> ExportArtifact:
     """Capture and persist a versioned LM7 source artifact.
 
@@ -764,6 +771,7 @@ def export(
                 ),
             },
             decode=dict(decode) if decode is not None else None,
+            source=dict(source) if source is not None else None,
             debug_requested=debug,
             debug_artifacts=debug_artifacts,
             shape_profile=profile_metadata,

@@ -651,6 +651,28 @@ class _DecodeStep(torch.nn.Module):
         return self.model(input_ids=input_ids, cache_position=cache_position)
 
 
+def _source_metadata(model_uri: str, model_id: str, torch_dtype: torch.dtype) -> dict[str, Any]:
+    """What this artifact was built from, for whoever loads it later.
+
+    A lowered graph has weights and no name, so an artifact cannot say which
+    checkpoint it is unless the export records it. That matters most for a causal
+    LM: its outputs are token ids, and ids only mean words under the tokenizer
+    they were trained with. Pair an artifact with the wrong one and the result is
+    fluent text made of the wrong words -- no exception, no warning.
+
+    ``tokenizer_id`` is stored separately from ``model_id`` even though they are
+    the same string for every Hugging Face model LM7 exports today, because they
+    are different questions and a caller reading the manifest should not have to
+    know they happen to coincide.
+    """
+    return {
+        "model_uri": model_uri,
+        "model_id": model_id,
+        "tokenizer_id": model_id,
+        "dtype": str(torch_dtype).removeprefix("torch."),
+    }
+
+
 def _decode_module(model: torch.nn.Module, *, batch_size: int, max_cache_len: int) -> _DecodeStep:
     """Wrap a causal LM into an exportable decode step, or say why it cannot be.
 
@@ -941,6 +963,7 @@ def export_hf_model(
             backend=backend,
             output=output,
             decode=decode_metadata,
+            source=_source_metadata(model_uri, model_id, torch_dtype),
             dynamic_shapes=dynamic_shapes,
             # Strict, where the prefill path is not, and not a preference. Under
             # non-strict export the cache tensors arrive as *lifted constants*
@@ -1008,6 +1031,7 @@ def export_hf_model(
         backend=backend,
         output=output,
         shape_profile=_sequence_shape_profile(inputs, bounds) if bounds else None,
+        source=_source_metadata(model_uri, model_id, torch_dtype),
         options=({"quantization": quantization} if backend in QUANTIZING_EXPORT_BACKENDS else None),
     )
     export_ms = (time.perf_counter() - started) * 1000
