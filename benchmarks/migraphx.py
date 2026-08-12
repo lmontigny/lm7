@@ -43,6 +43,12 @@ HF_MODELS = {
     "lfm25": "LiquidAI/LFM2.5-230M",
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
     "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
+    # The dense validation ladder, reachable by name and not yet measured here.
+    # This whole file is unmeasured anyway -- no AMD ROCm GPU has ever run it.
+    # See docs/limitations.md#model-coverage.
+    "lfm25-350m": "LiquidAI/LFM2.5-350M",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
 }
 
 

@@ -303,6 +303,39 @@ had stated.
 > captures as one graph. The script now moves the model to the target device and
 > makes one eager call before tracing.
 
+## Model coverage
+
+LM7 allowlists no models — `lm7 model run` will attempt any causal LM
+Transformers registers. What the `HF_MODELS` dicts in `benchmarks/*.py` record is
+narrower: which checkpoints this project has actually pointed a harness at, so
+that a new measurement is comparable to the ones already in `docs/`.
+
+**Four entries are named but unmeasured.** They were added to the dense ladder so
+they can be reached by name, and nothing in this repo has run them:
+
+| model | parameters | why it is in the set | status |
+| --- | --- | --- | --- |
+| `LiquidAI/LFM2.5-350M` | 354M | a second size of the LFM2.5 architecture already present at 230M, so scale varies with architecture held fixed | **not measured** |
+| `Qwen/Qwen3-1.7B` | 2.03B | Qwen3 rather than the Qwen3.5-0.8B elsewhere in these dicts | **not measured** |
+| `unsloth/Llama-3.2-1B-Instruct` | 1.24B | the existing quantization reference model | measured — see [quantization](quantization.md) |
+| `mistralai/Mistral-7B-Instruct-v0.3` | 7.25B | the first *dense* 7B; Mixtral-8x7B is sparse, and the two are not interchangeable as "a 7B" | **not measured** |
+
+Two things follow from that table that are easy to get wrong:
+
+- **Qwen3-1.7B is 2.03B parameters**, not 1.7B — the name counts the
+  non-embedding parameters. Anything sizing a card or a host off the name will be
+  about 20% short.
+- **Mistral-7B does not fit either CPU host.** At 7.25B it needs ~14.5 GB at BF16
+  and ~29 GB at FP32, and this repo pins the CPU compute dtype to FP32, so
+  neither the AMD EPYC box nor the 30 GB GCP `c4-standard-8` can hold it. It also
+  exceeds the 12 GiB `sm89` dev GPU at BF16. Measuring it means a rented card —
+  see [tested hardware](tested-hardware.md).
+
+None of the four is gated on Hugging Face, including the `mistralai/` repo, so
+none needs a token or an `unsloth/` mirror. That is worth stating because the
+Llama entries in the same dicts *do* use `unsloth/` mirrors for exactly that
+reason, and the pattern does not generalise.
+
 ## Per-backend scope
 
 | Backend | Scope and caveats |
