@@ -356,6 +356,15 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   400 naming the field rather than served as something narrower.
 - **The KV cache is allocated at startup and never grows.** `prompt + max_tokens`
   above `--max-model-len` is a 400, not a longer wait.
+- **`--backend` compiles the decode loop with Inductor or not at all.**
+  `auto`, `eager` and `inductor` are LM7's own server; `vllm` and `trtllm` hand
+  the port to someone else's. There is no third compiler here, and `auto` is
+  checked against what it *selects* rather than against the string, so a target
+  whose highest-priority backend is something else — `openxla` on `tpu`, the
+  Tenstorrent backend, `openvino` on `intel:npu` — is refused before the
+  checkpoint downloads. Only the Inductor backend implements the `warmup: False`
+  option that keeps a graph writing into a KV cache from being compiled by
+  execution; see [prefill and KV-cache decode](kv-cache-decode.md#limits).
 - **CI now loads a real model, but a 15 MB random-weight one.**
   `tests/test_serve_load_integration.py` runs `LM7ServeEngine.load` end to end on
   every commit, which nothing did before — the rest of the serve suite uses a

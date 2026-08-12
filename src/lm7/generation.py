@@ -697,17 +697,7 @@ def compile_generation(
             "decoded token, or there is no decode step to compile."
         )
     resolved = resolve_target(target if target is not None else "auto")
-    if backend == "auto":
-        planned = _planned_backend(resolved)
-        if planned not in _PLANNABLE_BACKENDS:
-            raise BackendUnavailableError(
-                f"backend='auto' selects {planned!r} for target {resolved}, which this path "
-                "does not support. A decode graph mutates a KV cache in place, and a backend "
-                "that compiles by executing the artifact it just built spends cache slots the "
-                "caller never asked for; only the Inductor backend implements the "
-                "`warmup: False` option that declines that call. Pass backend='eager' to run "
-                f"{resolved} uncompiled."
-            )
+    _check_planned_backend(backend, resolved)
     return GenerationRunner(
         model.eval(),
         resolved,
@@ -716,6 +706,30 @@ def compile_generation(
         compile_prefill=compile_prefill,
         max_batch_size=max_batch_size,
         max_sequence_length=max_sequence_length,
+    )
+
+
+def _check_planned_backend(backend: str, target: TargetSpec) -> None:
+    """Refuse a ``backend="auto"`` that resolves outside ``_PLANNABLE_BACKENDS``.
+
+    Its own function rather than an inline check in ``compile_generation``,
+    because a caller that pays for something expensive before compiling wants to
+    ask this first: ``lm7 model serve`` downloads a checkpoint, and the answer
+    here depends on the target alone, so asking late costs gigabytes and tells
+    nobody anything new. Explicit backends are not second-guessed -- the planner
+    already refuses those itself.
+    """
+    if backend != "auto":
+        return
+    planned = _planned_backend(target)
+    if planned in _PLANNABLE_BACKENDS:
+        return
+    raise BackendUnavailableError(
+        f"backend='auto' selects {planned!r} for target {target}, which this path does not "
+        "support. A decode graph mutates a KV cache in place, and a backend that compiles by "
+        "executing the artifact it just built spends cache slots the caller never asked for; "
+        "only the Inductor backend implements the `warmup: False` option that declines that "
+        f"call. Pass backend='eager' to run {target} uncompiled."
     )
 
 
