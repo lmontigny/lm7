@@ -6,7 +6,7 @@
 
 **Keep your PyTorch model. Change the hardware target, not your application.**
 
-LM7 is a PyTorch-first compiler orchestration layer for local inference. It
+LM7 is a vendor-neutral compiler orchestration layer for PyTorch inference. It
 keeps the normal `nn.Module` interface while detecting hardware, selecting an
 available compiler, moving inputs, caching compiled variants, and handling
 controlled fallback.
@@ -57,6 +57,12 @@ lm7.compile(model, target="intel:npu")
 **PyTorch and hardware vendors provide the compilers. LM7 provides the
 vendor-neutral orchestration layer between them.**
 
+LM7's architectural bet is that hardware portability does not require owning
+another compiler or runtime. Projects such as ZML and Roofline.ai pursue the
+broader goal of hardware-portable ML with cross-hardware compiler/runtime
+stacks. LM7 makes a narrower bet: keep PyTorch and orchestrate the mature
+compiler stacks that already exist.
+
 If one `torch.compile(model)` call already covers your machine and deployment
 needs, you probably do not need LM7. If your PyTorch application needs to
 **survive a change of hardware**, LM7 is intended to make that change boring.
@@ -66,20 +72,19 @@ code and behavior it centralizes.
 
 ## When should I use LM7?
 
-Use LM7 when your PyTorch application needs to run on hardware you do not want
-to hard-code: a developer laptop today, NVIDIA tomorrow, a TPU or another
-accelerator later.
+Use LM7 when the same PyTorch code needs to run on more than one hardware setup
+without growing vendor-specific branches:
 
-LM7 is useful when you want to:
+- software distributed to users with different accelerators;
+- development on one platform and deployment on another;
+- servers, workstations, or laptops with more than one kind of accelerator;
+- evaluating multiple compiler/runtime stacks for the same PyTorch model;
+- accelerator vendors exposing their stack to existing PyTorch applications;
+- runtime detection of hardware and compiler availability;
+- artifact build, inspection, and loading through one interface.
 
-- ship the same PyTorch application to machines with different hardware;
-- compare compiler backends without rewriting application code;
-- detect hardware and compiler availability at runtime;
-- build, inspect, and load artifacts through one interface.
-
-If you have one fixed target and already know the vendor stack you want, use
-that stack directly. A fixed NVIDIA deployment running vLLM, for example, does
-not need LM7.
+If you only ever run one model on one known target, LM7 is probably extra
+machinery.
 
 ## How it works
 
@@ -173,8 +178,8 @@ toolchains.
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
 uv venv --python 3.12
-uv pip install -e .
 uv pip install torch --torch-backend=auto
+uv pip install -e .
 ```
 
 You still install the driver and compiler/runtime required by your hardware.
@@ -227,36 +232,28 @@ the resolved target. Export-only integrations are never selected by
 
 ## Common workflows
 
-Run or generate with a Hugging Face model:
+**Hugging Face inference**
 
 ```bash
 uv pip install -e ".[hf]"
 lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --prompt "The capital of France is" --target auto
-lm7 model generate hf://HuggingFaceTB/SmolLM2-135M-Instruct \
-  --prompt "The capital of France is" --max-new-tokens 32 --target nvidia
 ```
 
 See [model compatibility](docs/model-compatibility.md) and
 [compiled generation](docs/huggingface-generation.md).
 
-### Serve a model with `lm7 model serve`
+**Serving**
 
 ```bash
 uv pip install -e ".[serve,hf]"
 lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto
 ```
 
-Open <http://127.0.0.1:8000> for the built-in chat page, or connect an
-OpenAI-compatible client to `http://127.0.0.1:8000/v1`. The server exposes
-chat completions, text completions, model discovery, health, metrics, and an
-OpenAPI schema.
+See [serving](docs/serving.md) for the OpenAI-compatible local server and the
+production NVIDIA handover to vLLM.
 
-This is a single-user validation server, not a production serving engine. For
-production NVIDIA serving, `--backend vllm` hands execution to vLLM. See
-[serving](docs/serving.md).
-
-Export and reload a versioned artifact:
+**Export**
 
 ```python
 lm7.export(model, args=(example_input,), target="cpu", output="model.lm7")
@@ -269,10 +266,7 @@ IREE, ExecuTorch, QNN, Core ML, or StableHLO payloads. See
 [JIT vs. AOT](docs/jit-vs-aot.md) and
 [artifact inspection](docs/artifact-inspection.md).
 
-### See what the compiler generated
-
-When two backends behave differently, save their compiler output to check what
-was fused or lowered and which code will run on the hardware:
+**Inspect compiler output**
 
 ```python
 artifact = lm7.export(
@@ -288,25 +282,11 @@ for path in artifact.debug_files():
     print(path)
 ```
 
-AOTInductor debug exports can include the exported and FX graphs, pre/post-fusion
-IR, generated C++ or CUDA, and PTX, assembly, or binaries when emitted. Other
-backends retain their final payload, such as OpenVINO IR, StableHLO, ONNX, IREE
-VMFB, or a TensorRT engine.
-
-```bash
-# Capture the same Inductor trace from a JIT run.
-TORCHINDUCTOR_FORCE_DISABLE_CACHES=1 python examples/cuda_mlp.py \
-  --target nvidia --debug-dir artifacts/cuda-debug
-```
-
-LM7 saves only the levels the selected toolchain exposes. See
+Use this when two backends behave differently and you need to see the exported
+graph, generated code, or vendor payload. See
 [compiler IR and generated code](docs/development.md#compiler-ir-and-generated-code).
 
-### Quantize with TorchAO
-
-LM7 uses [TorchAO](https://github.com/pytorch/ao) for runtime quantization of
-validated Hugging Face models. Available modes include INT8, FP8, and NVFP4
-weight quantization, plus activation-quantized variants on supported NVIDIA GPUs.
+**Quantization**
 
 ```bash
 uv pip install -e ".[hf,torchao]"
@@ -314,22 +294,11 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target cpu --quantize int8
 ```
 
-Quantization is admitted per model, mode, target, and dtype rather than promised
-universally. OpenVINO and ExecuTorch exports use their own quantization paths
-instead of TorchAO. See [quantization](docs/quantization.md) for supported modes,
-measurements, and accuracy checks.
+See [quantization](docs/quantization.md) for supported modes, measurements, and
+accuracy checks.
 
 Examples and reproducible benchmark harnesses live in
 [`examples/`](examples) and [`benchmarks/`](benchmarks).
-
-## Design thesis
-
-LM7's architectural bet is that hardware portability does not require owning
-another compiler or runtime. Existing stacks such as TorchInductor, TensorRT,
-OpenVINO, OpenXLA, and ExecuTorch already contain substantial hardware-specific
-work. LM7 preserves the PyTorch programming model and provides a vendor-neutral
-orchestration layer above those stacks, selecting the appropriate toolchain
-instead of replacing it.
 
 ## Documentation
 
