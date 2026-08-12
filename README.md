@@ -109,7 +109,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 ## Validated on real hardware
 
 > [!NOTE]
-> **Intel:** Coffee Lake CPU
+> **Intel:** Coffee Lake CPU · Xeon Platinum 8581C Emerald Rapids CPU
 >
 > **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
 >

@@ -683,14 +683,61 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct --target cpu \
 SmolLM2-135M, 5-token prompt, each mechanism against its own FP32 baseline on the
 same host:
 
-| mechanism | i7-8086K (AVX2) | Cascade Lake Xeon (VNNI) | Arm Neoverse N3 (`i8mm`) |
-| --- | --- | --- | --- |
-| TorchAO weight-only (`inductor`) | 1.5x **slower** | 1.4x **slower** | 1.35x **slower** |
-| NNCF (`openvino`) | 1.83x faster | **2.53x faster** | 1.08x **slower** |
+| mechanism | i7-8086K (AVX2) | Cascade Lake Xeon (VNNI) | Arm Neoverse N3 (`i8mm`) | Xeon 8581C (AMX-INT8) |
+| --- | --- | --- | --- | --- |
+| TorchAO weight-only (`inductor`) | 1.5x **slower** | 1.4x **slower** | 1.35x **slower** | **1.12x faster** |
+| NNCF (`openvino`) | 1.83x faster | **2.53x faster** | 1.08x **slower** | 1.86x faster |
 
 So on Intel CPU the OpenVINO route is the one to reach for, and the gap widens with
 VNNI. Absolute INT8 times were 16.0 ms on the i7 and 16.2 ms on the Xeon — the
 2.6 GHz part matches the 4.0 GHz one, which is VNNI closing a 1.5x clock deficit.
+
+### The TorchAO row inverts on Emerald Rapids, and the reason is not established
+
+The last column is a GCP `c4-standard-8`, Intel Xeon Platinum 8581C (Emerald
+Rapids), 8 vCPU / 4 physical cores, `torch 2.13.0+cpu`, `torchao 0.18.0`,
+`openvino 2026.3.0` — the first part measured here that advertises `amx_int8`.
+Medians over repeated `lm7 model run` invocations on the 5-token prompt, each
+mechanism against the FP32 baseline of its own backend:
+
+| path | FP32 | INT8 | |
+| --- | ---: | ---: | --- |
+| TorchAO weight-only (`inductor`) | 17.4 ms | 15.5 ms | 1.12x faster |
+| NNCF (`openvino`) | 15.0 ms | 8.08 ms | **1.86x faster** |
+
+The NNCF row is unremarkable — it lands between the AVX2 and Cascade Lake
+results, and the story that VNNI-class hardware makes this path pay holds. **The
+TorchAO row is the finding: it is the first host in this repo where weight-only
+INT8 is not a regression.** Three hosts on three ISAs had it 1.35–1.5x slower.
+
+What that is *not* is a demonstration that AMX-INT8 rescued it. The explanation
+this page gives for the three losing rows — weight-only dequantizes to FP32 and
+issues an FP32 GEMM, so no INT8 dot-product instruction is reachable — predicts
+that `amx_int8` should make no difference at all, and a 1.12x win is not what
+"the tile units are now doing the matmul" would look like either. Two candidates
+are unseparated:
+
+- **The library versions are not held fixed.** This ran `torchao 0.18.0`; the
+  versions behind the other three columns were not recorded. This repo's standing
+  rule is that behaviour is a property of (model, library version), and a
+  weight-only path that stopped being slower is exactly the kind of thing a
+  TorchAO release changes.
+- **The kernel check that settled the `i8mm` question cannot be run here.**
+  [That result](#i8mm-does-not-rescue-it-either-and-here-is-the-kernel-proving-why)
+  rests on reading oneDNN's executed primitives. On this host oneDNN emits
+  *nothing* for SmolLM2 at FP32 or INT8 — the model's linears are served by
+  ATen/MKL and never enter oneDNN, as
+  [the CPU page records](cpu.md#the-bf16-crossover-is-a-function-of-thread-count-not-just-row-count)
+  — so there is no log in which an INT8 GEMM could be found or ruled out.
+
+So the table's fourth column is a latency measurement and the row above it stays
+the recommendation: on this part NNCF is still 1.9x and TorchAO still 1.12x, so
+OpenVINO is still the route to reach for on Intel CPU. What should not be carried
+away is "AMX-INT8 fixes weight-only quantization".
+
+The footprints behave as they do everywhere else: TorchAO reports model storage
+538.1 → 220.3 MB, NNCF reports compiled weights 538.1 → 135.2 MB, and all four
+configurations returned the same greedy next token (`' Paris'`).
 
 **The OpenVINO advantage is Intel's, not INT8's.** On an Arm Neoverse N3 the
 NNCF route is 13.06 ms against a 12.13 ms FP32 baseline — a small regression

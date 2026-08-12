@@ -149,6 +149,84 @@ Two things to know before repeating this:
   [quantization](quantization.md)-shaped decision, with the validation that
   implies, rather than a free switch.
 
+### The BF16 crossover is a function of thread count, not just row count
+
+The section above is one Xeon. Repeating the same benchmark on a second part of
+the *same* microarchitecture — an Intel Xeon Platinum 8581C on a GCP
+`c4-standard-8`, 8 vCPU / 4 physical cores, `torch 2.13.0+cpu` — reproduces the
+mechanism, appears to disagree about its size by 2x, and then turns out to be
+measuring a variable the section above never held fixed.
+
+oneDNN names the ISA here `Intel AVX10.1 and Intel AMX with bfloat16 and 8-bit
+integer support`, `torch._C._cpu._init_amx()` returns true, and every BF16 matmul
+in every cell below reached `matmul:brg_matmul:avx10_1_512_amx` while every FP32
+matmul reached none. So the tile units ran, and the question is only what they
+were worth. Synthetic MLP, eager, FP32-to-BF16 ratio, median of 30 after warmup:
+
+| rows | 4 threads (one per physical core) | 8 threads (SMT) | 8559C at 8 threads |
+| --- | --- | --- | --- |
+| 1 | **0.45x — slower** | 0.75x — slower | 0.77x — slower |
+| 8 | 2.44x | 2.30x | 2.22x |
+| 64 | 4.86x | 4.87x | 4.87x |
+| 512 | **6.46x** | 3.10x | 3.16x |
+
+**At 8 threads the two parts agree at every row count.** The 2x disagreement in
+the first column is not silicon: the 8559C ran 8 threads, and this VM's default is
+4, because `torch` defaults to the physical core count and this part has four
+cores to the other's eight. Hold the thread count equal and 0.75/2.30/4.87/3.10
+lands on 0.77/2.22/4.87/3.16.
+
+So the earlier reading — that "Emerald Rapids" does not name a number — was
+wrong, and the correction is more useful than the claim was. **The BF16 ratio
+depends on the thread count about as strongly as it depends on the row count**,
+and in the opposite direction at the two ends. At 512 rows, going from 4 threads
+to 8 makes FP32 1.23x *faster* (17.07 → 13.9 ms) and BF16 1.70x *slower*
+(2.64 → 4.48 ms):
+
+| 512 rows | FP32 | BF16 (AMX) | ratio |
+| --- | ---: | ---: | --- |
+| 4 threads | 17.07 ms | 2.64 ms | 6.46x |
+| 8 threads | 13.9 ms | 4.48 ms | 3.10x |
+
+That asymmetry is what the hardware predicts. AMX tile registers are per physical
+core, so two SMT siblings on one core contend for the same tile units and BF16
+gains nothing from the second thread while paying for it; FP32 vector work has no
+such shared resource and picks up the usual SMT latency hiding. The practical
+consequence for the dtype policy this page keeps declining to write: it would need
+to know the thread count, not just the batch size, and "use BF16 above 16 rows"
+tuned at 4 threads is mistuned by 2x at 8 on the same chip.
+
+Two cells not to quote tightly. At 4 threads the 8-row FP32 median is bimodal
+across repeats — roughly 0.91 ms or 1.61 ms, with nothing in between — and one
+4-thread repeat of the 1-row BF16 cell came in at 0.338 ms against ~0.71 ms
+everywhere else. The 512-row column, where the finding is, was stable to about 3%
+across four repeats.
+
+SmolLM2-135M on the same host at the 4-thread default, median latency:
+
+| prompt | eager FP32 | eager BF16 | inductor FP32 | inductor BF16 |
+| --- | --- | --- | --- | --- |
+| 5 tokens | 21.621 ms | 18.529 ms | 17.502 ms | 13.935 ms |
+| 64 tokens | 53.853 ms | 36.453 ms | 45.554 ms | 26.830 ms |
+| 512 tokens | 377.450 ms | 98.548 ms | 321.961 ms | **87.403 ms** |
+
+The real model is tamer than the MLP at both ends — 1.17x at 5 tokens rather than
+a loss, 3.83x at 512 rather than 6.46x — which is the same ordering the 8559C
+showed. Logit movement reproduces too: 1.949 absolute in eager and 0.37–0.48
+under Inductor, against the "1.9 and roughly 0.4" recorded above. **The thread
+sweep above was run on the MLP only**, so how much of the causal LM's curve moves
+with thread count is not measured.
+
+One thing this host adds that the earlier one did not surface:
+
+- **oneDNN is not on the FP32 path for this model at all.** Every FP32 SmolLM2
+  cell reports no oneDNN ISA line and no executed primitives, while the FP32 MLP
+  on the same machine reports both. So SmolLM2's FP32 linears are served by
+  ATen/MKL and never enter oneDNN, and `ONEDNN_VERBOSE` is silent for that
+  configuration — which is a limit on what any oneDNN-based kernel check can be
+  asked about this model here, and it is why the INT8 question below is left
+  without kernel evidence rather than answered.
+
 ### The same question on Arm, where the logs cannot answer it
 
 Repeated on a GCP `n4a-standard-8` (Google Axion, Arm Neoverse N3, 8 vCPU,
@@ -333,6 +411,85 @@ Reach for it when you want an artifact that runs without PyTorch, or when you
 are deploying to Intel hardware specifically. See the
 [OpenVINO evaluation](openvino-evaluation.md) for the measurements behind that
 and for the backend's documented limits.
+
+### OpenVINO on GCP C4 / Emerald Rapids
+
+Measured on a GCP `c4-standard-8` VM with an Intel Xeon Platinum 8581C
+(Emerald Rapids), 8 vCPU / 4 physical cores, `torch 2.13.0+cpu`, and
+`openvino 2026.3.0`. The CPU reported AVX-512 BF16/VNNI and AMX BF16/INT8, and
+OpenVINO reported one available device: `CPU`.
+
+Validation first: `lm7 targets` detected `cpu:x86_64`, `lm7 explain --target
+cpu` selected Inductor while reporting OpenVINO as supported, and
+`tests/test_openvino_integration.py -k "not npu"` passed 11 tests. Those tests
+cover OpenVINO compile, IR export/reload, checksum validation, unavailable-device
+rejection, FP32 weight preservation, and INT8 export.
+
+Then bounded, non-sweep runs of
+[`benchmarks/openvino_eval.py`](../benchmarks/openvino_eval.py) measured the
+FP32 synthetic MLP with `--warmup 10 --repeats 10 --device CPU --require-all`.
+Median latency, synthetic MLP:
+
+| batch | eager | Inductor | OpenVINO Dynamo | OpenVINO IR |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 0.918 ms | 0.938 ms | 1.295 ms | **0.535 ms** |
+| 32 | 2.396 ms | 2.494 ms | not run | **1.064 ms** |
+
+The same harness also ran SmolLM2-135M-Instruct as a single causal-LM prefill
+forward (`use_cache=False`) with the prompt `"The capital of France is"`,
+`--batch-size 1 --warmup 2 --repeats 5 --device CPU --require-all`:
+
+| model | input tokens | eager | Inductor | OpenVINO IR |
+| --- | ---: | ---: | ---: | ---: |
+| SmolLM2-135M-Instruct | 5 | 20.419 ms | 16.316 ms | **13.903 ms** |
+
+The config preflight reported CPU/Inductor compatibility:
+
+```bash
+lm7 model compatibility hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+  --target cpu --backend auto
+```
+
+`lm7 model run` on the same prompt selected Inductor, returned next token
+`" Paris"`, and measured 17.936 ms after an 8.550 s first call.
+
+This is evidence that the OpenVINO IR path works and wins on these bounded Intel
+CPU workloads. It is not a broad performance claim: no model suite, dtype sweep,
+or long benchmark run was performed. The decode half is covered separately
+below.
+
+### Prefill and decode on the same host
+
+Everything above is a forward pass. Generation splits into a matmul-bound
+prefill and a stream of memory-bound single-token decode steps, and compiling is
+worth different amounts to each.
+[`benchmarks/decode.py`](../benchmarks/decode.py) on SmolLM2-135M, FP32, batch 1,
+32 decode steps after 4 warmup steps:
+
+| prompt | arm | prefill | decode | throughput |
+| --- | --- | ---: | ---: | ---: |
+| 128 | eager | 77.3 ms | 16.523 ms/tok | 60.5 tok/s |
+| 128 | Inductor | 69.9 ms | **12.528 ms/tok** | **79.8 tok/s** |
+| 512 | eager | 327.6 ms | 19.130 ms/tok | 52.3 tok/s |
+| 512 | Inductor | 275.2 ms | **14.927 ms/tok** | **67.0 tok/s** |
+
+Both arms produced the same tokens, and nothing recompiled during the steady
+loop. **Compiling is worth more to decode than to prefill** — 1.32x and 1.28x
+against 1.11x and 1.19x — which is the expected shape: a decode step is small
+enough that launch overhead dominates it, and that is what Inductor removes.
+
+Two things worth reading alongside it:
+
+- **This is the row count where AMX is idle.** Decode is one row per step, and
+  [the section above](#the-bf16-crossover-is-a-function-of-thread-count-not-just-row-count)
+  measures BF16 at one row as a 0.45x *loss* at this run's 4 threads — 0.75x at
+  8. So the workload with the best compile speedup here is also the one a naive
+  "the host reports `amx_bf16`" dtype policy would damage most, at either thread
+  count.
+- **The compile has to be amortized.** The cold decode phase cost 17.5 s at
+  128 tokens against 0.40 s for the same 32 steps warm, so roughly 17 s of
+  compilation buys about 4 ms per token — on the order of 4,000 decoded tokens
+  before it breaks even. Fine for a served process, not for a one-shot call.
 
 ## Is there an AMD equivalent?
 
