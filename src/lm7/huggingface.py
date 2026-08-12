@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any
 
 import torch
 
@@ -635,12 +635,18 @@ def _decode_module(model: torch.nn.Module, *, batch_size: int, max_cache_len: in
     a bare ``AssertionError`` when they disagree, which is a confusing thing to
     hand someone who asked LM7 to export a model, not to configure generation.
     """
+    # Imported by name rather than with a plain `import`, like every other
+    # optional dependency here: CI type-checks a `[dev]` install, where
+    # Transformers is absent, and a plain import would have to be excused with a
+    # mypy override instead of simply not being resolved.
     try:
-        from transformers.integrations.executorch import TorchExportableModuleWithStaticCache
-    except ImportError as exc:
+        integration = importlib.import_module("transformers.integrations.executorch")
+        exportable_static_cache = integration.TorchExportableModuleWithStaticCache
+    except (ImportError, AttributeError) as exc:
         raise UnsupportedModelError(
-            "Exporting a decode step needs Transformers' static-cache export wrapper. "
-            'Install or upgrade the Hugging Face extra with: pip install -U "lm7[hf]".'
+            "Exporting a decode step needs Transformers' static-cache export wrapper "
+            "(transformers.integrations.executorch). Install or upgrade the Hugging Face "
+            'extra with: pip install -U "lm7[hf]".'
         ) from exc
 
     generation_config = getattr(model, "generation_config", None)
@@ -651,13 +657,7 @@ def _decode_module(model: torch.nn.Module, *, batch_size: int, max_cache_len: in
     generation_config.use_cache = True
     generation_config.cache_implementation = "static"
     try:
-        # Typed as `PreTrainedModel` upstream. This function is reached from
-        # `export_hf_model`, which only ever has one, but the parameter is an
-        # `nn.Module` so that a caller holding an already-loaded model is not
-        # forced to import Transformers' base class to satisfy a type checker.
-        wrapped = TorchExportableModuleWithStaticCache(
-            cast(Any, model), batch_size=batch_size, max_cache_len=max_cache_len
-        )
+        wrapped = exportable_static_cache(model, batch_size=batch_size, max_cache_len=max_cache_len)
     except Exception as exc:
         raise UnsupportedModelError(
             f"Could not build an exportable static-cache decode step for this model: {exc}."
