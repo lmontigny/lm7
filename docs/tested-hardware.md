@@ -19,6 +19,7 @@ of its kind, unless its row says otherwise.
 | `tpu` | TPU v6e (Trillium), single chip | See [Google TPU](google-tpu.md). |
 | `qualcomm:sm8750` | Snapdragon 8 Elite, physical device (cloud-rented) | ExecuTorch export and QNN. See [Android device testing](android-device-testing.md). |
 
-AMD ROCm GPU, Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have not
-run on real hardware yet — those adapters are unit-tested against mocks. See
+AMD ROCm GPU, Intel GPU/XPU (`target="intel"`), Tenstorrent, the Intel NPU
+(`target="intel:npu"`), and AWS Trainium have not run on real hardware yet.
+Those adapters are unit-tested against mocks. See
 [hardware validation](limitations.md#hardware-validation) for the exact gaps.

@@ -13,6 +13,44 @@ There is no second backend to choose. `intel:npu` is the first LM7 target with
 no PyTorch device behind it, so `inductor` and `eager` both decline it and
 `openvino` is the only backend that plans.
 
+## XPU is not the NPU
+
+Intel's names overlap across hardware and software layers:
+
+- **XPU** is the PyTorch device family exposed as `torch.xpu`. In LM7,
+  `target="intel"` means an Intel GPU reached through that path: an integrated
+  Arc GPU in a Core Ultra laptop, a discrete Arc GPU, or a supported Intel
+  datacenter GPU.
+- **NPU** is a physical deep-learning accelerator block. In LM7,
+  `target="intel:npu"` means the Intel AI Boost NPU reached through OpenVINO's
+  `NPU` device.
+
+They can sit in the same processor package, but they are not the same execution
+device:
+
+```text
+Intel Core Ultra 7 258V
+|
++-- CPU
+|
++-- Intel Arc 140V GPU   -> PyTorch torch.xpu
+|                           LM7 target="intel"
+|
++-- Intel AI Boost NPU   -> OpenVINO NPU
+                            LM7 target="intel:npu"
+```
+
+That makes a modern Core Ultra laptop unusually useful for LM7 validation. One
+machine can exercise `target="cpu"`, `target="intel"`, and
+`target="intel:npu"` against genuinely different silicon.
+
+For new Intel test hardware, prefer a Lunar Lake/Core Ultra 200V laptop such as
+a Core Ultra 7 258V or 268V with 32 GB RAM. Those parts pair an Arc 140V
+integrated Xe2 GPU with Intel's NPU 4.0. A Meteor Lake/Core Ultra 100H laptop,
+for example a Core Ultra 7 155H or 165H, is a cheaper fallback and still has
+both an integrated Arc GPU and an Intel AI Boost NPU, but its NPU is much
+smaller.
+
 > [!WARNING]
 > **Untested on hardware.** The target, its detection, and the plugin wiring
 > are implemented and unit-tested, but no Intel NPU has run this code. The

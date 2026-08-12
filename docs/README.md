@@ -29,7 +29,7 @@ This index covers everything else.
 | NVIDIA validation suite (any card) | [nvidia-validation.md](nvidia-validation.md) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
-| Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
+| Intel GPU/XPU vs. Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
 | Google TPU | [google-tpu.md](google-tpu.md) |
 | Tenstorrent | [tenstorrent.md](tenstorrent.md) |
 | Qualcomm Snapdragon 8 Elite HTP | [qnn.md](qnn.md) |
