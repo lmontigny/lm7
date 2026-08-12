@@ -319,7 +319,7 @@ had stated.
   delegates), and `qnn`. None of this is CI — it is a one-time device check,
   not exercised on every commit. See
   [Android device testing](android-device-testing.md).
-- AMD ROCm, Intel XPU, OpenXLA TPU, and Tenstorrent are initial
+- AMD ROCm, Intel GPU/XPU, OpenXLA TPU, and Tenstorrent are initial
   single-process integrations **without physical-hardware CI**.
 - OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU
   v6e — which the rest of that list has not. It still has no CI, and one chip
@@ -337,7 +337,9 @@ had stated.
 - `intel:npu` resolves, plans, and compiles through the OpenVINO NPU plugin, but
   **no Intel NPU has ever executed it**. Its integration tests skip unless
   OpenVINO reports an NPU; everything else about it is unit-tested against a
-  fake runtime.
+  fake runtime. This is separate from Intel GPU/XPU support: `target="intel"`
+  means a PyTorch `torch.xpu` GPU path, while `target="intel:npu"` means the
+  dedicated Intel AI Boost NPU.
 - `aws:trainium` parses as a target and is never executed.
 
 ## Serving
