@@ -67,6 +67,11 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 button:disabled { opacity: .45; cursor: default; }
+input[type=number] {
+  font: inherit; font-size: 13px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 88px;
+}
+input[type=number]:focus { outline: none; border-color: var(--accent); }
 main { flex: 1; overflow-y: auto; padding: 18px 16px; }
 .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
 .msg { padding: 10px 13px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
@@ -100,12 +105,21 @@ footer { border-top: 1px solid var(--line); padding: 12px 16px; }
 .status.warn { color: var(--error); }
 .status.warn .dot { background: var(--error); animation: none; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.controls {
+  max-width: 760px; margin: 0 auto 8px; color: var(--muted); font-size: 12.5px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.controls label { display: inline-flex; align-items: center; gap: 6px; }
+.controls code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 form { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
 textarea {
   flex: 1; resize: none; font: inherit; color: var(--fg); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; max-height: 40vh;
 }
 textarea:focus { outline: none; border-color: var(--accent); }
+form button[type=button] { padding: 9px 12px; }
 form button[type=submit] { padding: 9px 16px; }
 </style>
 </head>
@@ -125,8 +139,13 @@ form button[type=submit] { padding: 9px 16px; }
 </div></main>
 <footer>
   <div class="status idle" id="status"><span class="dot"></span><span id="statustext"></span></div>
+  <div class="controls">
+    <label>Max response <input id="maxtokens" type="number" min="1" step="1" placeholder="auto"></label>
+    <span id="contextlimit">context limit unknown</span>
+  </div>
   <form id="form">
     <textarea id="input" rows="1" placeholder="Message the model…" autofocus></textarea>
+    <button type="button" id="stop" disabled>Stop</button>
     <button type="submit" id="send">Send</button>
   </form>
 </footer>
@@ -141,8 +160,11 @@ const API = "__LM7_API_BASE__";
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
+const maxTokens = document.getElementById("maxtokens");
 const send = document.getElementById("send");
+const stop = document.getElementById("stop");
 const meta = document.getElementById("meta");
+const contextLimit = document.getElementById("contextlimit");
 
 const status = document.getElementById("status");
 const statusText = document.getElementById("statustext");
@@ -154,6 +176,8 @@ let maxModelLen = 2048;
 let busy = false;
 let latest = null;
 let modelId = "";
+let currentController = null;
+let stoppedByUser = false;
 
 function setStatus(text, kind) {
   status.className = "status " + (kind || "idle");
@@ -188,12 +212,15 @@ async function refreshHeader() {
   if (!metrics || metrics.max_model_len === undefined) {
     latest = null;
     meta.innerHTML = `<code>${escapeHtml(modelId)}</code> &middot; ${escapeHtml(API || "local")}`;
+    contextLimit.textContent = "context limit unknown";
     if (!busy) setStatus("", "idle");
     return;
   }
   {
     latest = metrics;
     maxModelLen = metrics.max_model_len;
+    maxTokens.max = String(Math.max(1, maxModelLen - 1));
+    contextLimit.innerHTML = `context limit <code>${maxModelLen}</code> tokens`;
     const mib = (metrics.kv_cache_bytes / 1048576).toFixed(0);
     meta.innerHTML =
       `<code>${escapeHtml(metrics.model)}</code> &middot; ${escapeHtml(metrics.target)}` +
@@ -271,6 +298,8 @@ function scroll() {
 function setBusy(state) {
   busy = state;
   send.disabled = state;
+  stop.disabled = !state;
+  maxTokens.disabled = state;
   send.textContent = state ? "…" : "Send";
 }
 
@@ -296,6 +325,13 @@ document.getElementById("clear").addEventListener("click", () => {
   refreshHeader();
 });
 
+stop.addEventListener("click", () => {
+  if (!busy || !currentController) return;
+  stoppedByUser = true;
+  setStatus("stopping…", "busy");
+  currentController.abort();
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const content = input.value.trim();
@@ -313,20 +349,32 @@ form.addEventListener("submit", async (event) => {
 
   const before = latest;
   const target = bubble("assistant", "");
-  target.parentElement.classList.add("cursor");
+  const assistant = target.parentElement;
+  assistant.classList.add("cursor");
   let answer = "";
+  currentController = new AbortController();
+  stoppedByUser = false;
   try {
-    answer = await stream(target);
-    messages.push({ role: "assistant", content: answer });
-    await summarize(before);
+    answer = await stream(target, currentController.signal);
+    if (answer) {
+      messages.push({ role: "assistant", content: answer });
+    } else if (stoppedByUser) {
+      assistant.remove();
+    }
+    if (stoppedByUser) {
+      setStatus(answer ? "stopped" : "stopped before first token", "idle");
+    } else {
+      await summarize(before);
+    }
   } catch (err) {
-    target.parentElement.remove();
+    assistant.remove();
     bubble("error", String(err.message || err));
     // Dropped so a failed turn is not resent as context on the next one.
     messages.pop();
     setStatus("failed", "warn");
   } finally {
-    target.parentElement.classList.remove("cursor");
+    assistant.classList.remove("cursor");
+    currentController = null;
     setBusy(false);
     input.focus();
   }
@@ -358,69 +406,74 @@ async function summarize(before) {
 let firstTokenMs = null;
 let decodeSeconds = 0;
 
-async function stream(target) {
-  const response = await fetch(API + "/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      messages,
-      stream: true,
-      temperature: 0.7,
-      // Optional for LM7, which holds one model, but required by vLLM -- and
-      // this page is pointed at either. Taken from /v1/models so it is whatever
-      // that server actually calls its model.
-      model: modelId,
-      // No max_tokens on purpose: the server fills whatever the static cache has
-      // left after this prompt. The transcript is resent every turn and so grows
-      // without bound, which means any number the page picked here would be
-      // impossible once the conversation passed that share of the cache -- half
-      // the cache was a 400 on every turn from the moment the transcript crossed
-      // half the cache, which is a wall rather than a warning.
-    }),
-  });
-  if (!response.ok) {
-    // LM7's refusals say what to do about them, so show the server's own words.
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail ? detailText(body.detail) : `HTTP ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const started = performance.now();
-  let buffer = "";
+async function stream(target, signal) {
   let answer = "";
-  let firstAt = null;
-  firstTokenMs = null;
-  decodeSeconds = 0;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // SSE events are separated by a blank line; the last fragment may be a
-    // partial event, so it stays in the buffer until its terminator arrives.
-    const events = buffer.split("\\n\\n");
-    buffer = events.pop();
-    for (const event of events) {
-      const line = event.trim();
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") continue;
-      const delta = JSON.parse(payload).choices[0].delta.content;
-      if (delta) {
-        if (firstAt === null) {
-          // Wall clock from the page, so it includes HTTP over loopback. It is
-          // an indicator, not a benchmark -- see docs/serving.md.
-          firstAt = performance.now();
-          firstTokenMs = firstAt - started;
+  const requestedMax = Number.parseInt(maxTokens.value, 10);
+  const payload = {
+    messages,
+    stream: true,
+    temperature: 0.7,
+    // Optional for LM7, which holds one model, but required by vLLM -- and
+    // this page is pointed at either. Taken from /v1/models so it is whatever
+    // that server actually calls its model.
+    model: modelId,
+  };
+  if (Number.isFinite(requestedMax) && requestedMax > 0) {
+    payload.max_tokens = requestedMax;
+  }
+  try {
+    const response = await fetch(API + "/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (!response.ok) {
+      // LM7's refusals say what to do about them, so show the server's own words.
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail ? detailText(body.detail) : `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const started = performance.now();
+    let buffer = "";
+    let firstAt = null;
+    firstTokenMs = null;
+    decodeSeconds = 0;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE events are separated by a blank line; the last fragment may be a
+      // partial event, so it stays in the buffer until its terminator arrives.
+      const events = buffer.split("\\n\\n");
+      buffer = events.pop();
+      for (const event of events) {
+        const line = event.trim();
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        const delta = JSON.parse(payload).choices[0].delta.content;
+        if (delta) {
+          if (firstAt === null) {
+            // Wall clock from the page, so it includes HTTP over loopback. It is
+            // an indicator, not a benchmark -- see docs/serving.md.
+            firstAt = performance.now();
+            firstTokenMs = firstAt - started;
+          }
+          answer += delta;
+          decodeSeconds = (performance.now() - firstAt) / 1000;
+          target.textContent = answer;
+          const rate = decodeSeconds > 0 ? ` · ${(answer.length / decodeSeconds).toFixed(0)} char/s` : "";
+          setStatus(`generating${rate}`, "busy");
+          scroll();
         }
-        answer += delta;
-        decodeSeconds = (performance.now() - firstAt) / 1000;
-        target.textContent = answer;
-        const rate = decodeSeconds > 0 ? ` · ${(answer.length / decodeSeconds).toFixed(0)} char/s` : "";
-        setStatus(`generating${rate}`, "busy");
-        scroll();
       }
     }
+  } catch (err) {
+    if (err.name === "AbortError") return answer;
+    throw err;
   }
   return answer;
 }
