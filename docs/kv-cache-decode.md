@@ -445,12 +445,27 @@ equal `model.generate`'s for both an unpadded and a left-padded batch, under
   [the TensorRT measurement](huggingface-generation.md#why-tensorrt-is-not-offered-here)
   is the reason to demand evidence per backend — it compiled the decode loop
   successfully, ran 3.17x faster, and generated different text without raising.
+  `backend="auto"` is checked against what the planner *selects*, not only
+  against the string: a target whose highest-priority backend is something else —
+  `openxla` on `tpu`, the Tenstorrent backend, `openvino` on `intel:npu` — is
+  refused rather than quietly handed a graph that writes into a cache. The
+  `warmup: False` option that makes such a graph safe exists in the Inductor
+  backend and nowhere else, so every other backend would compile by executing and
+  spend cache slots the caller never asked for.
 - **JIT only.** Nothing here outlives the process; the exported artifact path is
   still prefill-only. See [limitations](limitations.md).
 - **Measured on `sm90` and `sm89`.** The tables above are an H100 80GB HBM3, and
   the path also runs on an RTX 4070 SUPER (Ada, `sm89`). It runs on CPU too —
   correct tokens, no recompiles, and the benchmark accepts `--target cpu` — but
-  no CPU timings are quoted here, because the only CPU it has been run on is a
-  2018 desktop part and its numbers would not transfer to the server CPUs anyone
-  would serve on. Nothing here has been run on AMD, Apple, or anything reached
-  through XLA.
+  no CPU timings are quoted here, because the only CPU `benchmarks/decode.py` has
+  been run on is a 2018 desktop part and its numbers would not transfer to the
+  server CPUs anyone would serve on. It has also run on Apple Silicon, through a
+  *different* harness: `benchmarks/generation_paths.py` puts this runner against
+  three ways of calling `model.generate` on SmolLM2-135M and measures 6.5–6.8
+  ms/token on `apple:metal` — 2.77–2.93x over eager, and faster than
+  Transformers' own forced-compile arm — against 17.6–20.2 ms/token on
+  `cpu:arm64`, where compiling **loses** at 0.75–0.86x. See [four ways to
+  generate the same tokens](huggingface-generation.md#four-ways-to-generate-the-same-tokens);
+  those numbers are a different benchmark, a different model and a different
+  machine from the tables above, and should not be read across. Nothing here has
+  been run on AMD or anything reached through XLA.

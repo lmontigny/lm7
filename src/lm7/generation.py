@@ -36,7 +36,7 @@ import torch
 
 from .api import compile as compile_module
 from .detection import inference_context, resolve_target, synchronize, torch_device
-from .errors import UnsupportedModelError
+from .errors import BackendUnavailableError, UnsupportedModelError
 from .targets import TargetSpec
 
 # What a model has to accept before this path can drive it. `past_key_values` is
@@ -53,6 +53,17 @@ _REQUIRED_FORWARD_ARGUMENTS = ("past_key_values", "cache_position")
 _LOGITS_TO_KEEP = "logits_to_keep"
 
 _BACKENDS = frozenset({"auto", "eager", "inductor"})
+
+# What `backend="auto"` is allowed to land on. The set above validates the
+# *string* a caller passes; this one validates what "auto" turns into, and the
+# two are not the same check. A decode graph mutates a KV cache in place, and a
+# backend that compiles by executing the artifact it just built spends cache
+# slots nobody asked for -- only the Inductor backend implements the
+# `warmup: False` option that declines that call. So a target whose
+# highest-priority backend is something else (openxla on `tpu`, the Tenstorrent
+# backend, OpenVINO on `intel:npu`) is refused here rather than handed a
+# stateful graph no one has ever run through it.
+_PLANNABLE_BACKENDS = frozenset({"eager", "inductor"})
 
 
 def _counter_value(group: str, key: str) -> int:
@@ -649,6 +660,12 @@ def compile_generation(
     Face causal-LM contract -- and is used exactly as given, so a model quantized
     before this call decodes quantized.
 
+    ``backend`` accepts ``"auto"``, ``"eager"`` and ``"inductor"``, and ``"auto"``
+    is checked against what it actually selects rather than only against the
+    string: a target whose highest-priority backend is neither of the two is
+    refused here, because that backend has never been handed a graph that writes
+    into a KV cache. See ``_PLANNABLE_BACKENDS``.
+
     ``compile_mode`` is Inductor's preset, and is how CUDA Graphs are requested:
     ``"reduce-overhead"`` asks for them, ``None`` does not. Requesting is not
     getting, and ``runner.cudagraphs`` reports whether capture was refused.
@@ -680,6 +697,17 @@ def compile_generation(
             "decoded token, or there is no decode step to compile."
         )
     resolved = resolve_target(target if target is not None else "auto")
+    if backend == "auto":
+        planned = _planned_backend(resolved)
+        if planned not in _PLANNABLE_BACKENDS:
+            raise BackendUnavailableError(
+                f"backend='auto' selects {planned!r} for target {resolved}, which this path "
+                "does not support. A decode graph mutates a KV cache in place, and a backend "
+                "that compiles by executing the artifact it just built spends cache slots the "
+                "caller never asked for; only the Inductor backend implements the "
+                "`warmup: False` option that declines that call. Pass backend='eager' to run "
+                f"{resolved} uncompiled."
+            )
     return GenerationRunner(
         model.eval(),
         resolved,
@@ -689,6 +717,24 @@ def compile_generation(
         max_batch_size=max_batch_size,
         max_sequence_length=max_sequence_length,
     )
+
+
+def _planned_backend(target: TargetSpec) -> str:
+    """What ``backend="auto"`` resolves to for ``target``.
+
+    Asked here rather than left to the compile call, because ``CompiledModule``
+    plans lazily: without this the answer arrives on the first token, by which
+    point the weights have moved and the cache has been allocated. The request is
+    model-less for the same reason ``lm7.explain`` builds one -- every backend's
+    ``supports`` answers from the target alone.
+    """
+    from .backends import registry
+    from .backends.base import CompileRequest
+    from .planner import plan
+
+    request = CompileRequest(torch.nn.Identity(), target, "lazy", "explicit", "error", {})
+    _, planned = plan(request, "auto", registry)
+    return planned.selected
 
 
 def _forward_arguments(model: torch.nn.Module) -> tuple[frozenset[str], bool]:
