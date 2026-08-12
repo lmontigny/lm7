@@ -11,6 +11,7 @@ import torch
 
 from .api import backends as inspect_backends
 from .api import version
+from .artifact_generation import ArtifactGenerateResult, generate_from_artifact
 from .backends import registry
 from .backends.base import CompileRequest
 from .backends.iree_vulkan import inspect_vulkan_runtime
@@ -299,6 +300,12 @@ def _print_artifact_inspection(result: ArtifactInspection) -> None:
         )
         if per_call:
             print(f"Tokens per call:  up to {per_call}")
+    if result.source:
+        model = result.source.get("model_uri") or result.source.get("model_id")
+        print(f"Model:            {model} ({result.source.get('dtype')})")
+        tokenizer = result.source.get("tokenizer_id")
+        if tokenizer and tokenizer != result.source.get("model_id"):
+            print(f"Tokenizer:        {tokenizer}")
     if precision := requirements.get("precision"):
         print(f"Precision:        {precision}")
     if result.delegated_calls is not None and result.total_calls is not None:
@@ -319,6 +326,21 @@ def _print_artifact_inspection(result: ArtifactInspection) -> None:
         print(f"Warning:          {warning}")
     for error in result.errors:
         print(f"Error:            {error}")
+
+
+def _print_artifact_generate(result: ArtifactGenerateResult) -> None:
+    print(f"Artifact: {result.artifact}")
+    print(f"Backend: {result.backend}  Shape: {result.decode_shape}")
+    print(f"Tokenizer: {result.tokenizer_id}")
+    print(f"Prompt: {result.prompt!r} ({result.input_tokens} tokens)")
+    reason = "eos" if result.stopped_at_eos else "budget"
+    print(f"Generated: {result.generated_tokens} tokens, stopped on {reason}")
+    print(
+        f"Prefill: {result.prefill_ms:.1f} ms   "
+        f"Decode: {result.decode_ms:.1f} ms ({result.ms_per_decoded_token:.2f} ms/token)"
+    )
+    print()
+    print(result.generated_text)
 
 
 def _print_model_run(result: HuggingFaceRunResult) -> None:
@@ -794,13 +816,33 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     bundle_inspect_parser.add_argument("bundle", help="bundle directory")
     _add_json_argument(bundle_inspect_parser)
-    artifact_parser = subparsers.add_parser("artifact", help="inspect LM7 artifacts")
+    artifact_parser = subparsers.add_parser("artifact", help="inspect and run LM7 artifacts")
     artifact_subparsers = artifact_parser.add_subparsers(dest="artifact_command", required=True)
     artifact_inspect_parser = artifact_subparsers.add_parser(
         "inspect", help="show artifact integrity and deployment requirements"
     )
     artifact_inspect_parser.add_argument("artifact", help="artifact directory")
     _add_json_argument(artifact_inspect_parser)
+
+    artifact_generate_parser = artifact_subparsers.add_parser(
+        "generate", help="greedily generate text from an exported KV-cache decode artifact"
+    )
+    artifact_generate_parser.add_argument("artifact", help="artifact directory")
+    artifact_generate_parser.add_argument(
+        "--prompt", default="The capital of France is", help="prompt to continue"
+    )
+    artifact_generate_parser.add_argument(
+        "--max-new-tokens", type=int, default=32, help="tokens to generate (default: 32)"
+    )
+    artifact_generate_parser.add_argument(
+        "--tokenizer",
+        default=None,
+        help=(
+            "model id whose tokenizer to use, overriding what the artifact recorded. "
+            "Needed only for an artifact exported before manifests carried a source"
+        ),
+    )
+    _add_json_argument(artifact_generate_parser)
 
     hexagon_parser = subparsers.add_parser(
         "hexagon", help="inspect the experimental Hexagon-MLIR toolchain"
@@ -924,6 +966,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "bundle" and args.bundle_command == "inspect":
             data = _bundle_data(args.bundle)
             _emit_json(data) if args.json else _print_bundle(data)
+        elif args.command == "artifact" and args.artifact_command == "generate":
+            generated = generate_from_artifact(
+                args.artifact,
+                prompt=args.prompt,
+                max_new_tokens=args.max_new_tokens,
+                tokenizer_id=args.tokenizer,
+            )
+            (_emit_json(generated.to_dict()) if args.json else _print_artifact_generate(generated))
         elif args.command == "artifact" and args.artifact_command == "inspect":
             inspection = inspect_artifact(args.artifact)
             (

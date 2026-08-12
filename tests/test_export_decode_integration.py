@@ -21,6 +21,7 @@ import torch
 pytest.importorskip("transformers", reason="the hf extra is not installed")
 
 from lm7 import load_artifact
+from lm7.errors import UnsupportedModelError
 from lm7.huggingface import _decode_module, _load_transformers, export_hf_model
 
 pytestmark = pytest.mark.export_decode
@@ -102,6 +103,56 @@ def test_a_reloaded_decode_artifact_matches_eager_token_for_token(
             one_call=shape == "dynamic",
         )
     assert tokens == eager_tokens
+
+
+def test_an_artifact_generates_text_using_the_tokenizer_it_recorded(tmp_path):
+    """Export, then generate, with nothing passed between them but the directory.
+
+    This is the whole point of the manifest's `source`: a caller who did not
+    export the artifact has no other way to learn which tokenizer turns its ids
+    into words, and picking the wrong one produces fluent text made of the wrong
+    words rather than an error.
+    """
+    from lm7.artifact_generation import generate_from_artifact
+
+    result = export_hf_model(
+        f"hf://{TINY_MODEL}",
+        output=str(tmp_path / "generate.lm7"),
+        target="cpu",
+        backend="export",
+        dtype="float32",
+        decode=True,
+        max_cache_len=MAX_CACHE_LEN,
+    )
+    assert load_artifact(result.output).manifest.source["tokenizer_id"] == TINY_MODEL
+
+    generated = generate_from_artifact(result.output, prompt="Hello", max_new_tokens=6)
+    assert generated.tokenizer_id == TINY_MODEL
+    assert generated.decode_shape == "dynamic"
+    assert generated.max_cache_len == MAX_CACHE_LEN
+    assert generated.input_tokens > 0
+    # Random weights, so the text is gibberish and asserting its content would be
+    # asserting a seed. That it produced tokens at all, through a tokenizer it
+    # found by itself, is the claim.
+    assert 0 < generated.generated_tokens <= 6
+    assert len(generated.generated_token_ids) == generated.generated_tokens
+    assert generated.prefill_ms > 0
+
+
+def test_generating_past_the_cache_is_refused_rather_than_truncated(tmp_path):
+    result = export_hf_model(
+        f"hf://{TINY_MODEL}",
+        output=str(tmp_path / "small.lm7"),
+        target="cpu",
+        backend="export",
+        dtype="float32",
+        decode=True,
+        max_cache_len=8,
+    )
+    from lm7.artifact_generation import generate_from_artifact
+
+    with pytest.raises(UnsupportedModelError, match="KV cache"):
+        generate_from_artifact(result.output, prompt="Hello", max_new_tokens=64)
 
 
 def test_one_dynamic_capture_serves_many_prompt_lengths(tmp_path):

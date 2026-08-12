@@ -70,6 +70,7 @@ file stays a index rather than a second, drifting description.
 | [#160](https://github.com/lmontigny/lm7/pull/160) | Gate the decode path's backend selection, and correct the Apple claim |
 | [#161](https://github.com/lmontigny/lm7/pull/161) | Export a KV-cache decode step |
 | [#162](https://github.com/lmontigny/lm7/pull/162) | Prefill a whole prompt in one call, from the same exported graph |
+| [#164](https://github.com/lmontigny/lm7/pull/164) | Record what an artifact was built from, and add `lm7 artifact generate` |
 
 ## On-device validation
 
