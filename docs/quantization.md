@@ -727,7 +727,7 @@ are unseparated:
   rests on reading oneDNN's executed primitives. On this host oneDNN emits
   *nothing* for SmolLM2 at FP32 or INT8 — the model's linears are served by
   ATen/MKL and never enter oneDNN, as
-  [the CPU page records](cpu.md#repeated-on-a-second-emerald-rapids-part-which-does-not-agree)
+  [the CPU page records](cpu.md#the-bf16-crossover-is-a-function-of-thread-count-not-just-row-count)
   — so there is no log in which an INT8 GEMM could be found or ruled out.
 
 So the table's fourth column is a latency measurement and the row above it stays
