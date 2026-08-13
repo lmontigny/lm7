@@ -106,6 +106,45 @@ def test_multimodal_config_is_reported_as_unsupported(monkeypatch):
     assert "text tensors only" in result.workflows[0].reason
 
 
+def test_a_diffusion_repository_is_recognized_rather_than_reported_unreadable(monkeypatch):
+    """AutoConfig fails on a diffusion repo, because there is no config.json to read."""
+    transformers = fake_transformers(error=OSError("does not appear to have a file named config"))
+    patch_environment(monkeypatch, transformers)
+    monkeypatch.setattr(
+        compatibility,
+        "detect_diffusion",
+        lambda model_id: compatibility.TaskDetection(
+            task="diffusion",
+            reason="The repository declares a StableDiffusionPipeline in model_index.json.",
+            pipeline_class="StableDiffusionPipeline",
+            components=("scheduler", "text_encoder", "unet", "vae"),
+        ),
+    )
+
+    result = compatibility.inspect_hf_model("hf://example/tiny")
+
+    assert result.status == "compatible"
+    assert result.task == "diffusion"
+    assert result.config_class == "StableDiffusionPipeline"
+    # Recognized, but none of the text workflows apply to it.
+    assert all(item.status == "unsupported" for item in result.workflows)
+    assert all(item.status == "unsupported" for item in result.quantization)
+    assert any("unet" in note for note in result.notes)
+    assert result.config_only is True
+
+
+def test_an_unreadable_config_points_at_the_diffusion_extra(monkeypatch):
+    """Without diffusers installed, "not a pipeline" is indistinguishable from "cannot tell"."""
+    transformers = fake_transformers(error=OSError("does not appear to have a file named config"))
+    patch_environment(monkeypatch, transformers)
+    monkeypatch.setattr(compatibility, "_detect_diffusion", lambda model_id: None)
+
+    with pytest.raises(UnsupportedModelError) as excinfo:
+        compatibility.inspect_hf_model("hf://example/tiny")
+
+    assert 'lm7[diffusion]' in str(excinfo.value)
+
+
 def test_unregistered_causal_architecture_is_unknown(monkeypatch):
     patch_environment(monkeypatch, fake_transformers(CausalConfig(), registered=False))
 

@@ -21,6 +21,11 @@ from .detection import (
 )
 from .errors import UnsupportedModelError
 from .exporting import DynamicDimension, ShapeProfile
+from .hub import load_transformers as _load_transformers
+from .hub import parse_model_uri as _model_id
+from .hub import peak_memory as _peak_memory
+from .hub import reset_peak_memory as _reset_peak_memory
+from .hub import resolve_dtype, source_metadata, supports_native_bf16
 from .targets import TargetSpec
 
 # The tensors _LogitsOnly forwards, and therefore the only ones captured.
@@ -665,12 +670,7 @@ def _source_metadata(model_uri: str, model_id: str, torch_dtype: torch.dtype) ->
     are different questions and a caller reading the manifest should not have to
     know they happen to coincide.
     """
-    return {
-        "model_uri": model_uri,
-        "model_id": model_id,
-        "tokenizer_id": model_id,
-        "dtype": str(torch_dtype).removeprefix("torch."),
-    }
+    return source_metadata(model_uri, model_id, torch_dtype, tokenizer_id=model_id)
 
 
 def _decode_module(model: torch.nn.Module, *, batch_size: int, max_cache_len: int) -> _DecodeStep:
@@ -1095,41 +1095,16 @@ def _export_result(
     )
 
 
-def _model_id(model_uri: str) -> str:
-    if not isinstance(model_uri, str) or not model_uri.startswith("hf://"):
-        raise UnsupportedModelError(
-            f"Unsupported model {model_uri!r}; expected a Hugging Face URI such as "
-            "'hf://HuggingFaceTB/SmolLM2-135M-Instruct'."
-        )
-    model_id = model_uri.removeprefix("hf://").strip("/")
-    if not model_id or "/" not in model_id:
-        raise UnsupportedModelError(
-            f"Invalid Hugging Face model URI {model_uri!r}; expected 'hf://owner/model'."
-        )
-    return model_id
-
-
 def _resolve_dtype(
     value: str, target: TargetSpec, quantization: str = NO_QUANTIZATION
 ) -> torch.dtype:
-    values = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-    }
-    if value == "auto":
-        if quantization in WEIGHT_ONLY_QUANTIZATIONS:
-            return values[_QUANTIZED_COMPUTE_DTYPE.get(target.vendor, "bfloat16")]
-        if target.vendor == "cpu":
-            return torch.float32
-        if target.vendor == "tpu":
-            return torch.bfloat16
-        return torch.float16
-    if value not in values:
-        raise ValueError(
-            f"Unsupported dtype {value!r}; expected auto, float32, float16, or bfloat16."
-        )
-    return values[value]
+    """The generic dtype choice, plus the one part of it quantization owns."""
+    quantized_default = (
+        _QUANTIZED_COMPUTE_DTYPE.get(target.vendor, "bfloat16")
+        if quantization in WEIGHT_ONLY_QUANTIZATIONS
+        else None
+    )
+    return resolve_dtype(value, target, quantized_default)
 
 
 def _validate_openvino_quantization(quantization: str, model_id: str | None) -> None:
@@ -1387,19 +1362,6 @@ def _supports_fp8(target: TargetSpec) -> bool:
     return capability is None or capability >= _MODE_MINIMUM_CAPABILITY[FP8]
 
 
-def supports_native_bf16(target: TargetSpec) -> bool:
-    """Whether this target has native BF16 arithmetic rather than emulation.
-
-    Only meaningful for NVIDIA, where LM7 knows the capability number. Everything
-    else answers True, because the compute dtype for those targets is decided by
-    ``_QUANTIZED_COMPUTE_DTYPE`` and not by this.
-    """
-    if target.vendor != "nvidia":
-        return True
-    capability = _compute_capability(target)
-    return capability is None or capability >= _BF16_MINIMUM_CAPABILITY
-
-
 def _compiled_weight_bytes(wrapped: Any) -> int | None:
     """Weight bytes of a backend-owned artifact, when the backend wrote one.
 
@@ -1434,15 +1396,6 @@ def _model_storage_bytes(model: torch.nn.Module) -> int:
     return sum(tensor_bytes(tensor) for tensor in tensors)
 
 
-def _load_transformers() -> ModuleType:
-    try:
-        return importlib.import_module("transformers")
-    except ImportError as exc:
-        raise UnsupportedModelError(
-            'Hugging Face support is not installed. Install it with: pip install "lm7[hf]".'
-        ) from exc
-
-
 def _load_torchao_quantization() -> ModuleType:
     try:
         return importlib.import_module("torchao.quantization")
@@ -1463,14 +1416,3 @@ def _load_torchao_nvfp4() -> ModuleType:
             "NVFP4 quantization needs torchao.prototype.mx_formats, which this torchao "
             'build does not provide. Install the pinned version with: pip install "lm7[hf,torchao]".'
         ) from exc
-
-
-def _reset_peak_memory(target: TargetSpec) -> None:
-    if target.vendor in {"nvidia", "amd"}:
-        torch.cuda.reset_peak_memory_stats(target.ordinal or 0)
-
-
-def _peak_memory(target: TargetSpec) -> int | None:
-    if target.vendor not in {"nvidia", "amd"}:
-        return None
-    return torch.cuda.max_memory_allocated(target.ordinal or 0)

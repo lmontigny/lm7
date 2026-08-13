@@ -32,7 +32,7 @@ The top-level status has three possible values:
 
 | Status | Meaning |
 | --- | --- |
-| `compatible` | The installed Transformers version registers a decoder-only config for `AutoModelForCausalLM`, and a runtime backend supports the target. |
+| `compatible` | The installed Transformers version registers a decoder-only config for `AutoModelForCausalLM`, and a runtime backend supports the target. Also reported for a recognized diffusion pipeline — see below. |
 | `unknown` | The architecture name looks like a causal LM, but the installed Transformers version does not register its config. |
 | `incompatible` | The model is encoder-decoder, multimodal, requires remote code, is not a causal LM, or the requested runtime backend cannot serve the target. |
 
@@ -52,6 +52,31 @@ Task: seq2seq
 `--backend` describes the runtime backend used by `model run` and, where
 applicable, `model generate`. Export compatibility is reported separately
 because `lm7 model export` has its own export-backend choices.
+
+## Diffusion pipelines
+
+A diffusion repository has no top-level `config.json` — it declares its
+components in `model_index.json` instead — so `AutoConfig` cannot read one and
+LM7 used to report it as "not registered for `AutoModelForCausalLM`". That was
+technically true and told you nothing. Such a repository is now identified:
+
+```text
+$ lm7 model compatibility hf://stabilityai/sd-turbo --target cpu
+Status: compatible
+Architecture: StableDiffusionPipeline
+Task: diffusion
+```
+
+The status is `compatible` because the question this command answers is whether
+LM7 recognizes the checkpoint. Every *workflow* check is `unsupported`: `model
+run`, `model generate`, and `model export` tokenize text, and a diffusion
+pipeline has no tokenizable input. The quantization checks are `unsupported` for
+a concrete reason rather than a general one — LM7's selectors match `.mlp.`
+linears and `lm_head`, which a UNet has neither of.
+
+Detection needs the diffusion extra (`pip install "lm7[diffusion]"`). Without it
+there is no way to tell "not a diffusion pipeline" from "cannot read one", so the
+original config failure is raised with a pointer to the extra attached.
 
 ## What this does not guarantee
 

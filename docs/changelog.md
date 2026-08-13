@@ -104,6 +104,7 @@ file stays a index rather than a second, drifting description.
 | [#136](https://github.com/lmontigny/lm7/pull/136) | Put the dtype question to a second ISA, and get a different answer |
 | [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 | [#166](https://github.com/lmontigny/lm7/pull/166) | Name a dense validation ladder, and say plainly that it is unmeasured |
+| [#168](https://github.com/lmontigny/lm7/pull/168) | Recognize a diffusion pipeline instead of calling it an unreadable causal LM |
 
 ## Detection and diagnostics
 
