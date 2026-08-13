@@ -145,6 +145,5 @@ def load_diffusers() -> ModuleType:
         return importlib.import_module("diffusers")
     except ImportError as exc:
         raise UnsupportedModelError(
-            "Diffusion support is not installed. Install it with: "
-            'pip install "lm7[diffusion]".'
+            'Diffusion support is not installed. Install it with: pip install "lm7[diffusion]".'
         ) from exc

@@ -75,7 +75,7 @@ def test_a_config_without_a_class_name_detects_as_none(monkeypatch):
 
 
 def test_a_missing_diffusers_extra_raises_rather_than_denying_the_pipeline(monkeypatch):
-    """"Cannot tell" and "not a diffusion model" are different answers.
+    """ "Cannot tell" and "not a diffusion model" are different answers.
 
     Returning None here would let a caller report a diffusion repo as unreadable
     for a reason the user cannot act on, so the missing extra is raised instead.

@@ -142,7 +142,7 @@ def test_an_unreadable_config_points_at_the_diffusion_extra(monkeypatch):
     with pytest.raises(UnsupportedModelError) as excinfo:
         compatibility.inspect_hf_model("hf://example/tiny")
 
-    assert 'lm7[diffusion]' in str(excinfo.value)
+    assert "lm7[diffusion]" in str(excinfo.value)
 
 
 def test_unregistered_causal_architecture_is_unknown(monkeypatch):
