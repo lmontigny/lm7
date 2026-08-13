@@ -86,6 +86,31 @@ without growing vendor-specific branches:
 If you only ever run one model on one known target, LM7 is probably extra
 machinery.
 
+## Personal AI hardware
+
+Personal AI hardware should not force every application to grow a separate
+runtime path for CUDA, Metal, Core ML, OpenVINO, QNN, ExecuTorch, or the next
+edge accelerator. LM7 is meant to keep the application at the PyTorch
+`nn.Module` boundary while the hardware target changes underneath.
+
+That makes LM7 a fit for private assistants, local RAG boxes, robotics
+controllers, AI mini PCs, phones, and dedicated edge appliances where offline
+operation, predictable cost, and data locality matter.
+
+- `target="auto"` runs on the best available local accelerator and falls back to
+  CPU when the device backend is unavailable.
+- Export backends produce artifacts for mobile, embedded, and appliance-style
+  deployment through ExecuTorch, QNN, Core ML, OpenVINO, ONNX Runtime, IREE, and
+  StableHLO.
+- `lm7 doctor`, `lm7 explain`, and artifact inspection make backend selection,
+  missing SDKs, and deployment requirements visible before shipping a device
+  image.
+- New personal AI chips can plug in below PyTorch through their compiler stack
+  instead of forcing application authors to rewrite model code.
+
+See [personal AI hardware](docs/personal-ai-hardware.md) for the device classes
+LM7 validates today and the edge stacks worth adding next.
+
 ## How it works
 
 LM7 sits between one PyTorch model and the vendor toolchains that compile it.
@@ -210,6 +235,11 @@ Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cu
 [AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
 [Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
 
+Edge and personal-device setup: [ExecuTorch](docs/executorch.md) ·
+[Core ML](docs/coreml.md) · [Qualcomm QNN](docs/qnn.md) ·
+[Android device testing](docs/android-device-testing.md) ·
+[Personal AI hardware](docs/personal-ai-hardware.md).
+
 ## Compiler and backend overview
 
 | Backend | Compiler/runtime | Mode | Targets |
@@ -309,6 +339,8 @@ Examples and reproducible benchmark harnesses live in
 Start with:
 
 - [Limitations](docs/limitations.md) — what LM7 does not do, per backend.
+- [Personal AI hardware](docs/personal-ai-hardware.md) — local AI devices,
+  current validation, and recommended next edge stacks.
 - [Tested hardware](docs/tested-hardware.md) — physical machines and exact gaps.
 - [Architecture](docs/architecture.md) — targets, backends, planner, artifacts.
 - [What LM7 replaces](docs/what-this-replaces.md) — per-vendor application glue.
