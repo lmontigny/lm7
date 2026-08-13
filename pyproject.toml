@@ -126,6 +126,7 @@ markers = [
     "serve_load: requires the serve and hf extras, and downloads a tiny model",
     "trtllm: requires trtllm-serve on PATH and an Ampere-or-newer NVIDIA GPU",
     "export_decode: requires the hf extra, and downloads a tiny model to export a decode step",
+    "diffusion: requires the diffusion extra, and downloads a tiny diffusion pipeline",
 ]
 
 [tool.ruff]

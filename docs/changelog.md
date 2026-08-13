@@ -105,6 +105,7 @@ file stays a index rather than a second, drifting description.
 | [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 | [#166](https://github.com/lmontigny/lm7/pull/166) | Name a dense validation ladder, and say plainly that it is unmeasured |
 | [#168](https://github.com/lmontigny/lm7/pull/168) | Recognize a diffusion pipeline instead of calling it an unreadable causal LM |
+| [#169](https://github.com/lmontigny/lm7/pull/169) | Compile text-to-image diffusion, and say plainly that only the plumbing is measured |
 
 ## Detection and diagnostics
 
