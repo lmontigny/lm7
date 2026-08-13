@@ -15,6 +15,7 @@ cannot be run. See docs/diffusion.md.
 
 from __future__ import annotations
 
+import importlib
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -273,9 +274,17 @@ def _component_inputs(
 
 
 def _write_image(result: DiffusionResult, output: str) -> str:
-    """Write the first image as PNG, which needs Pillow and nothing else."""
+    """Write the first image as PNG, which needs Pillow and nothing else.
+
+    Imported by name rather than with a plain ``from PIL import Image`` for the
+    reason every optional dependency here is: CI type-checks a ``[dev]`` install,
+    where Pillow is absent, and a plain import fails the run with
+    ``Cannot find implementation or library stub for module named "PIL"`` unless
+    it is excused with a mypy override. ``serve`` is the one extra that takes the
+    override route, and it is the exception rather than the pattern.
+    """
     try:
-        from PIL import Image
+        image_module = importlib.import_module("PIL.Image")
     except ImportError as exc:
         raise UnsupportedModelError(
             'Writing an image needs Pillow. Install it with: pip install "lm7[diffusion]".'
@@ -283,7 +292,7 @@ def _write_image(result: DiffusionResult, output: str) -> str:
     array = (result.images[0].permute(1, 2, 0) * 255).round().clamp(0, 255)
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(array.to(torch.uint8).cpu().numpy()).save(path)
+    image_module.fromarray(array.to(torch.uint8).cpu().numpy()).save(path)
     return str(path)
 
 
