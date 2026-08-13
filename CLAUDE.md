@@ -54,6 +54,21 @@ answer a question the ladder does not.
 | Llama-3.1-8B | the smallest model large enough that GEMM time dominates |
 | LFM2.5-350M, Qwen3-1.7B, Mistral-7B-Instruct-v0.3 | **named but unmeasured** — added to the ladder so they can be reached by name; nothing here has run them, so say "not measured", not "supported". See [limitations](docs/limitations.md#model-coverage) |
 
+**Diffusion** lives in `benchmarks/diffusion.py`'s own `HF_MODELS` and is a
+different workload shape — three compile boundaries, and a denoise loop where the
+per-step graph is the only cost that scales. Reach it with `lm7 image`, not `lm7
+model`:
+
+| | notes |
+| --- | --- |
+| `hf-internal-testing/tiny-stable-diffusion-pipe` | 1.4M-parameter UNet, no meaningful numbers; the CI and plumbing check, and **the only thing measured so far** |
+| SD-Turbo, SD 1.5 | **named but unrun**; the intended reference (4 steps, unguided, fits 12 GiB at fp16) |
+| SDXL | **named but unrun**; fp16 only on a 12 GiB card, and fp32 does not fit |
+
+Compiling *lost* to eager on the tiny pipeline, which is expected at that size
+and is not evidence about a real model. Say "implemented", not "validated" — see
+[limitations](docs/limitations.md#modality-coverage).
+
 **Sparse MoE** is tracked separately because it behaves differently, and
 because this repo's most-corrected claims are about it — see
 [limitations](docs/limitations.md#compilation-and-artifacts):

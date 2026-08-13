@@ -84,6 +84,10 @@ This index covers everything else.
   the AOT counterpart, a decode step that outlives the process by carrying its
   cache as buffers. Why the blocker was never the one recorded, why it is
   captured strictly, and why only two backends are allowed to try.
+- [Diffusion image generation](diffusion.md) — `lm7 image generate` and
+  `lm7.compile_diffusion`: three compile boundaries, a denoise loop LM7 owns and
+  a scheduler it does not, and four ways to measure it wrong. Implemented;
+  measured only on a toy pipeline, and it says so.
 
 ## Evaluations
 

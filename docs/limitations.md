@@ -336,6 +336,37 @@ none needs a token or an `unsloth/` mirror. That is worth stating because the
 Llama entries in the same dicts *do* use `unsloth/` mirrors for exactly that
 reason, and the pattern does not generalise.
 
+## Modality coverage
+
+LM7 compiles two kinds of model through named entry points: decoder-only causal
+LMs (`lm7 model`) and text-to-image diffusion pipelines (`lm7 image`). Everything
+below the model-facing layer — `lm7.compile()`, `lm7.export()`, `ShapeProfile`,
+bundles and all the backends — is modality-neutral and already carries vision
+classifiers today, which is why ResNet-18 appears throughout `benchmarks/`
+without a `lm7 model` command that can reach it.
+
+**Diffusion is implemented and essentially unmeasured.** The plumbing has been
+validated only on `hf-internal-testing/tiny-stable-diffusion-pipe` — a
+1.4M-parameter UNet at 64×64 on an Apple M3 Pro, on `cpu:arm64` and
+`apple:metal`, where compiled output agrees with eager to ~1e-6 and the denoise
+graph compiles once and stays compiled. On a model that small **compiling is
+slower than eager**, which is the expected result and not evidence about real
+models. No full-size pipeline has been run, nothing has run on NVIDIA, and no
+peak-VRAM figure exists. Say "implemented", not "validated". See
+[diffusion](diffusion.md#what-has-not-been-measured).
+
+Not implemented at all: vision-language models, image-to-image and inpainting,
+and video generation. A VLM needs a processor and a second compile boundary for
+the vision tower; a video model is a denoise loop inside a temporal loop with a
+rolling latent cache, which `compile_diffusion` does not express. `lm7 model
+compatibility` reports a VLM as `incompatible` for that reason, and a diffusion
+repository as `compatible` with every text workflow marked unsupported.
+
+Quantization is causal-LM-only in practice, whatever the target allows: the
+TorchAO selectors match `.mlp.` linears and `lm_head`, so a UNet matches nothing
+and LM7 refuses rather than reporting a 1.00× reduction. There is no `--quantize`
+on `lm7 image`.
+
 ## Per-backend scope
 
 | Backend | Scope and caveats |

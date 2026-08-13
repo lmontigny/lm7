@@ -33,6 +33,16 @@ from .huggingface import (
     generate_hf_model,
     run_hf_model,
 )
+from .image_generation import COMPONENTS, DEFAULT_GUIDANCE, DEFAULT_SIZE, DEFAULT_STEPS
+
+# Safe at module scope: `image_hub` reaches diffusers through `hub.load_diffusers`
+# and Pillow inside the writer, so importing it costs neither.
+from .image_hub import (
+    ImageExportResult,
+    ImageGenerateResult,
+    export_image_component,
+    generate_image,
+)
 from .inspection import ArtifactInspection, inspect_artifact
 from .planner import Plan, plan
 from .serve.engine import ServeConfig
@@ -282,6 +292,69 @@ def _print_bundle(data: dict[str, Any]) -> None:
         print(f"  {entry['key']}: {entry['target']['target']} / {entry['backend']}")
 
 
+def _parse_size(value: str) -> tuple[int, int]:
+    """Parse ``WIDTHxHEIGHT`` into ``(width, height)``.
+
+    Width first, because that is the order every image tool states a size in --
+    and the opposite of the order the tensors carry it, which is why this
+    conversion happens once, here, rather than at each call site.
+    """
+    parts = value.lower().split("x")
+    if len(parts) != 2:
+        raise LM7Error(f"Invalid size {value!r}; expected WIDTHxHEIGHT, for example 512x512.")
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise LM7Error(
+            f"Invalid size {value!r}; expected WIDTHxHEIGHT, for example 512x512."
+        ) from None
+    if width < 1 or height < 1:
+        raise LM7Error(f"Invalid size {value!r}; both dimensions must be positive.")
+    return width, height
+
+
+def _print_image_generate(result: ImageGenerateResult) -> None:
+    print(f"Pipeline:      {result.model_uri} ({result.pipeline_class})")
+    print(f"Target:        {result.target}")
+    print(f"Backend:       {result.backend}")
+    print(f"Precision:     {result.dtype}")
+    print(f"Size:          {result.width}x{result.height}")
+    guidance = f"{result.guidance_scale:g}" if result.guidance_scale > 1.0 else "off"
+    print(f"Steps:         {result.steps} (guidance: {guidance})")
+    if result.seed is not None:
+        print(f"Seed:          {result.seed}")
+    print(f"Load:          {result.load_ms:.1f} ms")
+    print(f"Encode:        {result.encode_ms:.1f} ms")
+    # The one number that scales with the request; everything else is paid once.
+    print(f"Denoise:       {result.denoise_ms:.1f} ms ({result.ms_per_step:.1f} ms/step)")
+    print(f"Decode:        {result.decode_ms:.1f} ms")
+    print(f"Total:         {result.total_ms:.1f} ms")
+    if result.peak_memory_bytes is not None:
+        print(f"Peak memory:   {result.peak_memory_bytes / 1024**2:.1f} MiB")
+    steady = result.counters.get("steady", {})
+    if steady.get("frames"):
+        print(
+            f"Warning:       {steady['frames']} compile(s) during the loop; "
+            "a step changed something Dynamo guards on."
+        )
+    if result.output:
+        print(f"Wrote:         {result.output}")
+
+
+def _print_image_export(result: ImageExportResult) -> None:
+    print(f"Pipeline:      {result.model_uri}")
+    print(f"Component:     {result.component}")
+    print(f"Target:        {result.target}")
+    print(f"Backend:       {result.backend}")
+    print(f"Precision:     {result.dtype}")
+    print(f"Size:          {result.width}x{result.height} (batch {result.batch_size})")
+    print(f"Parameters:    {result.parameter_count:,}")
+    print(f"Export:        {result.export_ms:.1f} ms")
+    print(f"Artifact:      {result.output} ({result.artifact_bytes / 1024**2:.1f} MiB)")
+    for name in result.files:
+        print(f"  {name}")
+
+
 def _print_artifact_inspection(result: ArtifactInspection) -> None:
     requirements = result.runtime_requirements
     print(f"Backend:          {result.backend}")
@@ -306,6 +379,15 @@ def _print_artifact_inspection(result: ArtifactInspection) -> None:
         tokenizer = result.source.get("tokenizer_id")
         if tokenizer and tokenizer != result.source.get("model_id"):
             print(f"Tokenizer:        {tokenizer}")
+        # One component of a pipeline, not a whole model. Worth printing for the
+        # reason `tokenizer_id` is: the payload cannot say which of the three it
+        # is, and running a VAE decoder where a UNet was meant produces a tensor
+        # of the wrong shape at best and a plausible wrong one at worst.
+        if component := result.source.get("component"):
+            batch = result.source.get("batch_size")
+            size = f"{result.source.get('width')}x{result.source.get('height')}"
+            print(f"Component:        {component} of {result.source.get('pipeline_class')}")
+            print(f"Captured at:      {size}, batch {batch}")
     if precision := requirements.get("precision"):
         print(f"Precision:        {precision}")
     if result.delegated_calls is not None and result.total_calls is not None:
@@ -512,6 +594,85 @@ def _build_parser() -> argparse.ArgumentParser:
         "--backend", default="auto", help="backend selector (default: auto)"
     )
     _add_json_argument(explain_parser)
+
+    # Its own group rather than a `model` subcommand: every `model` flag is
+    # token-shaped and every `model` printer reports token counts, neither of
+    # which a diffusion pipeline has.
+    image_parser = subparsers.add_parser(
+        "image", help="generate and export images with diffusion pipelines"
+    )
+    image_subparsers = image_parser.add_subparsers(dest="image_command", required=True)
+
+    image_generate_parser = image_subparsers.add_parser(
+        "generate", help="generate an image from a text prompt"
+    )
+    image_generate_parser.add_argument(
+        "model_uri", help="pipeline URI, for example hf://stabilityai/sd-turbo"
+    )
+    image_generate_parser.add_argument("--prompt", required=True, help="text prompt")
+    image_generate_parser.add_argument(
+        "--output", default=None, help="write the image here as PNG (needs Pillow)"
+    )
+    image_generate_parser.add_argument(
+        "--steps",
+        type=int,
+        default=DEFAULT_STEPS,
+        help=f"denoise steps (default: {DEFAULT_STEPS}, SD-Turbo's regime)",
+    )
+    image_generate_parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=DEFAULT_GUIDANCE,
+        help="classifier-free guidance; above 1.0 doubles the denoise batch (default: 0.0)",
+    )
+    image_generate_parser.add_argument(
+        "--seed", type=int, default=None, help="seed the initial noise for a reproducible image"
+    )
+    image_generate_parser.add_argument(
+        "--size",
+        default=f"{DEFAULT_SIZE}x{DEFAULT_SIZE}",
+        help=f"image size as WIDTHxHEIGHT (default: {DEFAULT_SIZE}x{DEFAULT_SIZE})",
+    )
+    image_generate_parser.add_argument(
+        "--target", default="auto", help="target selector (default: auto)"
+    )
+    image_generate_parser.add_argument(
+        "--backend", default="auto", help="backend selector (default: auto)"
+    )
+    image_generate_parser.add_argument(
+        "--dtype", default="auto", choices=("auto", "float32", "float16", "bfloat16")
+    )
+    image_generate_parser.add_argument(
+        "--compile-mode", default=None, help="Inductor preset, for example reduce-overhead"
+    )
+    _add_json_argument(image_generate_parser)
+
+    image_export_parser = image_subparsers.add_parser(
+        "export", help="capture one pipeline component into an LM7 artifact"
+    )
+    image_export_parser.add_argument("model_uri", help="pipeline URI")
+    image_export_parser.add_argument(
+        "--component",
+        required=True,
+        choices=COMPONENTS,
+        help="which component to capture; one artifact holds one component",
+    )
+    image_export_parser.add_argument("--output", required=True, help="artifact path to write")
+    image_export_parser.add_argument(
+        "--size", default=f"{DEFAULT_SIZE}x{DEFAULT_SIZE}", help="image size as WIDTHxHEIGHT"
+    )
+    image_export_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="denoise batch, which guidance doubles (default: 1)",
+    )
+    image_export_parser.add_argument("--target", default="auto")
+    image_export_parser.add_argument("--backend", default="export")
+    image_export_parser.add_argument(
+        "--dtype", default="auto", choices=("auto", "float32", "float16", "bfloat16")
+    )
+    _add_json_argument(image_export_parser)
 
     model_parser = subparsers.add_parser("model", help="run models through LM7")
     model_subparsers = model_parser.add_subparsers(dest="model_command", required=True)
@@ -890,6 +1051,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.json
                 else _print_model_compatibility(compatibility)
             )
+        elif args.command == "image" and args.image_command == "generate":
+            width, height = _parse_size(args.size)
+            image_result = generate_image(
+                args.model_uri,
+                prompt=args.prompt,
+                output=args.output,
+                steps=args.steps,
+                guidance_scale=args.guidance_scale,
+                seed=args.seed,
+                height=height,
+                width=width,
+                target=args.target,
+                backend=args.backend,
+                dtype=args.dtype,
+                compile_mode=args.compile_mode,
+            )
+            (
+                _emit_json(image_result.to_dict())
+                if args.json
+                else _print_image_generate(image_result)
+            )
+        elif args.command == "image" and args.image_command == "export":
+            width, height = _parse_size(args.size)
+            image_export = export_image_component(
+                args.model_uri,
+                component=args.component,
+                output=args.output,
+                height=height,
+                width=width,
+                batch_size=args.batch_size,
+                target=args.target,
+                backend=args.backend,
+                dtype=args.dtype,
+            )
+            (_emit_json(image_export.to_dict()) if args.json else _print_image_export(image_export))
         elif args.command == "model" and args.model_command == "run":
             result = run_hf_model(
                 args.model_uri,

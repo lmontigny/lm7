@@ -22,6 +22,7 @@ from .hexagon import (
     HexagonToolchainDiagnostics,
     diagnose_hexagon_toolchain,
 )
+from .image_generation import DiffusionResult, DiffusionRunner, compile_diffusion
 from .inspection import ArtifactInspection, PayloadInspection, inspect_artifact
 from .targets import DeviceInfo, TargetSpec, parse_target
 
@@ -32,6 +33,8 @@ __all__ = [
     "BenchmarkResult",
     "BundleManifest",
     "DeviceInfo",
+    "DiffusionResult",
+    "DiffusionRunner",
     "DynamicDimension",
     "ExportArtifact",
     "GenerationResult",
@@ -47,6 +50,7 @@ __all__ = [
     "benchmark",
     "clear_cache",
     "compile",
+    "compile_diffusion",
     "compile_generation",
     "create_bundle",
     "detect_targets",
