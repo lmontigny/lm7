@@ -131,9 +131,17 @@ def _environment(target: TargetSpec, backend: str | None = None) -> Mapping[str,
                 "device_name": torch.cuda.get_device_name(ordinal),
                 "cuda": torch.version.cuda,
                 "hip": torch.version.hip,
-                "compute_capability": list(torch.cuda.get_device_capability(ordinal)),
+                "architecture": target.architecture,
             }
         )
+        # NVIDIA-only, and deliberately not filled in for AMD. ROCm answers
+        # `get_device_capability` too -- it returns (9, 4) on a gfx942 -- so
+        # calling it for both vendors put a number in every AMD report that
+        # looks like a CUDA compute capability, is not one, and does not
+        # correspond to any NVIDIA part. `architecture` above carries the answer
+        # for both; this stays where it means something.
+        if target.vendor == "nvidia":
+            value["compute_capability"] = list(torch.cuda.get_device_capability(ordinal))
     elif target.vendor == "apple":
         value.update({"device_name": "Apple Metal GPU", "mps_built": torch.backends.mps.is_built()})
     elif target.vendor == "intel" and target.kind == "npu":

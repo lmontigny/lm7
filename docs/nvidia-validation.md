@@ -44,6 +44,43 @@ python benchmarks/nvidia_matrix.py --environment
 The same block is written to `environment.json` in any results directory, so a
 set of JSON files is still self-describing months later.
 
+### It describes an AMD GPU too, which is the point of having it
+
+ROCm reaches the GPU through the same `torch.cuda` API, so `--target amd` runs
+this suite unchanged and its numbers are comparable to the NVIDIA ones above —
+which matters, because [`benchmarks/moe.py` and this harness disagree by
+2.3x](#do-not-compare-these-numbers-to-benchmarksmoepy) and picking the same one
+is the whole reason the comparison holds.
+
+What it used to produce on AMD was a block with `gpu` filled in and
+`compute_capability`, `driver`, `cuda`, `supported_precisions` and `cuda_build`
+all `null` — results with no record of what produced them, which is the one thing
+this block exists to prevent. Three keys fix that:
+
+- **`architecture`** is the vendor-neutral answer: `sm90` or `gfx942`.
+  `compute_capability` stays NVIDIA-only rather than being generalized, because
+  the `environment.json` files already sitting beside the H100 and Blackwell
+  results use it with that meaning.
+- **`hip`** is the runtime version. `torch.version.cuda` is `None` on ROCm, so
+  recording only that left an AMD report claiming no runtime at all; `driver`
+  now falls back to it.
+- **`fp8_format`** is `fnuz` or `ocp`. CDNA 3 implements the `fnuz` FP8
+  encoding and every NVIDIA card from `sm89` uses the OCP one, so
+  `"fp8": true` on both sides of a comparison does not mean the two numbers were
+  produced in the same format. See [AMD GPU
+  support](amd-rocm.md#what-lm7-targets-says-about-the-card-and-how-much-to-trust-it).
+
+Three paths do not exist off NVIDIA — `tensorrt`, `tensorrt-export` and
+`onnxruntime` — and those cells now record `skipped` with a reason instead of
+running and failing. The distinction is not cosmetic: a `works: false` cell with
+a traceback reads as "this broke here", when the truth is the path was never
+available on this vendor. The skip also returns before the model is built, so
+learning it does not cost an 8B checkpoint download.
+
+**No AMD GPU has run this suite.** The support above is written and unexercised,
+like every other AMD claim in this repo — see
+[limitations](limitations.md#hardware-validation).
+
 ### `supported_precisions` is the silicon; `cuda_build` is the install
 
 These answer different questions and they disagree usefully.
