@@ -80,8 +80,14 @@ more here: a missing `sm_` target still runs by JIT-ing PTX, while a missing
 
 ```bash
 python examples/rocm_mlp.py
-python -m pytest tests/test_amd_integration.py -q
+python -m pytest -m rocm -q
 ```
+
+`-m rocm` covers both AMD files: `tests/test_amd_integration.py` (Inductor
+against eager) and `tests/test_amd_aot_integration.py` (packaging, manifest
+provenance, cross-process reload, and the architecture guard). Both skip
+themselves without a ROCm GPU, and the AOT file skips again without a ROCm
+installation.
 
 The equivalent API is:
 
@@ -112,9 +118,41 @@ python benchmarks/gpu.py \
   --dtype float16
 ```
 
-The initial integration covers local single-GPU inference. It does not yet
-provide AMD-specific AOT packages, multi-GPU execution, quantization, or CI on
-physical AMD hardware.
+## Packaging an artifact
+
+`aot_inductor` accepts an AMD target and writes a `.lm7` the way it does for
+NVIDIA:
+
+```bash
+lm7 model export hf://HuggingFaceTB/SmolLM2-135M-Instruct artifacts/mi300x.lm7 \
+  --target amd --backend aot_inductor
+```
+
+The wrapper build needs a ROCm installation on the host — the PyTorch ROCm wheel
+links against `/opt/rocm` rather than bundling it — and LM7 checks for one
+before packaging starts, so a missing install is a named refusal rather than an
+error from inside `g++`. Set `ROCM_HOME` if it lives somewhere else. This is the
+counterpart of the `[cuda-aot]` extra on NVIDIA and not the same problem: the
+CUDA case is a *partial* toolkit where the wheel omits the compiler front end,
+while ROCm either is or is not installed.
+
+The manifest records `hip` and `gcn_architecture` where a CUDA artifact records
+`cuda` and `compute_capability`. That distinction is load-bearing rather than
+cosmetic: `torch.version.cuda` is `None` on ROCm and
+`torch.cuda.get_device_capability()` returns `(9, 4)` on a `gfx942`, so writing
+the CUDA fields would have produced a manifest claiming no runtime and an
+architecture — `sm94` — that no NVIDIA part has ever had.
+
+**Nothing on this page has been run on an AMD GPU**, including whether the
+wrapper links. See [artifact
+compatibility](aot-artifact-compatibility.md#scope).
+
+## Scope
+
+The initial integration covers local single-GPU inference. Multi-GPU execution,
+quantization (every mode is gated to NVIDIA and CPU — see
+[quantization](quantization.md)), and CI on physical AMD hardware are all
+absent.
 
 For a possible AMD-specific compiler path beyond TorchInductor, see the
 [MIGraphX evaluation plan](amd-migraphx.md).

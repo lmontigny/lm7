@@ -199,6 +199,34 @@ def test_nvidia_artifacts_record_what_they_were_built_against(monkeypatch):
     assert "Blackwell" in requirements["device_name"]
 
 
+def test_amd_artifacts_record_the_rocm_pair_and_not_the_cuda_one(monkeypatch):
+    """An AMD payload is as device-bound as a CUDA one, and was recording nothing.
+
+    Reusing the CUDA fields would have been worse than the gap it replaced:
+    `torch.version.cuda` is None on ROCm, and `get_device_capability` returns
+    (9, 4) for a gfx942, so the manifest would have claimed no runtime and an
+    `sm94` architecture that no NVIDIA part has ever had.
+    """
+    monkeypatch.setattr(
+        exporting,
+        "_rocm_device_requirements",
+        lambda: {
+            "hip": "7.0.51831",
+            "gcn_architecture": "gfx942",
+            "device_name": "AMD Instinct MI300X",
+        },
+    )
+
+    requirements = exporting._aot_inductor_requirements(parse_target("amd:gfx942"))
+    assert requirements["device_bound"] is True
+    assert requirements["hip"] == "7.0.51831"
+    assert requirements["gcn_architecture"] == "gfx942"
+    assert "MI300X" in requirements["device_name"]
+    # The two vendors' pairs never appear together.
+    assert "cuda" not in requirements
+    assert "compute_capability" not in requirements
+
+
 def test_load_failure_names_the_field_that_moved(monkeypatch, tmp_path):
     build_environment(monkeypatch, torch_version="2.13.0+cu130", cuda="13.0", architecture="sm89")
 
@@ -289,12 +317,15 @@ def test_load_artifact_reports_the_manifest_build_environment(tmp_path, monkeypa
     assert f"PyTorch {recorded}" in str(failure.value)
 
 
-def test_aot_export_rejects_unvalidated_target(tmp_path):
-    with pytest.raises(BackendUnavailableError, match="CPU, Apple Silicon, and NVIDIA"):
+def test_aot_export_rejects_unsupported_target(tmp_path):
+    """`amd:gfx942` used to be the case here and is now supported, so the refusal
+    is demonstrated on a vendor AOTInductor genuinely has no path to: PyTorch has
+    no Tenstorrent device for it to lower to."""
+    with pytest.raises(BackendUnavailableError, match="CPU, Apple Silicon, NVIDIA, and AMD"):
         lm7.export(
             model(),
             args=(torch.randn(1, 4),),
-            target="amd:gfx942",
+            target="tenstorrent:blackhole",
             backend="aot_inductor",
             output=tmp_path / "model.lm7",
         )
@@ -330,6 +361,92 @@ def test_cuda_support_requires_a_toolkit(monkeypatch, tmp_path):
     support = backend.supports(cuda_request())
     assert support.supported is True
     assert support.priority == 90
+
+
+def amd_request() -> CompileRequest:
+    return CompileRequest(
+        model=model(),
+        target=parse_target("amd:gfx942"),
+        mode="lazy",
+        transfers="automatic",
+        fallback="error",
+    )
+
+
+def test_amd_support_requires_a_rocm_installation(monkeypatch, tmp_path):
+    """The AMD counterpart of the CUDA toolkit gate, and not the same problem.
+
+    The CUDA case is a *partial* toolkit: the PyTorch wheel bundles the runtime
+    headers and omits the compiler front end, so LM7 has to find and splice in
+    the missing half. ROCm ships as one tree that either is or is not installed.
+    """
+    backend = AOTInductorBackend()
+    monkeypatch.setattr(aot_inductor, "_rocm_home", lambda: None)
+    support = backend.supports(amd_request())
+    assert support.supported is False
+    assert "ROCm" in support.reason
+    assert "ROCM_HOME" in support.reason
+
+    monkeypatch.setattr(aot_inductor, "_rocm_home", lambda: tmp_path)
+    support = backend.supports(amd_request())
+    assert support.supported is True
+    assert support.priority == 90
+
+
+def test_amd_compile_fails_before_packaging_without_rocm(monkeypatch, tmp_path):
+    monkeypatch.setattr(aot_inductor, "_rocm_home", lambda: None)
+
+    def unreachable(*args, **kwargs):
+        raise AssertionError("packaging must not start without a ROCm installation")
+
+    monkeypatch.setattr(torch._inductor, "aoti_compile_and_package", unreachable)
+    exported = torch.export.export(model(), (torch.randn(2, 4),))
+
+    with pytest.raises(CompilationError, match="no ROCm installation was found"):
+        AOTInductorBackend().compile_exported(
+            exported, tmp_path / "model.pt2", target=parse_target("amd:gfx942")
+        )
+
+
+def test_rocm_home_prefers_the_environment_over_the_default_root(monkeypatch, tmp_path):
+    monkeypatch.delenv("ROCM_HOME", raising=False)
+    monkeypatch.delenv("ROCM_PATH", raising=False)
+    monkeypatch.setattr(aot_inductor, "_ROCM_DEFAULT_ROOT", tmp_path / "absent")
+    assert aot_inductor._rocm_home() is None
+
+    installed = tmp_path / "opt-rocm"
+    installed.mkdir()
+    monkeypatch.setattr(aot_inductor, "_ROCM_DEFAULT_ROOT", installed)
+    assert aot_inductor._rocm_home() == installed
+
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    monkeypatch.setenv("ROCM_HOME", str(explicit))
+    assert aot_inductor._rocm_home() == explicit
+
+    # A path that does not exist is not an installation, so discovery continues.
+    monkeypatch.setenv("ROCM_HOME", str(tmp_path / "nowhere"))
+    assert aot_inductor._rocm_home() == installed
+
+
+def test_compute_capability_is_not_invented_for_a_rocm_host(monkeypatch):
+    """`torch.cuda.get_device_capability` answers on ROCm -- it returns (9, 4) on
+    a gfx942 -- so calling it unconditionally would record `sm94`, an NVIDIA
+    architecture that has never existed."""
+    monkeypatch.setattr(torch.version, "hip", "7.0-test")
+    assert aot_inductor._current_compute_capability() is None
+
+
+def test_environment_mismatch_hint_names_rocm_for_an_amd_artifact():
+    """The hint told every reader to check their CUDA runtime. For an artifact
+    built on ROCm that names a runtime the host does not have and never had."""
+    hint = aot_inductor._environment_mismatch_hint(
+        {"torch": "2.13.0+rocm7.0", "hip": "7.0", "gcn_architecture": "gfx942"}
+    )
+    assert "ROCm runtime 7.0" in hint
+    assert "GPU architecture gfx942" in hint
+    assert "one ROCm runtime" in hint
+    assert "CUDA" not in hint
 
 
 def test_cuda_compile_fails_before_packaging_without_a_toolkit(monkeypatch, tmp_path):

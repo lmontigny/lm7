@@ -423,3 +423,13 @@ seconds above are large enough not to be in question.
 - **The cross-architecture result is one direction.** An `sm89` package fails on
   `sm120`; the reverse — a Blackwell package on Ada — is not measured, and there
   is no reason to expect it to fare better.
+- **AMD can now be packaged and has never been packaged.** `aot_inductor`
+  accepts `target="amd"` and writes a manifest recording the ROCm pair — `hip`
+  and `gcn_architecture` — rather than the CUDA one, because
+  `torch.version.cuda` is `None` on ROCm and `get_device_capability` returns
+  `(9, 4)` for a `gfx942`, which would have been written as an `sm94` that no
+  NVIDIA part has ever had. Every claim on this page comes from an NVIDIA or a
+  CPU host; nothing here has been observed on AMD, including whether the wrapper
+  links at all. The architecture guard has been wired for `amd` since it was
+  written — `_ARCHITECTURE_BOUND_VENDORS` lists it — so until now it guarded a
+  payload nothing could produce.
