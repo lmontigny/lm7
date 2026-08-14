@@ -6,6 +6,10 @@ evaluating LM7.
 
 - [`idea_on_the_fly.txt`](idea_on_the_fly.txt) — running backlog of ideas and
   next steps, added to between PRs.
+- [`mi300x-session.md`](mi300x-session.md) — runbook for a two-hour rented
+  AMD MI300X: preflight gates, the download queue, and the tiers in priority
+  order. Session-specific; the general procedure is
+  [docs/hardware-validation.md](../docs/hardware-validation.md#gpu-hosts).
 - [`lm7_codex_brief.txt`](lm7_codex_brief.txt) — the original development brief
   used to bootstrap the project.
 - [`ZML_details.md`](ZML_details.md) — technical notes on a third-party
