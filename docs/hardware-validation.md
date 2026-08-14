@@ -16,6 +16,21 @@ For a new CPU host, collect three levels of evidence:
 If the docs mention an LLM, run an LLM. A synthetic MLP validates the compiler
 path, not language-model coverage.
 
+A GPU host needs the same three, plus two the CPU procedure has no equivalent
+of, and both come from the machine being **metered**:
+
+- **The order is chosen so that losing the box early still leaves a result.**
+  Identity and detection first, because they cost seconds and are what a
+  hardware row is actually made of; weights last, because a checkpoint download
+  can consume the whole rental. See [GPU hosts](#gpu-hosts).
+- **Getting the JSON off the box is a step, not an afterthought.** It is the one
+  failure that wastes the entire rental, and `rsync` is not present on these
+  images.
+
+`fallback="error"` matters more on a GPU than on a CPU: a silent fall-back to
+eager still produces plausible latencies on an accelerator, and reads as a
+successful compile.
+
 ## Setup
 
 Start from the exact branch you plan to document:
@@ -206,6 +221,91 @@ python benchmarks/aot_artifact_lifecycle.py run --model smollm2 \
 Every mismatch case should be `rejected` with a message naming the cause. A case
 that loads is the finding.
 
+## GPU hosts
+
+Everything above applies. What follows is the GPU-specific ordering, written for
+a rented, metered box where the budget is wall-clock rather than effort.
+
+### Before the clock starts
+
+Land the code locally. A rented GPU is a data-collection window, not a
+development window — `CLAUDE.md` puts it as *"collect JSON into `artifacts/` on
+the box and author docs locally afterwards; don't write prose on a rented GPU."*
+Anything that needs a compiler, a test run, or a second opinion should already be
+on a branch before the first SSH.
+
+### Identity, first, because it is cheap and it is the row
+
+```bash
+nvidia-smi || rocminfo | grep gfx     # whichever vendor this is
+git rev-parse --short HEAD
+lm7 doctor --json  > artifacts/<host>/doctor.json
+lm7 targets --json > artifacts/<host>/targets.json
+lm7 explain --target <vendor> --json
+```
+
+`--json` is where the detail lives: `lm7 targets` prints the generation and
+precision line, and the JSON additionally carries `capabilities` (`hip`,
+`gcn_arch_name`, `compute_capability`, `fp8_format`) and `cuda_build`, which
+answers whether the installed wheel has kernels for this exact chip. Save both
+files — they are what a hardware row is written from weeks later.
+
+`lm7 explain` is a real check, not a formality: it resolves the target against
+detected hardware, so on a host without that vendor it exits 2 with
+`Requested target ... was not found locally`. Its success is evidence.
+
+### One real compile, then the vendor's integration tests
+
+```bash
+python -m pytest -m cuda -q       # or -m rocm, -m mps, -m tpu
+```
+
+### The matrix, which is where comparable numbers come from
+
+[`benchmarks/nvidia_matrix.py`](../benchmarks/nvidia_matrix.py) is the per-GPU
+suite, and despite the name it takes `--target amd` as well — see [the NVIDIA
+validation suite](nvidia-validation.md#it-describes-an-amd-gpu-too-which-is-the-point-of-having-it).
+Use it rather than `benchmarks/gpu.py` or `benchmarks/moe.py` for anything that
+will be compared against another card: **the harnesses disagree by 2.3x** on the
+same card and model, so mixing them can invert a conclusion. Whatever you
+report, name the harness that produced it.
+
+```bash
+python benchmarks/nvidia_matrix.py --plan core | while read -r args; do
+  python benchmarks/nvidia_matrix.py $args --target <vendor> --results-dir artifacts/<host>
+done
+python benchmarks/nvidia_matrix.py --summarize artifacts/<host>
+```
+
+One cell per process is deliberate — a compiler can abort the interpreter and a
+large model can poison the device context for everything after it — and each
+cell writes its JSON immediately, so a box reclaimed mid-sweep costs one cell
+rather than the run. Cells that fail record `works: false` with a traceback;
+cells for a path this vendor never had record `skipped` with a reason. Do not
+read the second as the first.
+
+Other plans, in rough order of cost: `artifacts`, `quant`, `large`, `moe`.
+
+### Weights last, and queued in the background from minute zero
+
+Downloads are usually the binding constraint, and they are the one thing that
+can run while everything above is happening. Queue them smallest-first so a
+short session still lands the small ladder, and treat anything above ~15 GB as
+optional. Sizing traps worth knowing before you plan around a name: Qwen3-1.7B
+is 2.03B parameters, Mixtral-8x7B is ~93 GB at BF16, and the Llama checkpoints
+need the `unsloth/` mirrors because the Meta repos are gated and a rented box
+has no HF token.
+
+### Get the results off the box
+
+```bash
+tar czf - artifacts/<host> | ssh <local> 'cat > <host>-artifacts.tar.gz'
+```
+
+`rsync` is not installed on these images. Do this before the clock runs out, not
+after the last benchmark — a sweep that finished and was never retrieved is
+worth exactly as much as one that never ran.
+
 ## What to write down
 
 Record:
@@ -216,7 +316,8 @@ Record:
 - installed runtime versions, for example PyTorch and OpenVINO;
 - tests and commands run;
 - median latencies only with command shape, model, batch, warmup, repeats, dtype,
-  and whether the run was a bounded smoke benchmark or a full sweep;
+  **which harness produced them**, and whether the run was a bounded smoke
+  benchmark or a full sweep;
 - skipped paths and why.
 
 Do not add a hardware row for a failed setup. Record the blocker in the relevant
