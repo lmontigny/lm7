@@ -113,6 +113,7 @@ file stays a index rather than a second, drifting description.
 | [#41](https://github.com/lmontigny/lm7/pull/41) | Describe the host CPU instead of guessing at it |
 | [#57](https://github.com/lmontigny/lm7/pull/57) | Add Hexagon toolchain diagnostics |
 | [#135](https://github.com/lmontigny/lm7/pull/135) | Count Arm cores from the place the kernel actually publishes them |
+| [#171](https://github.com/lmontigny/lm7/pull/171) | Say what an AMD GPU is, before one has been seen |
 
 ## CI
 
