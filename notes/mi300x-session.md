@@ -46,11 +46,22 @@ ls -d /opt/rocm
   against it rather than bundling it; LM7 checks for it before packaging and
   refuses by name if it is absent.
 
-Then, without replacing torch:
+Then, without replacing torch. `uv` is often absent on a vendor ROCm image, so
+plain `pip` is the fallback rather than something to go install:
 
 ```bash
-uv pip install -e ".[dev,hf]"
+uv pip install -e ".[dev,hf]" || python -m pip install -e ".[dev,hf]"
 python -c "import torch; assert torch.version.hip, 'the install replaced the ROCm torch'"
+```
+
+Put the Hugging Face cache on the data disk before downloading anything. The
+list below is ~54 GB to the cut line and ~210 GB in full, and a container boot
+disk is usually 20–100 GB:
+
+```bash
+df -h /
+export HF_HOME=/workspace/hf-cache      # wherever the large volume is mounted
+mkdir -p "$HF_HOME"
 ```
 
 ## The download queue, started at minute zero
@@ -74,6 +85,37 @@ short session still lands the small ladder.
 
 Llama needs the `unsloth/` mirrors — the Meta repos are gated and a rented box
 has no HF token. Nothing else in the list is gated, `mistralai/` included.
+
+**Filter the download or pay for it twice.** Many of these repos carry both
+`.safetensors` and the legacy `pytorch_model*.bin` for the same weights, and a
+bare `hf download` takes both — which turns Mixtral-8x7B from ~93 GB into ~186 GB
+and would consume the entire rental on its own. `--include` is the difference:
+
+```bash
+cd "$HF_HOME"
+cat > queue.txt <<'EOF'
+HuggingFaceTB/SmolLM2-135M-Instruct
+LiquidAI/LFM2.5-230M
+LiquidAI/LFM2.5-350M
+Qwen/Qwen3.5-0.8B
+unsloth/Llama-3.2-1B-Instruct
+Qwen/Qwen3-1.7B
+allenai/OLMoE-1B-7B-0924-Instruct
+mistralai/Mistral-7B-Instruct-v0.3
+unsloth/Llama-3.1-8B-Instruct
+EOF
+nohup bash -c 'while read -r repo; do
+  hf download "$repo" --include "*.safetensors" "*.json" "*.txt" "*.model"
+done < queue.txt' > download.log 2>&1 &
+```
+
+`hf` is the current name of the CLI (`huggingface-cli` still works, and is what
+older notes use). Check progress with `tail -f "$HF_HOME/download.log"` and
+`du -sh "$HF_HOME"`; a tier that needs a model not yet on disk should be
+skipped and returned to, not waited on.
+
+Add `Qwen/Qwen3-30B-A3B` and `mistralai/Mixtral-8x7B-Instruct-v0.1` to the end
+of the queue only once the first nine are down and there is disk for them.
 
 ## Tiers
 
