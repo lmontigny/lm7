@@ -41,6 +41,7 @@ import torch
 import lm7
 from lm7.backends.inductor import cudagraph_skips, cudagraphs_requested
 from lm7.detection import (
+    amd_fp8_format,
     compute_capability,
     cuda_build_targets,
     precision_support,
@@ -107,6 +108,24 @@ PATHS: dict[str, dict[str, Any]] = {
     # convert and are refused rather than silently measured unquantized.
     "inductor-fp8": {"backend": "inductor", "quantize": "fp8"},
     "inductor-fp8-dynamic": {"backend": "inductor", "quantize": "fp8-dynamic"},
+}
+
+# Paths that only exist on NVIDIA, and why. Recorded as a skip with a reason
+# rather than run and allowed to fail: a `works: false` cell with a traceback
+# reads as "this broke here", and the truth is that the path was never available
+# on this vendor at all. The distinction matters most in a summary table, where
+# the two look identical.
+#
+# `tensorrt` refuses a ROCm PyTorch build in its own probe before it looks at the
+# target, and ONNX Runtime's LM7 backend maps only CPU and CUDA execution
+# providers -- the MIGraphX provider exists upstream and LM7 does not wire it.
+_VENDOR_ONLY_PATHS: dict[str, tuple[frozenset[str], str]] = {
+    "tensorrt": (frozenset({"nvidia"}), "TensorRT requires NVIDIA CUDA"),
+    "tensorrt-export": (frozenset({"nvidia"}), "TensorRT requires NVIDIA CUDA"),
+    "onnxruntime": (
+        frozenset({"nvidia"}),
+        "LM7's ONNX Runtime backend maps CPU and CUDA providers only",
+    ),
 }
 
 CAUSAL_LM_MODELS = ("smollm2", "llama32-1b", "llama31-8b", *MOE_MODELS)
@@ -229,6 +248,20 @@ def environment(target_name: str = "nvidia") -> dict[str, Any]:
 
     `supported_precisions` is the hardware's answer and `cuda_build` is the
     wheel's -- see `lm7.detection.cuda_build_targets` for why those differ.
+
+    ROCm reaches the GPU through the same `torch.cuda` API, so `--target amd`
+    runs here unchanged. What it used to produce was a block with `gpu` filled in
+    and `compute_capability`, `driver`, `cuda`, `supported_precisions` and
+    `cuda_build` all empty -- a set of results with no record of what produced
+    them, which is the one thing this function exists to prevent. `architecture`
+    and `hip` are the AMD answers to the first two, and `fp8_format` is here
+    because "fp8" names a different encoding on CDNA 3 than it does on any
+    NVIDIA card; see `lm7.detection.amd_fp8_format`.
+
+    `compute_capability` stays NVIDIA-only rather than being generalized, because
+    the environment.json files already sitting beside the H100 and Blackwell
+    results use it with that meaning. `architecture` is the key that answers for
+    both vendors.
     """
 
     def module_version(name: str) -> str | None:
@@ -240,18 +273,25 @@ def environment(target_name: str = "nvidia") -> dict[str, Any]:
     target = resolve_target(target_name)
     capability = compute_capability(target)
     precisions = precision_support(target)
+    hip = getattr(torch.version, "hip", None)
+    cuda = getattr(torch.version, "cuda", None)
     device_name = None
-    driver = None
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(target.ordinal or 0)
-        # `driver_version` exists only on newer torch; the CUDA runtime version
-        # is always there and is the more portable of the two.
-        driver = getattr(torch.version, "cuda", None)
     return {
         "gpu": device_name,
+        "vendor": target.vendor,
+        # Vendor-neutral: `sm90` or `gfx942`, whichever this card reports.
+        "architecture": target.architecture,
         "compute_capability": f"sm{capability}" if capability is not None else None,
-        "driver": driver,
-        "cuda": getattr(torch.version, "cuda", None),
+        # `driver_version` exists only on newer torch; the runtime version is
+        # always there and is the more portable of the two. On ROCm that is
+        # `torch.version.hip` and `torch.version.cuda` is None, so recording only
+        # the CUDA one would leave an AMD report claiming no runtime at all.
+        "driver": cuda if cuda is not None else hip,
+        "cuda": cuda,
+        "hip": hip,
+        "fp8_format": amd_fp8_format(target),
         "pytorch": torch.__version__,
         "triton": module_version("triton"),
         "torchao": module_version("torchao"),
@@ -345,6 +385,14 @@ def run_cell(arguments: argparse.Namespace) -> dict[str, Any]:
         "host": platform.node(),
         "versions": _versions(backend),
     }
+
+    vendors, reason = _VENDOR_ONLY_PATHS.get(arguments.path, (None, ""))
+    if vendors is not None and target.vendor not in vendors:
+        # Returned before the model is built, because downloading an 8B
+        # checkpoint to record a skip would be the expensive way to learn this.
+        record["works"] = False
+        record["skipped"] = f"{arguments.path} is unavailable on {target.vendor}: {reason}."
+        return record
 
     model, inputs = build(arguments.model, dtype)
     record["parameter_count"] = sum(p.numel() for p in model.parameters())
@@ -495,7 +543,8 @@ def plan(name: str) -> list[list[str]]:
             for model in ("mlp", "resnet18", "bert", "smollm2")
         ]
     raise SystemExit(
-        f"Unknown plan {name!r}; choose core, artifacts, quant, large, tensorrt or onnxruntime."
+        f"Unknown plan {name!r}; choose core, artifacts, quant, large, moe, tensorrt "
+        "or onnxruntime."
     )
 
 
@@ -506,7 +555,11 @@ def summarize(directory: Path) -> str:
     cells = [record for record in records if "model" in record]
     if not cells:
         return f"No cells in {directory}."
-    lines = [f"{len(cells)} cells, {sum(1 for c in cells if c.get('works'))} ok"]
+    skipped = sum(1 for c in cells if c.get("skipped"))
+    lines = [
+        f"{len(cells)} cells, {sum(1 for c in cells if c.get('works'))} ok"
+        + (f", {skipped} skipped (path unavailable on this vendor)" if skipped else "")
+    ]
     header = f"{'model':>12} {'path':>22} {'status':<10} {'median ms':>10} {'vram GB':>8}  parity"
     lines += [header, "-" * len(header)]
     for cell in sorted(cells, key=lambda c: (c["model"], c["path"])):
@@ -519,7 +572,14 @@ def summarize(directory: Path) -> str:
         latency_text = "-" if latency is None else f"{latency:.3f}"
         vram_text = "-" if not vram else f"{vram / 1e9:.2f}"
         diff_text = "-" if diff is None else f"{diff:.2e}"
-        status = "ok" if cell.get("works") else f"FAIL {cell.get('error_type', '')}".strip()
+        # A skip is not a failure, and a summary that renders it as one invites
+        # exactly the wrong conclusion about a vendor that never had the path.
+        if cell.get("works"):
+            status = "ok"
+        elif cell.get("skipped"):
+            status = "skip"
+        else:
+            status = f"FAIL {cell.get('error_type', '')}".strip()
         lines.append(
             f"{cell['model']:>12} {cell['path']:>22} "
             f"{status:<10} {latency_text:>10} {vram_text:>8}  {diff_text}"
@@ -589,7 +649,12 @@ def main() -> None:
         }
 
     destination.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    status = "ok" if record.get("works") else f"FAIL {record.get('error_type')}"
+    if record.get("works"):
+        status = "ok"
+    elif record.get("skipped"):
+        status = f"SKIP {record['skipped']}"
+    else:
+        status = f"FAIL {record.get('error_type')}"
     latency = record.get("latency_median_ms")
     vram = record.get("peak_vram_bytes")
     print(
