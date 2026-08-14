@@ -9,6 +9,8 @@ from lm7 import detection
 from lm7.detection import (
     _detect_tenstorrent_targets,
     _detect_tpu_targets,
+    amd_fp8_format,
+    amd_generation,
     compute_capability,
     cuda_build_targets,
     detect_cpu_target,
@@ -50,7 +52,47 @@ def test_rocm_device_reports_normalized_gfx_architecture(monkeypatch):
     assert device.capabilities == {
         "hip": "7.0-test",
         "gcn_arch_name": "gfx1100:sramecc+:xnack-",
+        "generation": "RDNA 3",
+        "precision": {
+            "fp32": "native",
+            "fp16": "native",
+            "bf16": "native",
+            "int8": "native",
+            "fp8": "absent",
+            "fp4": "absent",
+        },
     }
+    # RDNA 3 has no FP8, so the qualifier is absent rather than reported as some
+    # default encoding.
+    assert "fp8_format" not in device.capabilities
+
+
+def test_mi300x_detection_reports_cdna3_and_the_fnuz_fp8_qualifier(monkeypatch):
+    """The part this was written for, and the one the mocked case above is not.
+
+    Everything asserted here is predicted from AMD's ISA documentation and has
+    never been run: no AMD GPU has executed LM7. A real gfx942 either confirms
+    this test or corrects it.
+    """
+    properties = SimpleNamespace(
+        name="AMD Instinct MI300X",
+        total_memory=192 * 1024**3,
+        gcnArchName="gfx942:sramecc+:xnack-",
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda ordinal: properties)
+    monkeypatch.setattr(torch.version, "hip", "7.0-test")
+
+    device = next(item for item in detect_targets() if item.target.vendor == "amd")
+
+    assert str(device.target) == "amd:gfx942"
+    assert device.capabilities["generation"] == "CDNA 3"
+    assert device.capabilities["precision"]["fp8"] == "native"
+    assert device.capabilities["precision"]["fp4"] == "absent"
+    # The whole point of reporting this: "fp8 native" on gfx942 and on sm90 name
+    # different encodings, so the two numbers are not interchangeable.
+    assert device.capabilities["fp8_format"] == "fnuz"
 
 
 def test_tpu_detection_uses_pjrt_runtime(monkeypatch):
@@ -621,6 +663,78 @@ def test_nvidia_generation_declines_rather_than_guessing():
     assert nvidia_generation(TargetSpec("cpu", "cpu", architecture="x86_64")) is None
 
 
+@pytest.mark.parametrize(
+    ("architecture", "expected"),
+    [
+        ("gfx908", "CDNA 1"),
+        ("gfx90a", "CDNA 2"),
+        ("gfx942", "CDNA 3"),
+        ("gfx950", "CDNA 4"),
+        ("gfx1100", "RDNA 3"),
+        ("gfx1201", "RDNA 4"),
+    ],
+)
+def test_amd_generation_names_the_isa_family(architecture, expected):
+    assert amd_generation(TargetSpec("amd", "gpu", architecture=architecture)) == expected
+
+
+def test_amd_generation_is_an_exact_map_because_gfx_numbers_do_not_order():
+    """The property that makes this table a dict and not a threshold list.
+
+    `sm120 > sm89` and the larger number is the more capable part. `gfx1100 >
+    gfx942` and the larger number is a consumer RDNA 3 chip with no FP8 at all,
+    while the smaller is a datacenter CDNA 3 one that has it. A descending
+    threshold table like `_NVIDIA_GENERATIONS` would report the wrong family for
+    every Instinct part.
+    """
+    assert amd_generation(TargetSpec("amd", "gpu", architecture="gfx1100")) == "RDNA 3"
+    assert amd_generation(TargetSpec("amd", "gpu", architecture="gfx942")) == "CDNA 3"
+    rdna3 = precision_support(TargetSpec("amd", "gpu", architecture="gfx1100"))
+    cdna3 = precision_support(TargetSpec("amd", "gpu", architecture="gfx942"))
+    assert rdna3["fp8"] == "absent"
+    assert cdna3["fp8"] == "native"
+
+    # And it declines rather than guessing, exactly as the NVIDIA table does.
+    assert amd_generation(TargetSpec("amd", "gpu", architecture="gfx1250")) is None
+    assert amd_generation(TargetSpec("amd", "gpu")) is None
+    assert amd_generation(nvidia("sm90")) is None
+
+
+def test_amd_fp8_format_separates_the_two_encodings():
+    """Reporting fp8 as native is not one claim but two. CDNA 3 implements the `fnuz` variants --
+    no infinities, one NaN, a different exponent bias -- so `torch.float8_e4m3fnuz`
+    is the dtype that exists there, while sm89+ and CDNA 4 use the OCP `e4m3`.
+    Without this qualifier an FP8 number from a MI300X would compare directly
+    against one from an H100, and they were not produced in the same format."""
+    assert amd_fp8_format(TargetSpec("amd", "gpu", architecture="gfx942")) == "fnuz"
+    assert amd_fp8_format(TargetSpec("amd", "gpu", architecture="gfx950")) == "ocp"
+    assert amd_fp8_format(TargetSpec("amd", "gpu", architecture="gfx1201")) == "ocp"
+    # No FP8 silicon means no encoding to name.
+    assert amd_fp8_format(TargetSpec("amd", "gpu", architecture="gfx90a")) is None
+    assert amd_fp8_format(TargetSpec("amd", "gpu", architecture="gfx1100")) is None
+    assert amd_fp8_format(nvidia("sm90")) is None
+
+
+def test_amd_precision_never_reports_emulated():
+    """`emulated` exists because a Tesla T4 fakes BF16 and reports success. No
+    equivalent case is known on any gfx part in the table, and inventing one
+    would be the guess this file refuses to make -- so a format is native or it
+    is absent."""
+    for architecture in ("gfx906", "gfx908", "gfx90a", "gfx942", "gfx1100"):
+        precision = precision_support(TargetSpec("amd", "gpu", architecture=architecture))
+        assert "emulated" not in precision.values()
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx906"))["bf16"] == "absent"
+
+
+def test_amd_and_nvidia_precision_answer_the_same_keys():
+    """A row from one card has to compare against a row from another, and
+    `benchmarks/nvidia_matrix.py` writes both into the same `supported_precisions`
+    field of one environment.json."""
+    assert set(precision_support(TargetSpec("amd", "gpu", architecture="gfx942"))) == set(
+        precision_support(nvidia("sm90"))
+    )
+
+
 def test_compute_capability_orders_blackwell_above_ada():
     """Every gate in LM7 compares these as plain integers, which is only correct
     because CUDA capabilities sort that way as concatenated digits. This is the
@@ -657,21 +771,41 @@ def test_blackwell_reports_every_format_as_native():
 
 
 def test_precision_support_is_empty_when_it_cannot_be_known():
-    """An unqualified nvidia target has no architecture until it resolves, and no
-    other vendor's capability number is known to LM7. Reporting "native" for a
-    CPU whose AVX-512 BF16 support was never probed would be the same unmeasured
-    claim this report exists to prevent."""
+    """An unqualified target has no architecture until it resolves, and no vendor
+    outside NVIDIA and AMD has a capability string LM7 knows. Reporting "native"
+    for a CPU whose AVX-512 BF16 support was never probed would be the same
+    unmeasured claim this report exists to prevent."""
     assert precision_support(nvidia(None)) == {}
-    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx942")) == {}
+    assert precision_support(TargetSpec("amd", "gpu")) == {}
     assert precision_support(TargetSpec("cpu", "cpu", architecture="x86_64")) == {}
+    # A gfx string outside the table declines for the same reason a capability
+    # newer than _NVIDIA_GENERATIONS does.
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx1250")) == {}
 
 
-def test_cuda_build_targets_is_nvidia_only():
-    """The arch list describes a CUDA build, so it says nothing about anything
-    else. Returning a value for a CPU or an AMD GPU would invite reading it as
-    a property of that device."""
+def test_cuda_build_targets_is_gpu_only():
+    """The arch list describes a GPU build. ROCm answers through the same API, so
+    an AMD target gets a report; a CPU has no arch list to describe."""
     assert cuda_build_targets(TargetSpec("cpu", "cpu", architecture="x86_64")) is None
-    assert cuda_build_targets(TargetSpec("amd", "gpu", architecture="gfx942")) is None
+    assert cuda_build_targets(TargetSpec("apple", "gpu")) is None
+
+
+def test_cuda_build_targets_answers_the_gfx_question_on_rocm(monkeypatch):
+    """The question this function exists for is sharper on AMD than on NVIDIA: a
+    missing `sm_` target still runs by JIT-ing PTX, and a missing `gfx` target is
+    a hard "no kernel image is available" at load. Predicted, not measured."""
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["gfx906", "gfx90a", "gfx942"])
+    report = cuda_build_targets(TargetSpec("amd", "gpu", architecture="gfx942"))
+    assert report is not None
+    assert report["native_kernels"] is True
+    # ROCm carries the equivalent of sm_90a as `:sramecc+:xnack-` suffixes on the
+    # target string, not as a separate architecture, so None means "this vendor
+    # does not answer that question" rather than "no".
+    assert report["architecture_specific"] is None
+
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["gfx906", "gfx90a"])
+    missing = cuda_build_targets(TargetSpec("amd", "gpu", architecture="gfx942"))
+    assert missing["native_kernels"] is False
 
 
 def test_cuda_build_targets_separates_sm90_from_sm90a(monkeypatch):

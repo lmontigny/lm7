@@ -381,6 +381,18 @@ reason, and the pattern does not generalise.
   [Android device testing](android-device-testing.md).
 - AMD ROCm, Intel GPU/XPU, OpenXLA TPU, and Tenstorrent are initial
   single-process integrations **without physical-hardware CI**.
+- **`lm7 targets` now names an AMD generation and its precision support, and
+  every one of those values is a prediction.** The `gfx` tables in
+  `src/lm7/detection.py` are read from AMD's ISA documentation, pinned by unit
+  tests, and confirmed by nothing: no AMD GPU has executed LM7. The NVIDIA
+  counterpart earned the same report on three generations of real silicon, so
+  the two lines look alike in the terminal and are not equally evidenced. Two
+  things it is deliberately careful about — `gfx` numbers do not order by
+  capability the way `smXX` does, so the table matches exactly rather than
+  comparing; and `fp8` on CDNA 3 is the `fnuz` encoding rather than the OCP one
+  `sm89`+ uses, reported separately as `fp8_format` so a MI300X FP8 number is
+  not read as comparable to an H100 one. See [AMD GPU
+  support](amd-rocm.md#what-lm7-targets-says-about-the-card-and-how-much-to-trust-it).
 - OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU
   v6e — which the rest of that list has not. It still has no CI, and one chip
   cannot say anything about multi-chip behaviour. See

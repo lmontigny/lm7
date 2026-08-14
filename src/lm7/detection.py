@@ -35,6 +35,60 @@ _NVIDIA_GENERATIONS: tuple[tuple[int, str], ...] = (
     (50, "Maxwell"),
 )
 
+# The AMD counterpart, and it cannot be a threshold table like the one above.
+# CUDA capabilities sort as concatenated digits, so `>=` orders them correctly.
+# `gfx` numbers do not: `gfx1100` is a consumer RDNA 3 part and `gfx942` is a
+# datacenter CDNA 3 one, so the larger number is the *less* capable chip for
+# every format this file reports. The two lines are separate product families
+# that happen to share a numbering space, so the mapping is exact and an
+# unrecognized string returns None rather than falling through to a neighbour.
+#
+# `gfx90a` is why the key is the string and not an int: the last position is
+# hexadecimal, so CDNA 2 does not parse as a number at all.
+#
+# Every value here is read from AMD's ISA documentation, and none of it has been
+# confirmed against hardware -- LM7 has never run on an AMD GPU. See
+# docs/limitations.md#hardware-validation.
+_AMD_GENERATIONS: dict[str, str] = {
+    "gfx906": "Vega 20",
+    "gfx908": "CDNA 1",
+    "gfx90a": "CDNA 2",
+    "gfx942": "CDNA 3",
+    "gfx950": "CDNA 4",
+    "gfx1030": "RDNA 2",
+    "gfx1100": "RDNA 3",
+    "gfx1101": "RDNA 3",
+    "gfx1102": "RDNA 3",
+    "gfx1200": "RDNA 4",
+    "gfx1201": "RDNA 4",
+}
+
+# Which `gfx` architectures compute each format, as the sets that differ. Formats
+# every entry in `_AMD_GENERATIONS` handles natively -- fp32, fp16 -- are not
+# listed, and neither is fp4, which no shipping AMD part in this table has.
+#
+# The CDNA line gained bf16 matrix instructions with CDNA 1 and FP8 with CDNA 3;
+# the RDNA line gained bf16 with RDNA 3 (WMMA) and FP8 with RDNA 4. Vega 20 has
+# neither and is here because ROCm still supports it.
+_AMD_BF16 = frozenset(
+    {"gfx908", "gfx90a", "gfx942", "gfx950", "gfx1100", "gfx1101", "gfx1102", "gfx1200", "gfx1201"}
+)
+_AMD_INT8 = frozenset(_AMD_GENERATIONS) - {"gfx906"}
+_AMD_FP8 = frozenset({"gfx942", "gfx950", "gfx1200", "gfx1201"})
+
+# FP8 is one name for two incompatible encodings, and this is the difference
+# between "AMD has fp8 too" and a comparable measurement. CDNA 3 implements the
+# `fnuz` variants -- no infinities, one NaN, and an exponent bias one greater
+# than OCP's -- so `torch.float8_e4m3fnuz` is the dtype that exists there, not
+# the `torch.float8_e4m3fn` that `sm89`+ implements. CDNA 4 and RDNA 4 moved to
+# the OCP encoding NVIDIA already used.
+#
+# Consequence for anything reading this: an FP8 number from `gfx942` and one from
+# `sm90` were not produced in the same format, and a kernel written against one
+# encoding does not run against the other. Unconfirmed on hardware, like the rest
+# of this table.
+_AMD_FP8_FNUZ = frozenset({"gfx942"})
+
 # Whether the hardware computes a format or fakes it. The distinction matters
 # because torch will happily run an emulated format and report success: a Tesla
 # T4 answers True to `torch.cuda.is_bf16_supported()` and then emulates BF16,
@@ -77,12 +131,18 @@ def detect_targets() -> list[DeviceInfo]:
                     architecture = f"sm{major}{minor}"
                     capabilities["compute_capability"] = (major, minor)
                 spec = TargetSpec(vendor, "gpu", architecture, ordinal=ordinal)
-                generation = nvidia_generation(spec)
+                generation = amd_generation(spec) if is_rocm else nvidia_generation(spec)
                 if generation is not None:
                     capabilities["generation"] = generation
                 precisions = precision_support(spec)
                 if precisions:
                     capabilities["precision"] = precisions
+                # Reported beside the precision map rather than inside it, because
+                # it qualifies one entry rather than adding one: `fp8: native` on
+                # gfx942 and on sm90 are different encodings. See `amd_fp8_format`.
+                fp8_format = amd_fp8_format(spec)
+                if fp8_format is not None:
+                    capabilities["fp8_format"] = fp8_format
                 devices.append(
                     DeviceInfo(
                         spec,
@@ -280,16 +340,67 @@ def nvidia_generation(target: TargetSpec) -> str | None:
     return None
 
 
+def gcn_architecture(target: TargetSpec) -> str | None:
+    """The ``gfxNNN`` string for an AMD target, or None when it is not stated.
+
+    The counterpart to `compute_capability`, and it stays a string on purpose:
+    `gfx90a` does not parse as an integer, and `gfx` numbers do not order by
+    capability anyway -- see `_AMD_GENERATIONS`. Callers match rather than
+    compare.
+    """
+    architecture = target.architecture
+    if target.vendor != "amd" or not architecture or not architecture.startswith("gfx"):
+        return None
+    return architecture
+
+
+def amd_generation(target: TargetSpec) -> str | None:
+    """The architecture generation for an AMD target, for example ``CDNA 3``.
+
+    Returns None for a non-AMD target, an unqualified one, or a `gfx` string
+    outside `_AMD_GENERATIONS`. AMD publishes no single marketing name spanning
+    both product lines, so this reports the ISA family -- CDNA for the Instinct
+    parts, RDNA for the Radeon ones -- which is the name their own ISA documents
+    use.
+    """
+    architecture = gcn_architecture(target)
+    if architecture is None:
+        return None
+    return _AMD_GENERATIONS.get(architecture)
+
+
+def amd_fp8_format(target: TargetSpec) -> str | None:
+    """Which FP8 encoding this AMD architecture implements, or None if it has no FP8.
+
+    See `_AMD_FP8_FNUZ`: "fp8" names two incompatible encodings, and reporting
+    only that the format is native would equate a `gfx942` measurement with an
+    `sm90` one.
+    """
+    architecture = gcn_architecture(target)
+    if architecture is None or architecture not in _AMD_FP8:
+        return None
+    return "fnuz" if architecture in _AMD_FP8_FNUZ else "ocp"
+
+
 def precision_support(target: TargetSpec) -> dict[str, str]:
     """Which numeric formats this target computes natively, fakes, or lacks.
 
-    Only NVIDIA is characterized, because it is the one vendor whose capability
-    number LM7 already knows. Everything else returns an empty mapping rather
-    than a guess: reporting "native" for a CPU whose AVX-512 BF16 support was
-    never probed would be exactly the kind of unmeasured claim this reports
-    against. An unqualified `nvidia` target also returns empty, since its
-    architecture is unknown until it resolves against real hardware.
+    NVIDIA and AMD are characterized, because they are the vendors whose
+    architecture string LM7 already knows. Everything else returns an empty
+    mapping rather than a guess: reporting "native" for a CPU whose AVX-512 BF16
+    support was never probed would be exactly the kind of unmeasured claim this
+    reports against. An unqualified `nvidia` or `amd` target also returns empty,
+    since its architecture is unknown until it resolves against real hardware.
+
+    Both vendors answer with the same six keys, so a row from one card compares
+    against a row from another. What that comparison does *not* carry is the FP8
+    encoding, which differs between them -- read `amd_fp8_format` alongside this.
+
+    The NVIDIA half is confirmed on three generations of real silicon. The AMD
+    half is read from ISA documentation and has never been run.
     """
+    if target.vendor == "amd":
+        return _amd_precision_support(target)
     capability = compute_capability(target) if target.vendor == "nvidia" else None
     if capability is None:
         return {}
@@ -300,6 +411,31 @@ def precision_support(target: TargetSpec) -> dict[str, str]:
         "int8": NATIVE if capability >= 61 else ABSENT,
         "fp8": NATIVE if capability >= 89 else ABSENT,
         "fp4": NATIVE if capability >= 100 else ABSENT,
+    }
+
+
+def _amd_precision_support(target: TargetSpec) -> dict[str, str]:
+    """The AMD half of `precision_support`, keyed on membership rather than order.
+
+    Nothing here is ever `emulated`. That state exists because a Tesla T4 answers
+    True to `torch.cuda.is_bf16_supported()` and then fakes it; no equivalent
+    case is known on any `gfx` part in `_AMD_GENERATIONS`, and inventing one
+    would be the guess this function refuses to make. A part outside that table
+    returns an empty mapping for the same reason.
+    """
+    architecture = gcn_architecture(target)
+    if architecture is None or architecture not in _AMD_GENERATIONS:
+        return {}
+    return {
+        "fp32": NATIVE,
+        "fp16": NATIVE,
+        "bf16": NATIVE if architecture in _AMD_BF16 else ABSENT,
+        "int8": NATIVE if architecture in _AMD_INT8 else ABSENT,
+        "fp8": NATIVE if architecture in _AMD_FP8 else ABSENT,
+        # No shipping part in `_AMD_GENERATIONS` computes FP4. CDNA 4 adds FP6
+        # and FP4 on paper; `gfx950` stays absent here until that is read from
+        # something better than a product announcement.
+        "fp4": ABSENT,
     }
 
 
@@ -320,27 +456,47 @@ def cuda_build_targets(target: TargetSpec) -> dict[str, Any] | None:
     an H100 and cannot reach those instructions at all. Reporting the arch list
     is the difference between "my GPU supports this" and "my install can use it".
 
-    Returns None for anything that is not a resolved NVIDIA target, or when
-    torch reports no arch list (a CPU-only build).
+    ROCm answers the same question through the same API -- `get_arch_list()`
+    returns `['gfx900', 'gfx906', 'gfx942', ...]` there -- and the question is the
+    one that matters most on AMD, where wheels routinely ship kernels for a
+    narrower set of parts than the runtime supports. The function keeps its
+    CUDA-era name, and the `cuda_build` key with it, because that name is already
+    in the `lm7 targets --json` output that other things read.
+
+    The `a`-variant half is NVIDIA-only: ROCm expresses the equivalent as feature
+    suffixes on the target string (`gfx942:sramecc+:xnack-`) rather than as a
+    separate architecture, and LM7 strips those in `detect_targets`. AMD reports
+    `architecture_specific: None` rather than False, which is the difference
+    between "no" and "this vendor does not answer that question".
+
+    Returns None for anything that is not a resolved NVIDIA or AMD target, or
+    when torch reports no arch list (a CPU-only build).
     """
-    if target.vendor != "nvidia":
+    if target.vendor == "amd":
+        native = gcn_architecture(target)
+    elif target.vendor == "nvidia":
+        capability = compute_capability(target)
+        native = f"sm_{capability}" if capability is not None else None
+    else:
         return None
-    capability = compute_capability(target)
     try:
         architectures = list(torch.cuda.get_arch_list())
     except Exception:  # noqa: BLE001 - a torch without CUDA answers nothing useful
         return None
     if not architectures:
         return None
-    native = f"sm_{capability}" if capability is not None else None
     return {
         "arch_list": architectures,
         # Whether this exact architecture has compiled kernels in the wheel. False
         # means it runs by JIT-ing PTX from an older target, which is legal and
-        # slower to warm up.
+        # slower to warm up. On ROCm there is no PTX equivalent: a missing `gfx`
+        # target is a hard failure at load ("no kernel image is available"), not a
+        # slow start, so False is a stronger signal there than here.
         "native_kernels": native in architectures if native else None,
         # The `a` variant, which is what architecture-specific instructions need.
-        "architecture_specific": (f"{native}a" in architectures) if native else None,
+        "architecture_specific": (
+            (f"{native}a" in architectures) if native and target.vendor == "nvidia" else None
+        ),
     }
 
 
