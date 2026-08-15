@@ -179,6 +179,32 @@ def test_inspection_reports_the_gpu_an_aot_package_needs(tmp_path):
     assert "matching PyTorch" not in result.deployment
 
 
+def test_inspection_of_an_amd_aot_package_names_rocm_not_cuda(tmp_path):
+    """Found by running `lm7 artifact inspect` on a real gfx942 package.
+
+    The manifest was already correct -- `hip` and `gcn_architecture`, no CUDA
+    fields -- and the human-readable summary still told the reader to find "a
+    matching CUDA PyTorch runtime", because the CUDA branch was the only one.
+    That is advice which cannot be followed and names the wrong vendor.
+    """
+    artifact = _write_aot_artifact(
+        tmp_path,
+        device_bound=True,
+        gcn_architecture="gfx942",
+        hip="7.2.53211",
+        device_name="AMD Instinct MI300X VF",
+    )
+
+    result = inspect_artifact(artifact)
+
+    assert result.device_bound is True
+    assert "gfx942" in result.deployment
+    assert "ROCm 7.2.53211" in result.deployment
+    assert "CUDA" not in result.deployment
+    assert "PyTorch runtime" in result.deployment
+    assert "matching PyTorch" not in result.deployment
+
+
 def test_inspection_of_a_cpu_aot_package_claims_no_device(tmp_path):
     artifact = _write_aot_artifact(tmp_path)
 
