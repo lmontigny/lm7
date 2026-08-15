@@ -41,6 +41,7 @@ file stays a index rather than a second, drifting description.
 | [#106](https://github.com/lmontigny/lm7/pull/106) | Add Hopper FP8 dynamic activation and weight quantization |
 | [#140](https://github.com/lmontigny/lm7/pull/140) | Reach for the Arm INT8 instructions, and watch nothing reach them |
 | [#145](https://github.com/lmontigny/lm7/pull/145) | Find out whether "OpenVINO is faster" was about OpenVINO or about Intel |
+| [#184](https://github.com/lmontigny/lm7/pull/184) | Reach the FP8 tensor cores that are not NVIDIA's |
 
 ## Artifacts, CLI, and generation
 
@@ -73,6 +74,8 @@ file stays a index rather than a second, drifting description.
 | [#164](https://github.com/lmontigny/lm7/pull/164) | Record what an artifact was built from, and add `lm7 artifact generate` |
 | [#173](https://github.com/lmontigny/lm7/pull/173) | Give AMD an AOTInductor package, and record what built it |
 | [#178](https://github.com/lmontigny/lm7/pull/178) | Give the lifecycle benchmark the import LM7 already has |
+| [#182](https://github.com/lmontigny/lm7/pull/182) | Stop telling an AMD artifact to find a CUDA runtime |
+| [#187](https://github.com/lmontigny/lm7/pull/187) | Drive both AMD servers with the client the other rows used |
 
 ## On-device validation
 
@@ -85,6 +88,7 @@ file stays a index rather than a second, drifting description.
 | [#131](https://github.com/lmontigny/lm7/pull/131) | Serve on the other kind of CPU, where INT8 stops being worth it |
 | [#139](https://github.com/lmontigny/lm7/pull/139) | Serve on the Arm that is not a Mac, and find the spelling that leaks |
 | [#177](https://github.com/lmontigny/lm7/pull/177) | Run LM7 on a GPU that is not NVIDIA's |
+| [#181](https://github.com/lmontigny/lm7/pull/181) | Run the example the AMD guide opens with |
 
 ## Model coverage and measurement
 
@@ -108,6 +112,7 @@ file stays a index rather than a second, drifting description.
 | [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 | [#166](https://github.com/lmontigny/lm7/pull/166) | Name a dense validation ladder, and say plainly that it is unmeasured |
 | [#172](https://github.com/lmontigny/lm7/pull/172) | Let the GPU matrix describe a GPU that is not NVIDIA |
+| [#180](https://github.com/lmontigny/lm7/pull/180) | Answer the three questions the first MI300X session left open |
 | [#183](https://github.com/lmontigny/lm7/pull/183) | Measure the memory-bound half of generation on the MI300X |
 
 ## Detection and diagnostics
@@ -142,6 +147,7 @@ file stays a index rather than a second, drifting description.
 | [#1](https://github.com/lmontigny/lm7/pull/1) | Record the OpenVINO evaluation on an Intel CPU host |
 | [#10](https://github.com/lmontigny/lm7/pull/10) | Evaluate `torch.export` → StableHLO → PJRT for LM7 artifacts |
 | [#13](https://github.com/lmontigny/lm7/pull/13) | Evaluate torch-mlir as the StableHLO lowering path |
+| [#185](https://github.com/lmontigny/lm7/pull/185) | Measure MIGraphX on an MI300X, and decline to adopt it |
 
 ## Docs and examples
 
@@ -159,3 +165,5 @@ file stays a index rather than a second, drifting description.
 | [#174](https://github.com/lmontigny/lm7/pull/174) | Write the validation procedure for a GPU, not only a CPU |
 | [#175](https://github.com/lmontigny/lm7/pull/175) | Write the MI300X session down before renting it, not after |
 | [#176](https://github.com/lmontigny/lm7/pull/176) | Give the MI300X runbook the three commands it was missing |
+| [#179](https://github.com/lmontigny/lm7/pull/179) | Add the changelog lines for the AMD campaign |
+| [#188](https://github.com/lmontigny/lm7/pull/188) | Refresh AMD ROCm validation docs |

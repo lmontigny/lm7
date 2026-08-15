@@ -70,9 +70,8 @@ def test_rocm_device_reports_normalized_gfx_architecture(monkeypatch):
 def test_mi300x_detection_reports_cdna3_and_the_fnuz_fp8_qualifier(monkeypatch):
     """The part this was written for, and the one the mocked case above is not.
 
-    Everything asserted here is predicted from AMD's ISA documentation and has
-    never been run: no AMD GPU has executed LM7. A real gfx942 either confirms
-    this test or corrects it.
+    Everything asserted here started as an AMD ISA-documentation prediction. The
+    first MI300X run confirmed this mocked gfx942 report unmodified.
     """
     properties = SimpleNamespace(
         name="AMD Instinct MI300X",
