@@ -71,6 +71,8 @@ file stays a index rather than a second, drifting description.
 | [#161](https://github.com/lmontigny/lm7/pull/161) | Export a KV-cache decode step |
 | [#162](https://github.com/lmontigny/lm7/pull/162) | Prefill a whole prompt in one call, from the same exported graph |
 | [#164](https://github.com/lmontigny/lm7/pull/164) | Record what an artifact was built from, and add `lm7 artifact generate` |
+| [#173](https://github.com/lmontigny/lm7/pull/173) | Give AMD an AOTInductor package, and record what built it |
+| [#178](https://github.com/lmontigny/lm7/pull/178) | Give the lifecycle benchmark the import LM7 already has |
 
 ## On-device validation
 
@@ -82,6 +84,7 @@ file stays a index rather than a second, drifting description.
 | [#123](https://github.com/lmontigny/lm7/pull/123) | Validate the vLLM handover on Apple Silicon through vllm-metal |
 | [#131](https://github.com/lmontigny/lm7/pull/131) | Serve on the other kind of CPU, where INT8 stops being worth it |
 | [#139](https://github.com/lmontigny/lm7/pull/139) | Serve on the Arm that is not a Mac, and find the spelling that leaks |
+| [#177](https://github.com/lmontigny/lm7/pull/177) | Run LM7 on a GPU that is not NVIDIA's |
 
 ## Model coverage and measurement
 
@@ -104,6 +107,7 @@ file stays a index rather than a second, drifting description.
 | [#136](https://github.com/lmontigny/lm7/pull/136) | Put the dtype question to a second ISA, and get a different answer |
 | [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 | [#166](https://github.com/lmontigny/lm7/pull/166) | Name a dense validation ladder, and say plainly that it is unmeasured |
+| [#172](https://github.com/lmontigny/lm7/pull/172) | Let the GPU matrix describe a GPU that is not NVIDIA |
 
 ## Detection and diagnostics
 
@@ -150,3 +154,6 @@ file stays a index rather than a second, drifting description.
 | [#127](https://github.com/lmontigny/lm7/pull/127) | Record that Mali is what IREE's Vulkan path is actually aimed at |
 | [#144](https://github.com/lmontigny/lm7/pull/144) | Build a TVM artifact on the architecture its guard was written about |
 | [#137](https://github.com/lmontigny/lm7/pull/137) | Document Arm server CPU setup for LM7 |
+| [#174](https://github.com/lmontigny/lm7/pull/174) | Write the validation procedure for a GPU, not only a CPU |
+| [#175](https://github.com/lmontigny/lm7/pull/175) | Write the MI300X session down before renting it, not after |
+| [#176](https://github.com/lmontigny/lm7/pull/176) | Give the MI300X runbook the three commands it was missing |
