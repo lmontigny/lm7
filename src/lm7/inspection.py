@@ -272,11 +272,22 @@ def _deployment_summary(backend: str, requirements: Mapping[str, Any]) -> str:
     if backend == "aot_inductor" and requirements.get("device_bound"):
         # Name the architecture the way the tensorrt branch does. "Matching
         # PyTorch" is deliberately not claimed: a package built by one minor
-        # release loads under its neighbour, so the CUDA runtime is the part
+        # release loads under its neighbour, so the GPU runtime is the part
         # that has to line up -- see docs/aot-artifact-compatibility.md.
-        architecture = requirements.get("compute_capability") or "matching GPU"
-        cuda = requirements.get("cuda")
-        runtime = f"CUDA {cuda} PyTorch runtime" if cuda else "matching CUDA PyTorch runtime"
+        #
+        # Read the ROCm pair first. An AMD package records `hip` and
+        # `gcn_architecture` where a CUDA one records `cuda` and
+        # `compute_capability`, and falling through to the CUDA wording told the
+        # reader of a gfx942 artifact to find "a matching CUDA PyTorch runtime"
+        # -- advice that cannot be followed and names the wrong vendor.
+        hip = requirements.get("hip")
+        if hip or requirements.get("gcn_architecture"):
+            architecture = requirements.get("gcn_architecture") or "matching GPU"
+            runtime = f"ROCm {hip} PyTorch runtime" if hip else "matching ROCm PyTorch runtime"
+        else:
+            architecture = requirements.get("compute_capability") or "matching GPU"
+            cuda = requirements.get("cuda")
+            runtime = f"CUDA {cuda} PyTorch runtime" if cuda else "matching CUDA PyTorch runtime"
         return f"requires a matching GPU architecture ({architecture}) and a {runtime}"
     if backend == "export":
         return "portable PyTorch ExportedProgram"
