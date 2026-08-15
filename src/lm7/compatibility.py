@@ -19,6 +19,7 @@ from .huggingface import (
     compiles_decode,
 )
 from .targets import TargetSpec
+from .tasks import DIFFUSION, TaskDetection, detect_diffusion
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,25 @@ def inspect_hf_model(
                 candidates,
                 message,
             )
+        # A diffusion repository has no top-level config for AutoConfig to find:
+        # it declares its components in model_index.json instead. That lands
+        # here, so this is where it gets identified rather than reported as an
+        # unreadable causal LM. Checked only after AutoConfig fails, so the
+        # common path pays neither a diffusers import nor a second hub request.
+        diffusion = _detect_diffusion(model_id)
+        if diffusion is not None:
+            return _diffusion_result(
+                model_uri,
+                model_id,
+                resolved_target,
+                backend,
+                selected_backend,
+                candidates,
+                diffusion,
+            )
         raise UnsupportedModelError(
-            f"Hugging Face config inspection failed for {model_uri}: {exc}."
+            f"Hugging Face config inspection failed for {model_uri}: {exc}. If this is a "
+            'diffusion pipeline, LM7 needs pip install "lm7[diffusion]" to recognize one.'
         ) from exc
 
     architectures = tuple(str(item) for item in (getattr(config, "architectures", None) or ()))
@@ -367,6 +385,89 @@ def _optional_string(value: Any) -> str | None:
 def _remote_code_error(message: str) -> bool:
     lowered = message.lower()
     return "trust_remote_code" in lowered or "execute the configuration file" in lowered
+
+
+def _detect_diffusion(model_id: str) -> TaskDetection | None:
+    """Diffusion detection that answers None when it cannot tell.
+
+    Without the diffusion extra installed there is no way to distinguish "not a
+    diffusion pipeline" from "cannot read one", so this returns None and lets the
+    caller raise the original config failure -- with a pointer to the extra
+    attached, which is the part a user can act on.
+    """
+    try:
+        return detect_diffusion(model_id)
+    except UnsupportedModelError:
+        return None
+
+
+def _diffusion_result(
+    model_uri: str,
+    model_id: str,
+    target: TargetSpec,
+    requested_backend: str,
+    selected_backend: str | None,
+    candidates: tuple[BackendCompatibility, ...],
+    detection: TaskDetection,
+) -> ModelCompatibilityResult:
+    """Report a diffusion pipeline as what it is, and as what LM7 does not do to it.
+
+    The status is "compatible" because the question this command answers is
+    whether LM7 recognizes the checkpoint, and it does. Every *workflow* check is
+    unsupported, because `lm7 model run/generate/export` tokenize text and a
+    diffusion pipeline has no tokenizable input -- the fields below carry no
+    hidden size or vocabulary for the same reason. Reporting "incompatible" would
+    collapse "LM7 has no idea what this is" and "LM7 knows exactly what this is
+    and has a different command for it" into one word.
+    """
+    reason = (
+        f"{detection.reason} LM7's `model` commands tokenize text and capture text tensors; "
+        "a diffusion pipeline is three compile boundaries with no tokenizable input."
+    )
+    checks = tuple(
+        CompatibilityCheck(name, "unsupported", reason) for name in ("run", "generate", "export")
+    )
+    quantization = tuple(
+        CompatibilityCheck(
+            name,
+            "unsupported",
+            "LM7's quantization selectors match `.mlp.` linears and `lm_head`, which a "
+            "diffusion UNet has neither of.",
+        )
+        for name in (INT8, FP8, NVFP4)
+    )
+    components = ", ".join(detection.components) or "none declared"
+    return ModelCompatibilityResult(
+        model_uri=model_uri,
+        model_id=model_id,
+        status="compatible",
+        model_type=None,
+        architectures=(detection.pipeline_class,) if detection.pipeline_class else (),
+        task=DIFFUSION,
+        config_class=detection.pipeline_class,
+        dtype=None,
+        context_length=None,
+        vocab_size=None,
+        hidden_size=None,
+        num_hidden_layers=None,
+        is_encoder_decoder=False,
+        is_multimodal=False,
+        requires_remote_code=False,
+        target=str(target),
+        requested_backend=requested_backend,
+        selected_backend=selected_backend,
+        workflows=checks,
+        quantization=quantization,
+        backend_candidates=candidates,
+        notes=(
+            "Configuration-only preflight: no model weights were downloaded.",
+            f"Declared pipeline components: {components}.",
+            (
+                "A recognized pipeline does not prove torch.export or compiler operator "
+                "coverage; the first real run is the definitive check."
+            ),
+        ),
+    )
 
 
 def _remote_code_result(
