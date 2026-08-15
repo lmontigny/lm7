@@ -247,6 +247,54 @@ Qwen3-30B-A3B and Mixtral-8x7B were *not* run — they were queued behind the
 tiers that answer questions, and the session ended first. They remain the two
 entries this card could uniquely have measured.
 
+## Serving
+
+`lm7 model serve` had been [validated on five
+targets](serving.md) and AMD was not one of them. It is now, on
+SmolLM2-135M-Instruct at FP16, backend resolved to `inductor`:
+
+```console
+$ curl -s localhost:8123/health
+{"status":"ok","model":"HuggingFaceTB/SmolLM2-135M-Instruct",
+ "target":"amd:gfx942","backend":"auto"}
+```
+
+`/v1/chat/completions` returns real text — which is the check that matters,
+because [the NVIDIA failure](limitations.md) this repo records was an endpoint
+answering HTTP 200 with an empty string and NaN logits. Here the model answers
+in words. `pytest -m serve` (40) and `-m serve_load` (8) both pass.
+
+Warm requests, 32 tokens each, measured end to end through HTTP:
+
+| request | wall | per token |
+| --- | --- | --- |
+| 1 | 589 ms | 18.4 ms |
+| 2 | 587 ms | 18.3 ms |
+| 3 | 715 ms | 22.3 ms |
+
+**Read `/metrics` cumulatively or not at all.** Its `ttft_ms` and `tpot_ms` are
+running averages over every request including the first, which pays for
+compiling the decode loop — after three requests they read 14606 ms and 234 ms,
+against the ~18 ms/token the warm requests actually take. The first request cost
+19.5 s to first token.
+
+Two fields are worth reading directly:
+
+- **`steady_frames: 0`** — no token triggered a compile, which is the regression
+  the separate prefill and decode graphs exist to prevent and the reason that
+  counter is exposed over HTTP at all. `prefill_lengths: 2` is the expected
+  cost of two distinct prompt lengths.
+- **`memory_kind: device`, `memory_total_bytes: 205822885888`** — the
+  `torch.cuda.mem_get_info` path reports ROCm memory correctly, so the
+  whole-card figure in `/metrics` is real on AMD and not a CUDA-only field
+  returning nothing.
+
+**The vLLM ROCm handover still has not been run.** `--backend vllm --dry-run`
+produces correct argv and reports `runtime_installed: false`; vLLM is not in this
+image, and installing it was not worth the metered time. The argv translation is
+therefore exercised and the handover itself is not — say "implemented", not
+"validated", exactly as before.
+
 ## What this page does not say
 
 - **One card, one session, one partition.** SPX, so a single logical device;
@@ -263,4 +311,10 @@ entries this card could uniquely have measured.
 - **No CI, and there will not be.** GitHub's hosted runners provide no AMD GPU,
   and the GPU-hosted runners that exist are gated to Organizations on
   Team/Enterprise Cloud.
-- **Nothing about decode, serving, or the vLLM ROCm handover** was measured.
+- **Serving is one model at 135M, single stream.** No concurrency, no larger
+  model, no quantized serve — which is the configuration that was silently wrong
+  on NVIDIA. The vLLM ROCm handover is still unrun.
+- **No decode benchmark.** `benchmarks/decode.py` was not run, so the
+  memory-bound half of generation is unmeasured here; the ~18 ms/token above is
+  an end-to-end HTTP figure and not comparable to the 1.77 ms/token
+  `compile_generation` reaches on an H100.

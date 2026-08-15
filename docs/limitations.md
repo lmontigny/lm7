@@ -450,7 +450,13 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   scripted runner and a fake tokenizer. It proves the path works, not that
   output is right: the model has random weights, so no test in CI checks that a
   served answer is correct.
-- **Validated on five targets and two models.** Apple M-series `cpu:arm64` and
+- **Validated on six targets and two models.** `amd:gfx942` (MI300X, CDNA 3) is
+  the newest and the thinnest: SmolLM2-135M at FP16 through `inductor`, one
+  stream, `curl` only, no quantized serve, and no vLLM handover — the argv
+  translation dry-runs correctly and vLLM was never installed. `/metrics`
+  reports ROCm device memory correctly and `steady_frames` stayed at 0. See [AMD
+  MI300X](amd-mi300x.md#serving). The other five:
+  Apple M-series `cpu:arm64` and
   `apple:metal` with SmolLM2-135M-Instruct; `nvidia:sm89` (RTX 4070 SUPER, WSL2)
   with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct; `cpu:x86_64` (Intel
   Coffee Lake, AVX2) with SmolLM2-135M-Instruct; and `cpu:aarch64` (Arm Neoverse
