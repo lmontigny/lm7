@@ -108,6 +108,7 @@ file stays a index rather than a second, drifting description.
 | [#165](https://github.com/lmontigny/lm7/pull/165) | Record GCP Intel C4 CPU validation |
 | [#166](https://github.com/lmontigny/lm7/pull/166) | Name a dense validation ladder, and say plainly that it is unmeasured |
 | [#172](https://github.com/lmontigny/lm7/pull/172) | Let the GPU matrix describe a GPU that is not NVIDIA |
+| [#183](https://github.com/lmontigny/lm7/pull/183) | Measure the memory-bound half of generation on the MI300X |
 
 ## Detection and diagnostics
 
