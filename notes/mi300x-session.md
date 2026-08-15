@@ -35,7 +35,12 @@ ls -d /opt/rocm
 - **`torchao` gates the entire quantization track.** Its PyPI wheels carry
   CUDA-built extensions, and `pip install -e ".[torchao]"` may drag a CUDA torch
   over the ROCm one. Install with `--no-deps` and re-check
-  `torch.version.hip` after every install that touches torch.
+  `torch.version.hip` after every install that touches torch. Measured: the
+  pinned `torchao==0.17.0` installs and quantizes fine on ROCm, but prints
+  `Skipping import of cpp extensions due to incompatible torch version` against
+  the container's torch 2.10 — so the quantized path runs unfused in pure
+  PyTorch, which is a confound on every latency number it produces and has to be
+  recorded beside them.
 - **`migraphx` gates the MIGraphX track, and is the single most likely way to
   lose 40 minutes.** The native bindings are not on PyPI at all and
   `torch_migraphx` JIT-builds a C++ extension on first import — see
@@ -46,11 +51,39 @@ ls -d /opt/rocm
   against it rather than bundling it; LM7 checks for it before packaging and
   refuses by name if it is absent.
 
-Then, without replacing torch:
+**On the AMD Developer Cloud the ROCm PyTorch is a pre-pulled Docker image, not
+a system install.** The host's `python3` has no torch at all, `migraphx` imports
+only on the host, and everything below runs inside the container:
 
 ```bash
-uv pip install -e ".[dev,hf]"
+docker images | grep rocm/pytorch
+docker run -d --name lm7 \
+  --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined \
+  --group-add video --ipc=host --shm-size 32G --network host \
+  -v /root/session:/session -w /session/lm7 -e HF_HOME=/session/hf-cache \
+  rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0 sleep infinity
+docker exec lm7 python -c "import torch;print(torch.__version__, torch.version.hip)"
+```
+
+Mount a host directory for `artifacts/` and the HF cache, as above — it is what
+survives the container and what gets tarred off the box at the end.
+
+Then, without replacing torch. `uv` is often absent on a vendor ROCm image, so
+plain `pip` is the fallback rather than something to go install:
+
+```bash
+uv pip install -e ".[dev,hf]" || python -m pip install -e ".[dev,hf]"
 python -c "import torch; assert torch.version.hip, 'the install replaced the ROCm torch'"
+```
+
+Put the Hugging Face cache on the data disk before downloading anything. The
+list below is ~54 GB to the cut line and ~210 GB in full, and a container boot
+disk is usually 20–100 GB:
+
+```bash
+df -h /
+export HF_HOME=/workspace/hf-cache      # wherever the large volume is mounted
+mkdir -p "$HF_HOME"
 ```
 
 ## The download queue, started at minute zero
@@ -74,6 +107,51 @@ short session still lands the small ladder.
 
 Llama needs the `unsloth/` mirrors — the Meta repos are gated and a rented box
 has no HF token. Nothing else in the list is gated, `mistralai/` included.
+
+**Filter the download or pay for it twice.** Many of these repos carry the
+legacy `pytorch_model*.bin` beside the `.safetensors` for the same weights, plus
+an `onnx/` tree of quantized variants; `mistralai/` adds a `consolidated*` copy
+of the whole model. A bare `hf download` takes all of it — which turns
+Mixtral-8x7B from ~93 GB into ~186 GB and would consume the entire rental.
+
+**`--include` and `--exclude` take one pattern each, and extra patterns are
+silently parsed as positional filenames.** This is the trap, and it fails
+quietly: `hf download REPO --include "*.safetensors" "*.json"` uses only the
+first as a filter, treats `*.json` as a literal filename to fetch, downloads
+essentially nothing, and still exits reporting success. Measured on the first
+attempt of the MI300X session: eight repos "OK" in nine seconds, 70 MB on disk.
+Repeat the flag instead:
+
+```bash
+cd "$HF_HOME"
+cat > queue.txt <<'EOF'
+HuggingFaceTB/SmolLM2-135M-Instruct
+LiquidAI/LFM2.5-230M
+Qwen/Qwen3.5-0.8B
+unsloth/Llama-3.2-1B-Instruct
+deepseek-ai/deepseek-coder-1.3b-instruct
+allenai/OLMoE-1B-7B-0924-Instruct
+mistralai/Mistral-7B-Instruct-v0.3
+unsloth/Llama-3.1-8B-Instruct
+EOF
+nohup bash -c 'while read -r repo; do
+  echo "### $repo start $(date +%T)"
+  hf download "$repo" --exclude "*.bin" --exclude "onnx/*" --exclude "consolidated*"
+  echo "### $repo done $(date +%T)"
+done < queue.txt' > download.log 2>&1 &
+```
+
+That list came down in **under three minutes for 51 GB** on the AMD Developer
+Cloud box, so the ordering matters less than it was written to; check the real
+link speed before planning tiers around a download.
+
+`hf` is the current name of the CLI (`huggingface-cli` still works, and is what
+older notes use). Check progress with `tail -f "$HF_HOME/download.log"` and
+`du -sh "$HF_HOME"`; a tier that needs a model not yet on disk should be
+skipped and returned to, not waited on.
+
+Add `Qwen/Qwen3-30B-A3B` and `mistralai/Mixtral-8x7B-Instruct-v0.1` to the end
+of the queue only once the first nine are down and there is disk for them.
 
 ## Tiers
 
