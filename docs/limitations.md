@@ -578,14 +578,22 @@ These have measurement harnesses or written plans, and no registered backend:
 ## Quantization
 
 The `lm7 model run` path is validated per (model, mode) pair. It reaches NVIDIA
-GPUs and CPU; `int8` is the only mode measured off NVIDIA, and AMD, Apple, Intel
-XPU, and TPU have no path at all.
+GPUs, AMD GPUs and CPU, with a different subset on each: CPU has `int8` only, and
+**AMD has the three FP8 modes and not `int8`**. Apple, Intel XPU and TPU have no
+path at all.
 
-**All six modes have now been measured on an AMD MI300X, twice, and none of them
-moved the gate.** `_QUANTIZATION_VENDORS` is unchanged, deliberately: `nvfp4`
-failed the accuracy bar at 3/4 top-1, `nvfp4-dynamic` was refused by torchao's
-own `sm100+` assertion, and every FP8 mode held 4/4 while costing 1.21–1.36x in
-latency.
+**AMD was admitted on the emitted kernel, not on the API returning.**
+`benchmarks/fp8_kernel_check.py` on a `gfx942` shows `fp8-dynamic` and
+`fp8-dynamic-rowwise` emitting `_scaled_mm` with no plain `mm` — the same
+generated code the `sm90` and `sm120` rows show — so CDNA 3 multiplies in FP8
+rather than dequantizing into BF16. They cost 1.23–1.27x in latency and are
+admitted anyway, which is the same trade three of the four NVIDIA activation
+pairs already make.
+
+**All six modes were measured on an AMD MI300X, twice, and three of them moved
+the gate.** The FP8 modes are admitted — see above. `nvfp4` failed the accuracy
+bar at 3/4 top-1 and `nvfp4-dynamic` was refused by torchao's own `sm100+`
+assertion, so both stay NVIDIA-only.
 
 The `int8` result — ~10x slower than BF16 — was first written up as an artifact
 of torchao skipping its compiled extensions against torch 2.10, and **that

@@ -337,6 +337,29 @@ a timing.
 Both NVFP4 rows show the weight packed as `uint8` at half the column count, which
 is the two-values-per-byte packing.
 
+#### The same check on CDNA 3
+
+`benchmarks/fp8_kernel_check.py` on an MI300X (`gfx942`), same 1024 × 4096 × 4096
+linear, identical under `torch 2.10.0+rocm7.2` and `2.13.0+rocm7.2`:
+
+| mode | weight scale | activation | emitted |
+| --- | --- | --- | --- |
+| `none` | — | none | `mm` → BF16 GEMM |
+| `fp8` | `[4096, 1]` per-row | none | `mm` + dequant → BF16 GEMM |
+| **`fp8-dynamic`** | `[1, 1]` per-tensor | per-tensor | **`_scaled_mm`, no `mm`** |
+| **`fp8-dynamic-rowwise`** | `[4096, 1]` per-row | per-row | **`_scaled_mm`, no `mm`** |
+
+Structurally identical to the NVIDIA table above: weight-only keeps a BF16 GEMM
+and adds dequantization, and both dynamic modes emit the scaled narrow GEMM with
+no plain `mm`. **CDNA 3 computes in FP8 rather than reading FP8 bytes into a BF16
+multiply**, and that is what admitted the three FP8 modes on AMD rather than the
+API returning without raising.
+
+It is worth being precise about what this does *not* say. The FP8 there is the
+`fnuz` encoding rather than the OCP `e4m3` `sm89`+ uses — see [AMD
+MI300X](amd-mi300x.md) — so the two `_scaled_mm` rows are the same *shape* of
+result and not the same arithmetic.
+
 > [!NOTE]
 > **The fused Triton activation-scaling kernel is not available here.** TorchAO's
 > `use_triton_kernel=True` requires MSLK, and `pip install mslk` resolves to an
@@ -977,10 +1000,13 @@ filter and takes the footprint. The likelier explanation is size: block-scaled
 in a 135M–1B network. Whether NVFP4 holds up better at 7B and above is
 unmeasured here.
 
-- **NVIDIA and CPU only, and only INT8 on CPU.** No AMD, Apple, Intel XPU, or
-  TPU path exists. FP8 needs Ada-class tensor cores. NVFP4 does run on CPU
+- **NVIDIA, AMD and CPU, with a different subset on each.** CPU has INT8 only.
+  AMD has the three FP8 modes and *not* INT8 — measured on an MI300X, where INT8
+  holds 4/4 top-1 and runs ~10x slower than BF16 on two PyTorch versions, which
+  is the regression shape LM7 already refuses on Turing. NVFP4 does run on CPU
   through the same dequantization path, but it kept only 2 of 4 top-1 tokens
-  there and ran 8.5x slower than compiled FP32, so it stays NVIDIA-only.
+  there and ran 8.5x slower than compiled FP32, so it stays NVIDIA-only. No
+  Apple, Intel XPU, or TPU path exists.
 - **It can be slower.** Weight-only quantization trades arithmetic for
   bandwidth. At small batch sizes, where a decode step is already
   memory-bound per token but the dequantization overhead is paid on every
