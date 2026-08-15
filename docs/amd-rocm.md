@@ -41,11 +41,12 @@ Detected targets (2):
     precision: native fp32, fp16, bf16, int8, fp8
 ```
 
-**Every AMD value in that report is read from AMD's ISA documentation and none
-of it has been confirmed on hardware** — no AMD GPU has run LM7. The NVIDIA
-equivalent was measured on three generations; this is a prediction that a real
-`gfx942` will either confirm or correct. See
-[limitations](limitations.md#hardware-validation).
+The `gfx942` row has now been confirmed on a rented AMD Instinct MI300X VF:
+generation `CDNA 3`, native `fp8`, absent `fp4`, and `fp8_format: fnuz` all
+matched LM7's table. Other `gfx` entries are still documentation-derived until a
+machine with that architecture runs LM7. See [AMD MI300X](amd-mi300x.md) for the
+hardware run and [limitations](limitations.md#hardware-validation) for the
+remaining gaps.
 
 Two AMD-specific things the report gets right that a `gfx`-to-`sm` analogy would
 get wrong:
@@ -143,16 +144,30 @@ cosmetic: `torch.version.cuda` is `None` on ROCm and
 the CUDA fields would have produced a manifest claiming no runtime and an
 architecture — `sm94` — that no NVIDIA part has ever had.
 
-**Nothing on this page has been run on an AMD GPU**, including whether the
-wrapper links. See [artifact
-compatibility](aot-artifact-compatibility.md#scope).
+This path has run on the MI300X. The wrapper links against ROCm, the artifact
+records `hip` and `gcn_architecture`, reloads through `lm7.load_artifact` in a
+fresh process, and rejects architecture/runtime mismatches with AMD-specific
+messages. See [AMD MI300X](amd-mi300x.md#an-aotinductor-artifact-and-the-bug-it-found)
+and [artifact compatibility](aot-artifact-compatibility.md#scope).
 
 ## Scope
 
-The initial integration covers local single-GPU inference. Multi-GPU execution,
-quantization (every mode is gated to NVIDIA and CPU — see
-[quantization](quantization.md)), and CI on physical AMD hardware are all
-absent.
+The AMD integration covers local single-GPU inference through TorchInductor,
+AOTInductor packaging, and the `lm7 model serve` path. It has one hardware
+validation point: a single-card MI300X VF in an SPX partition, not bare metal and
+not multi-GPU.
 
-For a possible AMD-specific compiler path beyond TorchInductor, see the
-[MIGraphX evaluation plan](amd-migraphx.md).
+Quantization is available only for the FP8 modes admitted by the MI300X run:
+`fp8`, `fp8-dynamic`, and `fp8-dynamic-rowwise`. INT8 remains refused on AMD
+because it measured about 10x slower than BF16, and NVFP4 remains refused
+because CDNA 3 has no FP4 silicon and the weight-only result missed the accuracy
+bar. See [quantization](quantization.md) and [AMD MI300X](amd-mi300x.md#quantization-and-why-none-of-it-changes-the-gate).
+
+Multi-GPU execution, CPX partitioning, CI on physical AMD hardware, quantized
+serving, larger-model serving, and long-context decode remain unvalidated. The
+vLLM ROCm handoff starts and answers on the MI300X, but its throughput is still
+unmeasured.
+
+MIGraphX was evaluated as an AMD-specific compiler path and was not adopted:
+where it ran it was slower than eager and Inductor, and it failed the causal-LM
+shapes. See [AMD MIGraphX evaluation](amd-migraphx.md).
