@@ -1,8 +1,81 @@
-# AMD MIGraphX evaluation plan
+# AMD MIGraphX evaluation
 
 LM7's current AMD path uses a ROCm-enabled PyTorch build with TorchInductor.
-MIGraphX should be evaluated as an optional AMD backend before it is added to
-automatic planning.
+MIGraphX was evaluated as an optional AMD backend before adding it to automatic
+planning. **It was not adopted.** No `backend="migraphx"` is registered, and the
+plan below is kept because it is what the measurement was run against.
+
+## Result, on an MI300X
+
+Measured on an AMD Instinct MI300X VF (`gfx942`, CDNA 3), ROCm 7.2.4,
+`torch 2.10.0+rocm7.2.4`, `torch_migraphx 1.1`, MIGraphX `2.15.0.dev`, FP16,
+batch 8, inside `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0`.
+
+| model | eager | inductor | migraphx |
+| --- | --- | --- | --- |
+| mlp (8.4M) | **0.056 ms** | 0.087 ms | 0.110 ms |
+| SmolLM2-135M | 12.405 ms | **6.569 ms** | **failed to compile** |
+| Llama-3.2-1B | 7.196 ms | **3.420 ms** | **failed to compile** |
+
+Median of 30 after 5 warmups. Two findings, and the second is the decisive one.
+
+**Where it runs, it is slowest.** On the MLP, MIGraphX is behind both eager and
+Inductor and pays 2.06 s of first-call compile to get there. That is the weakest
+of the three results on its own — the hand-built MLP is the workload where
+compiling loses on every vendor this project has measured — but it is not a win
+anywhere either.
+
+**It compiles neither causal LM.** Both fail identically, inside Torch-MIGraphX's
+own lowering rather than in MIGraphX:
+
+```
+torch._dynamo.exc.BackendCompilerFailed: backend='migraphx' raised:
+TypeError: ones() received an invalid combination of arguments
+             - got (device=str, dtype=torch.dtype, )
+  torch_migraphx/dynamo/passes/remove_ops.py:95 in _remove_new_const_ops
+```
+
+That is a version-compatibility break between `torch_migraphx 1.1` and torch
+2.10, not a missing operator, and it fires in a constant-folding pass before any
+graph reaches MIGraphX. Against the acceptance criteria below — `mlp`, SmolLM2,
+LFM2.5, Llama-3.2-1B, Qwen3.5-0.8B — coverage is **1 of 5**.
+
+So the first acceptance criterion that matters is the one it fails: a backend
+whose model coverage is one synthetic MLP, on which it is also the slowest of
+three paths, has no use case to wrap. **This is positive evidence that
+Inductor-by-default on AMD is the right choice**, which is worth more than
+another registered backend.
+
+### Two things that had to be fixed to run it at all
+
+Both are LM7's, not MIGraphX's, and both are now fixed:
+
+- **`benchmarks/migraphx.py` shadowed the module it benchmarks.** Running
+  `python benchmarks/migraphx.py` puts `benchmarks/` first on `sys.path`, so
+  Torch-MIGraphX's own `import migraphx` resolved to the LM7 script and died on
+  `module 'migraphx' has no attribute '__version__'`. The one script that needs
+  that module was the one guaranteed to hide it, so this path could never have
+  worked as documented. Run it with `PYTHONSAFEPATH=1`.
+- **A failing path took the whole run down.** The harness did not guard
+  `_measure`, so the causal-LM runs wrote no JSON at all and lost their eager and
+  Inductor rows with them. It now records a refusal and continues, which is the
+  rule `benchmarks/quantization.py` already follows.
+
+### What installing it actually cost
+
+Less than the plan below feared, on this image. `import migraphx` needed no
+install: the native binding ships inside the ROCm PyTorch container at
+`/opt/rocm-7.2.4/lib/migraphx.cpython-312-x86_64-linux-gnu.so` and is simply not
+on `sys.path`, so one `PYTHONPATH` entry reaches it. `torch_migraphx` is a
+pure-Python wheel and installed in seconds; it needs `tabulate`, which a
+`--no-deps` install does not bring. **No JIT C++ extension build was triggered at
+any point** — the 40-minute hole the runbook warns about did not open here.
+
+---
+
+The evaluation plan the above was run against follows, unchanged.
+
+## Original plan
 
 ## Candidate integration paths
 
