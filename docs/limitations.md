@@ -479,8 +479,9 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   served answer is correct.
 - **Validated on six targets and two models.** `amd:gfx942` (MI300X, CDNA 3) is
   the newest and the thinnest: SmolLM2-135M at FP16 through `inductor`, one
-  stream, `curl` only, no quantized serve, and no vLLM handover — the argv
-  translation dry-runs correctly and vLLM was never installed. `/metrics`
+  stream, no quantized serve. Driven by `curl` and the `openai` SDK, and the vLLM
+  ROCm handover runs beside it, so one card carries both the compiled server and
+  the handed-over one. `/metrics`
   reports ROCm device memory correctly and `steady_frames` stayed at 0. See [AMD
   MI300X](amd-mi300x.md#serving). The other five:
   Apple M-series `cpu:arm64` and
@@ -522,8 +523,9 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   — and on an RTX 4070 SUPER (`sm89`, WSL2) against Llama-3.2-1B-Instruct with
   vLLM 0.26.0. **The ROCm handover now runs too** — an MI300X (`gfx942`) through
   AMD's own `rocm/vllm:latest` image (vLLM `0.11.2.dev673` on `torch
-  2.9.0a0+rocm`) against `SmolLM2-135M-Instruct`, chat and streaming, and it
-  needed no LM7 fix to start where CUDA needed two. Note the route: `pip install
+  2.9.0a0+rocm`) against `SmolLM2-135M-Instruct`, chat and streaming, driven by
+  `curl` and by the official `openai` SDK, and it needed no LM7 fix to start
+  where CUDA needed two. Note the route: `pip install
   vllm` fetches the CUDA build and would displace the ROCm torch, so the vendor
   image is the install path. **The TPU handover has still never been run**; for
   that one, say "implemented", not "validated". vLLM's own supported-model list

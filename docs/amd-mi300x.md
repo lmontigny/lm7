@@ -448,6 +448,15 @@ because [the NVIDIA failure](limitations.md) this repo records was an endpoint
 answering HTTP 200 with an empty string and NaN logits. Here the model answers
 in words. `pytest -m serve` (40) and `-m serve_load` (8) both pass.
 
+Driven by the official `openai` Python SDK as well as `curl`, which is the bar
+the Apple and CUDA rows were held to — buffered and streamed:
+
+```
+lm7/inductor buffered: '"Paris, the City of Light"'
+lm7/inductor usage   : prompt=35 completion=8
+lm7/inductor streamed: 12 deltas -> 'Of course, the answer would be the hue yellow, which'
+```
+
 Warm requests, 32 tokens each, measured end to end through HTTP:
 
 | request | wall | per token |
@@ -495,6 +504,19 @@ $ lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
 recording, because CUDA needed two (`VLLM_WSL2_ENABLE_PIN_MEMORY` and
 `--vllm-arg`) plus a FlashInfer workaround before it would come up at all.
 
+Through the `openai` SDK against the same handed-over port, buffered and
+streamed:
+
+```
+vllm/rocm buffered: 'The capital of France, surrounded by the Seine River, the Champagne region, and Canarg'
+vllm/rocm usage   : prompt=35 completion=20
+vllm/rocm streamed: 12 deltas -> 'Ah, the colors. Everybody loves the name Color. Becoming'
+```
+
+So the same client library reaches both halves of the story on one card: **local
+compile through Inductor/ROCm, production serving through vLLM/ROCm**, with LM7
+translating the flags for the second and stepping out of the way.
+
 What that does *not* establish: nothing about vLLM's throughput was measured,
 here or on any other platform, and the model is a 135M. LM7's involvement ends
 when the process starts.
@@ -518,8 +540,8 @@ when the process starts.
   Team/Enterprise Cloud.
 - **Serving is one model at 135M, single stream.** No concurrency, no larger
   model, no quantized serve — which is the configuration that was silently wrong
-  on NVIDIA. The vLLM handover starts and answers; **its throughput is
-  unmeasured**, as it is on every platform in this repo.
+  on NVIDIA. Both servers were driven by `curl` and the `openai` SDK; **neither
+  had its throughput measured**, as on every platform in this repo.
 - **Decode is measured at short context only.** [16 of the H100 page's 60
   cells](#what-the-decode-numbers-are-not) — nothing past a 1024-token prompt,
   because the harness [cannot complete a sweep on this
