@@ -295,6 +295,19 @@ nothing on an MoE" was wrong about the mechanism and wrong to key on MoE, but at
 46.7B the *number* it predicted is close to right — 1.09x — for a reason nobody
 had stated.
 
+**A second card does not reproduce that trend.** The same harness and dtype on
+an MI300X (`gfx942`) gives 1.56x for OLMoE-1B-7B, 1.50x for Qwen3-30B-A3B and
+**1.52x for Mixtral-8x7B** — flat across a 7x span in parameters, where `sm120`
+fell from 1.60x to 1.09x over the same range. Mixtral's footprint matches to the
+decimal (93.8 GB on both), so it is the same model in the same configuration.
+
+Two differences could carry it and this data cannot separate them: the Blackwell
+run had Mixtral filling 98.7% of a 96 GiB card against 48.9% here, and the two
+ran different PyTorch versions. So the monotonic reading above is **a property of
+that measurement, not an established law of MoE size** — which is the third time
+this section has had to be weakened. See [AMD
+MI300X](amd-mi300x.md#what-1917-gib-holds).
+
 > [!NOTE]
 > Measuring this needs care. Dynamo traces whatever it is handed, so a model left
 > on the host is measured in a configuration that never runs, and
@@ -493,8 +506,13 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   through the [vllm-metal](https://github.com/vllm-project/vllm-metal) platform
   plugin — vLLM 0.26.0 + vllm-metal 0.3.0, chat, streaming, and the `openai` SDK
   — and on an RTX 4070 SUPER (`sm89`, WSL2) against Llama-3.2-1B-Instruct with
-  vLLM 0.26.0. **The ROCm and TPU handovers have still never been run**; for
-  those, say "implemented", not "validated". vLLM's own supported-model list
+  vLLM 0.26.0. **The ROCm handover now runs too** — an MI300X (`gfx942`) through
+  AMD's own `rocm/vllm:latest` image (vLLM `0.11.2.dev673` on `torch
+  2.9.0a0+rocm`) against `SmolLM2-135M-Instruct`, chat and streaming, and it
+  needed no LM7 fix to start where CUDA needed two. Note the route: `pip install
+  vllm` fetches the CUDA build and would displace the ROCm torch, so the vendor
+  image is the install path. **The TPU handover has still never been run**; for
+  that one, say "implemented", not "validated". vLLM's own supported-model list
   applies once LM7 has handed over, and it is narrower than LM7's —
   `SmolLM2-135M` is not on vllm-metal's, for instance.
 - **A handover that starts is not a handover that is tuned.** CUDA needed two
@@ -549,15 +567,20 @@ The `lm7 model run` path is validated per (model, mode) pair. It reaches NVIDIA
 GPUs and CPU; `int8` is the only mode measured off NVIDIA, and AMD, Apple, Intel
 XPU, and TPU have no path at all.
 
-**All six modes have now been measured on an AMD MI300X, and none of them moved
-the gate.** `_QUANTIZATION_VENDORS` is unchanged, deliberately: `nvfp4` failed
-the accuracy bar at 3/4 top-1, `nvfp4-dynamic` was refused by torchao's own
-`sm100+` assertion, and every FP8 mode held 4/4 while costing 1.21–1.36x in
-latency. The `int8` result — 9.72x slower than BF16 — is **not attributable to
-CDNA 3**: torchao 0.17.0 skips its compiled extensions against that host's torch
-2.10, so the dequantization ran unfused in pure Python. Re-run against torch
-≥ 2.11 before anyone reads that number as a property of the silicon. See [AMD
-MI300X](amd-mi300x.md#quantization-and-why-none-of-it-should-change-the-gate-yet).
+**All six modes have now been measured on an AMD MI300X, twice, and none of them
+moved the gate.** `_QUANTIZATION_VENDORS` is unchanged, deliberately: `nvfp4`
+failed the accuracy bar at 3/4 top-1, `nvfp4-dynamic` was refused by torchao's
+own `sm100+` assertion, and every FP8 mode held 4/4 while costing 1.21–1.36x in
+latency.
+
+The `int8` result — ~10x slower than BF16 — was first written up as an artifact
+of torchao skipping its compiled extensions against torch 2.10, and **that
+explanation was wrong**. Repeating the sweep on `torch 2.13.0+rocm7.2`, where
+those extensions load, moved `int8` from 38.027 ms to 37.245 ms: under 3%, while
+the BF16 baseline improved 13%, so the ratio got *worse* (9.72x → 10.92x). INT8
+weight-only is simply slow on this silicon. `nvfp4` is the mode the newer torch
+helped, 2.70x → 1.96x, and it still fails on accuracy. See [AMD
+MI300X](amd-mi300x.md#quantization-and-why-none-of-it-changes-the-gate).
 
 Two export backends quantize the artifact
 through their own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and
