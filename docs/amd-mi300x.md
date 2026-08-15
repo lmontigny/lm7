@@ -28,6 +28,20 @@ $ lm7 explain --target amd
 Selected inductor for amd:gfx942
 ```
 
+`examples/rocm_mlp.py` — the first thing [the AMD guide](amd-rocm.md) tells a
+reader to run, and until now the first thing nobody had — compiles and agrees
+with eager:
+
+```console
+$ python examples/rocm_mlp.py
+GPU: AMD Instinct MI300X VF
+ROCm: 7.2.53211
+Target: amd:gfx942
+Backend: inductor
+Output: shape=(8, 4), device=cuda:0
+TorchInductor output matches eager ROCm.
+```
+
 The `gfx` tables in `src/lm7/detection.py` were written from AMD's ISA
 documentation and pinned by unit tests before any AMD GPU was available, exactly
 as the `sm90` table was before an H100 was. Every value they predicted is what
