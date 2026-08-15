@@ -13,8 +13,10 @@ import torch
 
 from .api import compile
 from .detection import (
+    NATIVE,
     compute_capability,
     inference_context,
+    precision_support,
     resolve_target,
     synchronize,
     torch_device,
@@ -107,24 +109,42 @@ _QUANTIZATION_LABELS = {
     NVFP4_DYNAMIC: "NVFP4 dynamic activation + NVFP4 weight",
 }
 
-# Which targets each mode is allowed on. INT8 is the only mode measured off
-# NVIDIA: FP8 needs Ada-class tensor cores, and NVFP4 on CPU kept only 2 of 4
-# top-1 tokens and ran 8.5x slower than compiled FP32, so both stay NVIDIA-only.
+# Which targets each mode is allowed on. NVFP4 on CPU kept only 2 of 4 top-1
+# tokens and ran 8.5x slower than compiled FP32, so it stays NVIDIA-only.
+#
+# The three FP8 modes reach AMD as of the MI300X measurements. What earned it is
+# not that the API returned: `benchmarks/fp8_kernel_check.py` on a gfx942 shows
+# both dynamic modes emitting `_scaled_mm` and no plain `mm`, which is the same
+# generated code the sm120 and sm90 rows show, so CDNA 3 is genuinely computing
+# in FP8 rather than dequantizing into BF16. Both hold 4/4 top-1 with logit
+# differences (1.11-1.40) in line with the H100's (1.09-1.33).
+#
+# They are also slower than not quantizing -- 1.23x and 1.26x. That is not
+# disqualifying here, and the precedent is explicit a few lines below: three of
+# the four admitted NVIDIA activation pairs cost latency too, and are admitted on
+# accuracy. Footprint is the reliable benefit of these modes on every card
+# measured so far.
+#
+# INT8 is deliberately *not* extended to AMD. It holds 4/4 but runs ~10x slower
+# than BF16 on gfx942, measured twice -- once on torch 2.10 and again on 2.13
+# where torchao's compiled extensions load, which moved it under 3%. That is the
+# shape LM7 already refuses on Turing: a mode whose best case is a regression.
+# See docs/amd-mi300x.md.
 _QUANTIZATION_VENDORS = {
     INT8: frozenset({"nvidia", "cpu"}),
-    FP8: frozenset({"nvidia"}),
+    FP8: frozenset({"nvidia", "amd"}),
     NVFP4: frozenset({"nvidia"}),
-    FP8_DYNAMIC: frozenset({"nvidia"}),
-    FP8_DYNAMIC_ROWWISE: frozenset({"nvidia"}),
+    FP8_DYNAMIC: frozenset({"nvidia", "amd"}),
+    FP8_DYNAMIC_ROWWISE: frozenset({"nvidia", "amd"}),
     NVFP4_DYNAMIC: frozenset({"nvidia"}),
 }
 
 _QUANTIZATION_VENDOR_TEXT = {
     INT8: "detected NVIDIA GPUs and CPU targets",
-    FP8: "detected NVIDIA GPUs",
+    FP8: "detected NVIDIA and AMD GPUs",
     NVFP4: "detected NVIDIA GPUs",
-    FP8_DYNAMIC: "detected NVIDIA GPUs",
-    FP8_DYNAMIC_ROWWISE: "detected NVIDIA GPUs",
+    FP8_DYNAMIC: "detected NVIDIA and AMD GPUs",
+    FP8_DYNAMIC_ROWWISE: "detected NVIDIA and AMD GPUs",
     NVFP4_DYNAMIC: "detected NVIDIA GPUs",
 }
 
@@ -133,7 +153,7 @@ _QUANTIZATION_VENDOR_TEXT = {
 # BF16 path, so forcing BF16 there would measure emulation. Read
 # `quantized_compute_dtype` rather than this table directly -- NVIDIA's answer
 # depends on architecture as well as vendor.
-_QUANTIZED_COMPUTE_DTYPE = {"nvidia": "bfloat16", "cpu": "float32"}
+_QUANTIZED_COMPUTE_DTYPE = {"nvidia": "bfloat16", "cpu": "float32", "amd": "bfloat16"}
 
 # FP8 needs Ada-class tensor cores.
 _FP8_MINIMUM_CAPABILITY = 89
@@ -1118,7 +1138,17 @@ def _resolve_dtype(
         "bfloat16": torch.bfloat16,
     }
     if value == "auto":
-        if quantization in WEIGHT_ONLY_QUANTIZATIONS:
+        # Every quantized mode, not only the weight-only ones. This read
+        # `quantization in WEIGHT_ONLY_QUANTIZATIONS`, so the three dynamic
+        # activation modes fell through to the float16 default and
+        # `--quantize fp8-dynamic-rowwise` raised out of torchao with "PerRow
+        # quantization only works for bfloat16 precision input weight" -- on any
+        # vendor, not just AMD. `_validate_quantization` could not catch it,
+        # because the caller passed the "auto" it accepts and the wrong dtype
+        # was produced afterwards. It went unnoticed because every recorded
+        # measurement of these modes came from `benchmarks/quantization.py`,
+        # which passes `--dtype bfloat16` explicitly.
+        if quantization != NO_QUANTIZATION:
             return values[_QUANTIZED_COMPUTE_DTYPE.get(target.vendor, "bfloat16")]
         if target.vendor == "cpu":
             return torch.float32
@@ -1212,6 +1242,14 @@ def _validate_quantization(
         raise UnsupportedModelError(
             f"{label} {family} quantization requires {_MODE_CAPABILITY_TEXT[quantization]}; "
             f"{target.architecture} is below that."
+        )
+    # The AMD half of the same gate. `capability` is None for every `gfx`, so the
+    # comparison above never fires on AMD and a gfx90a -- CDNA 2, no FP8 silicon
+    # at all -- would otherwise be handed an FP8 mode.
+    if minimum is not None and target.vendor == "amd" and not _amd_computes(target, "fp8"):
+        raise UnsupportedModelError(
+            f"{label} {family} quantization needs native FP8, which {target.architecture} "
+            "does not have. AMD FP8 starts at CDNA 3 (gfx942); see docs/amd-mi300x.md."
         )
     validated = (
         VALIDATED_ACTIVATION
@@ -1383,17 +1421,40 @@ def _compute_capability(target: TargetSpec) -> int | None:
 
 
 def _supports_fp8(target: TargetSpec) -> bool:
+    if target.vendor == "amd":
+        return _amd_computes(target, "fp8")
     capability = _compute_capability(target)
     return capability is None or capability >= _MODE_MINIMUM_CAPABILITY[FP8]
+
+
+def _amd_computes(target: TargetSpec, fmt: str) -> bool:
+    """Whether this `gfx` part computes a format natively.
+
+    The AMD counterpart of the capability comparison, and it cannot reuse it:
+    `compute_capability` returns None for every `gfx` string, and every gate here
+    reads None as "do not gate". That is the right default for an unresolved
+    NVIDIA target and the wrong one for AMD, where it would wave FP8 through on a
+    gfx90a that has none. An unrecognized `gfx` still answers True, which keeps
+    the original meaning of None -- LM7 does not know, so it does not refuse.
+
+    See `detection.precision_support`, which is the single table both this and
+    `lm7 targets` read.
+    """
+    precision = precision_support(target)
+    return precision.get(fmt, NATIVE) == NATIVE
 
 
 def supports_native_bf16(target: TargetSpec) -> bool:
     """Whether this target has native BF16 arithmetic rather than emulation.
 
-    Only meaningful for NVIDIA, where LM7 knows the capability number. Everything
+    NVIDIA knows its capability number; AMD answers from the same `gfx` precision
+    table `lm7 targets` prints, which matters because the quantized compute dtype
+    on AMD is BF16 and a CDNA 1-or-older part would be emulating it. Everything
     else answers True, because the compute dtype for those targets is decided by
     ``_QUANTIZED_COMPUTE_DTYPE`` and not by this.
     """
+    if target.vendor == "amd":
+        return _amd_computes(target, "bf16")
     if target.vendor != "nvidia":
         return True
     capability = _compute_capability(target)

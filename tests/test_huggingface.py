@@ -618,6 +618,140 @@ def test_narrow_formats_stay_nvidia_only(quantization):
         )
 
 
+@pytest.mark.parametrize(
+    "quantization",
+    [huggingface.FP8, huggingface.FP8_DYNAMIC, huggingface.FP8_DYNAMIC_ROWWISE],
+)
+def test_fp8_modes_are_admitted_on_cdna3(quantization):
+    """Measured on an MI300X (gfx942), and on the kernel rather than the API.
+
+    `benchmarks/fp8_kernel_check.py` shows both dynamic modes emitting
+    `_scaled_mm` with no plain `mm` there -- the same generated code the sm90 and
+    sm120 rows show -- so CDNA 3 computes in FP8 rather than dequantizing into
+    BF16. Both hold 4/4 top-1. See docs/amd-mi300x.md.
+    """
+    huggingface._validate_quantization(
+        quantization,
+        TargetSpec("amd", "gpu", architecture="gfx942"),
+        "inductor",
+        "auto",
+        "unsloth/Llama-3.2-1B-Instruct",
+    )
+
+
+@pytest.mark.parametrize(
+    "quantization",
+    [huggingface.FP8, huggingface.FP8_DYNAMIC, huggingface.FP8_DYNAMIC_ROWWISE],
+)
+def test_fp8_is_refused_on_an_amd_part_without_it(quantization):
+    """The gate the NVIDIA capability comparison cannot provide.
+
+    `compute_capability` is None for every `gfx`, and every capability check
+    reads None as "do not gate" -- correct for an unresolved NVIDIA target, and
+    wrong here, where it would hand FP8 to a CDNA 2 part that has none.
+    """
+    with pytest.raises(UnsupportedModelError, match="native FP8"):
+        huggingface._validate_quantization(
+            quantization,
+            TargetSpec("amd", "gpu", architecture="gfx90a"),
+            "inductor",
+            "auto",
+            "unsloth/Llama-3.2-1B-Instruct",
+        )
+
+
+def test_int8_stays_off_amd_despite_holding_its_tokens():
+    """INT8 keeps 4/4 top-1 on gfx942 and is still refused.
+
+    It runs ~10x slower than BF16 there, measured twice -- on torch 2.10 and
+    again on 2.13, where torchao's compiled extensions load and the number moved
+    under 3%. That is the shape LM7 already refuses on Turing: a mode whose best
+    case is a regression.
+    """
+    with pytest.raises(UnsupportedModelError, match="NVIDIA GPUs and CPU"):
+        huggingface._validate_quantization(
+            huggingface.INT8,
+            TargetSpec("amd", "gpu", architecture="gfx942"),
+            "inductor",
+            "auto",
+            "unsloth/Llama-3.2-1B-Instruct",
+        )
+
+
+@pytest.mark.parametrize("quantization", [huggingface.NVFP4, huggingface.NVFP4_DYNAMIC])
+def test_nvfp4_stays_off_amd(quantization):
+    """No shipping CDNA part computes FP4. Weight-only NVFP4 scored 3/4 on
+    gfx942 and torchao refuses the dynamic mode with its own `sm100+`
+    assertion."""
+    with pytest.raises(UnsupportedModelError, match="NVIDIA"):
+        huggingface._validate_quantization(
+            quantization,
+            TargetSpec("amd", "gpu", architecture="gfx942"),
+            "inductor",
+            "auto",
+            "unsloth/Llama-3.2-1B-Instruct",
+        )
+
+
+def test_amd_quantization_pins_bfloat16():
+    """`_QUANTIZED_COMPUTE_DTYPE` needed an `amd` entry or this raised KeyError
+    rather than an LM7Error -- the subscript is bare."""
+    assert huggingface._QUANTIZED_COMPUTE_DTYPE["amd"] == "bfloat16"
+    assert (
+        huggingface._resolve_dtype(
+            "auto", TargetSpec("amd", "gpu", architecture="gfx942"), huggingface.FP8
+        )
+        == torch.bfloat16
+    )
+    with pytest.raises(UnsupportedModelError, match="dtype"):
+        huggingface._validate_quantization(
+            huggingface.FP8,
+            TargetSpec("amd", "gpu", architecture="gfx942"),
+            "inductor",
+            "float16",
+            "unsloth/Llama-3.2-1B-Instruct",
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        TargetSpec("nvidia", "gpu", architecture="sm90"),
+        TargetSpec("amd", "gpu", architecture="gfx942"),
+    ],
+)
+@pytest.mark.parametrize(
+    "quantization",
+    [huggingface.FP8, huggingface.FP8_DYNAMIC, huggingface.FP8_DYNAMIC_ROWWISE],
+)
+def test_auto_dtype_covers_dynamic_activation_modes(target, quantization):
+    """`--dtype auto` used to resolve the dynamic modes to float16.
+
+    The branch keyed on `WEIGHT_ONLY_QUANTIZATIONS`, so `fp8-dynamic` and
+    `fp8-dynamic-rowwise` fell through to the GPU default and torchao raised
+    "PerRow quantization only works for bfloat16 precision input weight" from
+    inside `quantize_`. `_validate_quantization` cannot catch that: the caller
+    passes the "auto" it accepts, and the wrong dtype is produced afterwards.
+
+    Vendor-independent -- it reproduced on `sm90` in the same check that found it
+    on `gfx942`. It survived because every recorded measurement of these modes
+    came from `benchmarks/quantization.py`, which passes `--dtype bfloat16`.
+    """
+    assert huggingface._resolve_dtype("auto", target, quantization) == torch.bfloat16
+
+
+def test_native_bf16_is_read_from_the_gfx_table():
+    """AMD's BF16 answer comes from the same table `lm7 targets` prints, not from
+    a blanket True for every non-NVIDIA vendor."""
+    assert huggingface.supports_native_bf16(TargetSpec("amd", "gpu", architecture="gfx942"))
+    assert huggingface.supports_native_bf16(TargetSpec("amd", "gpu", architecture="gfx90a"))
+    # Vega 20 predates CDNA's BF16 matrix instructions.
+    assert not huggingface.supports_native_bf16(TargetSpec("amd", "gpu", architecture="gfx906"))
+    # An unresolved or unrecognized part keeps the old "do not refuse" meaning.
+    assert huggingface.supports_native_bf16(TargetSpec("amd", "gpu"))
+    assert huggingface.supports_native_bf16(TargetSpec("amd", "gpu", architecture="gfx1250"))
+
+
 def test_auto_dtype_under_quantization_is_target_specific():
     """BF16 on NVIDIA, FP32 on CPU — x86 without AVX-512 has no native BF16."""
     assert (

@@ -145,8 +145,31 @@ this table was that the dequantization ran unfused and the 9.72x was an
 artifact. That hypothesis was stated here and it is wrong — see the re-run
 below.
 
-**No `_QUANTIZATION_VENDORS` entry changes on this evidence**, now for a better
-reason than uncertainty.
+### Which modes this admitted, and which it did not
+
+The latency table alone reads like a fallback. It is not: `benchmarks/fp8_kernel_check.py`
+on this card shows both dynamic modes emitting `_scaled_mm` and no plain `mm`,
+the same generated code the `sm90` and `sm120` rows show — see
+[quantization](quantization.md#the-same-check-on-cdna-3). **CDNA 3 computes in
+FP8**, and it is still slower than BF16 on this model and shape.
+
+That is enough to admit them, because it is the bar the NVIDIA table already
+uses: three of the four admitted NVIDIA activation pairs also cost latency and
+are admitted on accuracy. So `_QUANTIZATION_VENDORS` now reaches AMD for `fp8`,
+`fp8-dynamic` and `fp8-dynamic-rowwise`, and for nothing else.
+
+| mode | on AMD | why |
+| --- | --- | --- |
+| `fp8`, `fp8-dynamic`, `fp8-dynamic-rowwise` | **admitted** | real FP8 GEMM, 4/4 top-1, logit differences 1.11–1.40 against the H100's 1.09–1.33 |
+| `int8` | refused | 4/4, and ~10x slower on both PyTorch versions — a mode whose best case is a regression |
+| `nvfp4` | refused | 3/4 top-1 |
+| `nvfp4-dynamic` | refused | no FP4 silicon; torchao refuses it first |
+
+Two gates had to be built rather than reused. `compute_capability` is `None` for
+every `gfx` and every capability check reads `None` as "do not gate" — correct
+for an unresolved NVIDIA target, and enough to hand FP8 to a `gfx90a` that has
+none. Both `_supports_fp8` and `supports_native_bf16` now read the same
+`precision_support` table `lm7 targets` prints.
 
 ### The same sweep on torch 2.13, which settles it
 
