@@ -92,7 +92,7 @@ real, not a silent fallback.
 0.094 ms eager against 0.133 ms compiled. The hand-built MLP is in the ladder
 precisely to catch this case, and it reproduces on a third vendor.
 
-## Quantization, and why none of it should change the gate yet
+## Quantization, and why none of it changes the gate
 
 `benchmarks/quantization.py`, Llama-3.2-1B, BF16 baseline, four prompts.
 `_QUANTIZATION_VENDORS` refuses every mode on `amd`; this harness calls
@@ -124,14 +124,45 @@ where footprint is the reliable benefit and speed is not.
 table treats a rejected (model, mode) pair, and its 4.62 max logit difference is
 the largest here by a factor of four.
 
-**The INT8 number is not safe to attribute to CDNA 3.** torchao 0.17.0 prints
-`Skipping import of cpp extensions due to incompatible torch version` against
-this container's torch 2.10 (it wants ≥ 2.11), so the dequantization runs
-unfused in pure PyTorch. That confound is more than large enough to explain a
-9.72x gap on its own, and it does not touch the FP8 modes the same way.
-**No `_QUANTIZATION_VENDORS` entry should change on this evidence.** The run to
-do first is the same sweep against torch ≥ 2.11 with the compiled path
-available.
+**The INT8 number was blamed on the toolchain, and the toolchain was innocent.**
+torchao 0.17.0 prints `Skipping import of cpp extensions due to incompatible
+torch version` against torch 2.10 (it wants ≥ 2.11), so the first reading of
+this table was that the dequantization ran unfused and the 9.72x was an
+artifact. That hypothesis was stated here and it is wrong — see the re-run
+below.
+
+**No `_QUANTIZATION_VENDORS` entry changes on this evidence**, now for a better
+reason than uncertainty.
+
+### The same sweep on torch 2.13, which settles it
+
+Rebuilt in a separate venv from `download.pytorch.org/whl/rocm7.2` —
+`torch 2.13.0+rocm7.2`, same ROCm 7.2.4, same `torchao 0.17.0`, which now loads
+its extensions instead of skipping them wholesale:
+
+| mode | 2.10 median | 2.13 median | 2.10 ratio | 2.13 ratio |
+| --- | --- | --- | --- | --- |
+| none (BF16) | 3.910 ms | **3.410 ms** | — | — |
+| `int8` | 38.027 ms | **37.245 ms** | 9.72x | **10.92x** |
+| `fp8` | 4.897 ms | 4.343 ms | 1.25x | 1.27x |
+| `nvfp4` | 10.548 ms | **6.690 ms** | 2.70x | 1.96x |
+| `fp8-dynamic` | 5.311 ms | 4.290 ms | 1.36x | 1.26x |
+| `fp8-dynamic-rowwise` | 4.743 ms | **4.184 ms** | 1.21x | 1.23x |
+
+Read the `int8` row twice. **It barely moved in absolute terms** — 38.027 ms to
+37.245 ms, under 3% — while the BF16 baseline got 13% faster, so the *ratio got
+worse*. The compiled extensions were never the explanation. INT8 weight-only is
+roughly 10x slower than BF16 on this silicon, and the earlier caveat on this page
+overstated the confound.
+
+What torch 2.13 did change is `nvfp4`, from 2.70x to 1.96x — a 37% improvement
+that never reached the accuracy problem, which is unchanged at 3/4 and a 4.62
+logit difference. And every ratio here is against a faster baseline, so the two
+runs compare by ratio and not row-for-row.
+
+The honest summary is the one the NVIDIA table already reaches: **footprint is
+the reliable benefit of weight-only quantization and speed is not**, on a third
+vendor now. `fp8-dynamic-rowwise` remains the least-bad at 1.23x.
 
 ## An AOTInductor artifact, and the bug it found
 
@@ -244,9 +275,32 @@ the note that *"measuring it needs a rented card"*:
 First call 21.9 s. Peak VRAM is **7.7% of this card**, which is the sense in
 which 191.7 GiB is not the constraint for anything on the current ladder.
 
-Qwen3-30B-A3B and Mixtral-8x7B were *not* run — they were queued behind the
-tiers that answer questions, and the session ended first. They remain the two
-entries this card could uniquely have measured.
+**The two entries that needed this card**, same harness, same BF16:
+
+| | total / active | graphs | breaks | ops | eager | inductor | speedup | peak VRAM | % of card |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| OLMoE-1B-7B | 6.9B / 1B | 1 | 0 | 1055 | 30.093 ms | 19.277 ms | 1.56x | 14.1 GB | 7.4% |
+| Qwen3-30B-A3B | 30.5B / 3.3B | 1 | 0 | 3247 | 99.235 ms | 65.950 ms | 1.50x | 61.8 GB | 32.2% |
+| Mixtral-8x7B | 46.7B / 12.9B | 1 | 0 | 1919 | 44.187 ms | 29.066 ms | 1.52x | 93.8 GB | 48.9% |
+
+**Qwen3-30B-A3B had never run anywhere in this repo.** It was reachable by name
+in `benchmarks/moe.py` and nothing had pointed a harness at it.
+
+**Mixtral-8x7B lands on 93.8 GB, which is the number the Blackwell run
+reported to the decimal** — and there it was 98.7% of a 96 GiB card, measured
+with 1.2 GB of headroom. Here it is 48.9% of the card. That is the sense in which
+this hardware was the point.
+
+It also **contradicts the shrinking-speedup claim** that
+[limitations](limitations.md) records from Blackwell, where compiling Mixtral
+bought 1.09x and the sequence read 3.12x → 1.60x → 1.09x as models grew. On this
+card all three MoE models sit between 1.50x and 1.56x with no size trend at all,
+including the one that reproduces the Blackwell footprint exactly. Same harness,
+same dtype, different card and different PyTorch — so the honest reading is that
+the trend was a property of that measurement rather than of MoE size, and neither
+run alone can say which.
+
+Zero graph breaks throughout, and every backend pair agrees on the next token.
 
 ## Serving
 
@@ -290,11 +344,31 @@ Two fields are worth reading directly:
   whole-card figure in `/metrics` is real on AMD and not a CUDA-only field
   returning nothing.
 
-**The vLLM ROCm handover still has not been run.** `--backend vllm --dry-run`
-produces correct argv and reports `runtime_installed: false`; vLLM is not in this
-image, and installing it was not worth the metered time. The argv translation is
-therefore exercised and the handover itself is not — say "implemented", not
-"validated", exactly as before.
+### The vLLM ROCm handover, which had never been run
+
+`docs/limitations.md` said the ROCm and TPU handovers had never been run. The
+ROCm one has now.
+
+Not from PyPI: `pip install vllm` fetches the CUDA build and would displace the
+ROCm torch. The route is AMD's own image, `rocm/vllm:latest` — vLLM
+`0.11.2.dev673` on `torch 2.9.0a0+rocm`, hip 7.0 — with LM7 installed beside it,
+which leaves torch alone. `runtime_installed` then flips from `false` to `true`
+and resolves an executable.
+
+```console
+$ lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct \
+    --target amd --backend vllm --port 8200
+(APIServer) INFO: Application startup complete.
+```
+
+`/v1/models` answers with `"owned_by": "vllm"`, chat completions return text, and
+`stream: true` delivers chunked deltas. **It needed no LM7 fix to start** — worth
+recording, because CUDA needed two (`VLLM_WSL2_ENABLE_PIN_MEMORY` and
+`--vllm-arg`) plus a FlashInfer workaround before it would come up at all.
+
+What that does *not* establish: nothing about vLLM's throughput was measured,
+here or on any other platform, and the model is a 135M. LM7's involvement ends
+when the process starts.
 
 ## What this page does not say
 
@@ -303,9 +377,10 @@ therefore exercised and the handover itself is not — say "implemented", not
 - **This is an MI300X `VF`** — an SR-IOV virtual function. It reports the full
   191.7 GiB and a single SPX partition, so it behaves as the whole card, but it
   is not a bare-metal MI300X and no comparison against one was possible.
-- **torch 2.10, not the 2.13 the NVIDIA pages use.** Rows compare against the
-  H100 and Blackwell pages for "does it work" and only roughly for speed. The
-  quantization confound above is a direct consequence.
+- **Two PyTorch versions.** Everything except the quantization re-run ran on
+  `torch 2.10.0+rocm7.2`; the re-run used `2.13.0+rocm7.2` in a separate venv, and
+  the two are compared by ratio rather than row-for-row because the BF16 baseline
+  moved 13%. The matrix and MoE numbers are 2.10 and were not repeated.
 - **No MIGraphX.** The native bindings import on the host and not inside the
   ROCm PyTorch container, and chasing that was not worth the metered time. The
   [evaluation plan](amd-migraphx.md) is unchanged.
@@ -314,7 +389,8 @@ therefore exercised and the handover itself is not — say "implemented", not
   Team/Enterprise Cloud.
 - **Serving is one model at 135M, single stream.** No concurrency, no larger
   model, no quantized serve — which is the configuration that was silently wrong
-  on NVIDIA. The vLLM ROCm handover is still unrun.
+  on NVIDIA. The vLLM handover starts and answers; **its throughput is
+  unmeasured**, as it is on every platform in this repo.
 - **No decode benchmark.** `benchmarks/decode.py` was not run, so the
   memory-bound half of generation is unmeasured here; the ~18 ms/token above is
   an end-to-end HTTP figure and not comparable to the 1.77 ms/token
