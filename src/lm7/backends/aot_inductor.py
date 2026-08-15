@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import os
 import shutil
 import site
@@ -423,6 +424,19 @@ class AOTInductorBackend:
         probe = self.probe()
         if not probe.available:
             raise ArtifactLoadError(probe.reason)
+        # `aoti_load_package` reaches for `torch._inductor.codecache` without
+        # importing it, and that submodule is lazy. A process that only did
+        # `import torch` therefore fails with `module 'torch._inductor' has no
+        # attribute 'codecache'` -- which is precisely the fresh-process reload
+        # this backend exists for, and precisely the process least likely to have
+        # imported it by some other route. Compiling in the same process hides it,
+        # because Inductor pulls codecache in on the way through.
+        #
+        # Found on an MI300X under torch 2.10.0+rocm7.2.4, where it failed every
+        # cross-process load; it is not AMD-specific, and a CUDA box on a torch
+        # that imports codecache eagerly would never show it.
+        with contextlib.suppress(ImportError):
+            importlib.import_module("torch._inductor.codecache")
         try:
             return torch._inductor.aoti_load_package(str(package_path))
         except Exception as exc:
