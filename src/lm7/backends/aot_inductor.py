@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import os
 import shutil
 import site
@@ -19,15 +20,40 @@ from ..errors import ArtifactLoadError, CompilationError
 from ..targets import TargetSpec
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
-# Vendors whose AOTInductor output LM7 has validated on physical hardware.
-SUPPORTED_VENDORS = frozenset({"cpu", "apple", "nvidia"})
+# Vendors LM7 will package AOTInductor output for. CPU, Apple and NVIDIA are
+# validated on physical hardware; AMD is not -- no AMD GPU has run LM7 at all --
+# and is here because `exporting._ARCHITECTURE_BOUND_VENDORS` already lists
+# `amd` for this backend, so the artifact gate was wired for a payload nothing
+# could produce. See docs/limitations.md#hardware-validation.
+SUPPORTED_VENDORS = frozenset({"cpu", "apple", "nvidia", "amd"})
 
 # Vendors that reach the GPU through CUDA, and therefore need a CUDA toolkit at
 # package time. JIT Inductor does not: it generates Triton kernels and compiles
 # them through Triton's own bundled PTX path. AOTInductor additionally compiles
 # and links a C++ wrapper against the CUDA headers, so a CUDA target needs
 # headers the PyTorch wheel does not ship.
+#
+# AMD is deliberately not in here. ROCm reaches the GPU through `torch.cuda`,
+# but the packaging problem is not the same one: the CUDA case is a *partial*
+# toolkit, where the PyTorch wheel bundles the runtime headers and omits the
+# compiler front end, so LM7 has to find and splice in the missing half. ROCm
+# ships as one tree under `/opt/rocm` and either is or is not installed, which
+# `_rocm_home` answers directly.
 _CUDA_VENDORS = frozenset({"nvidia"})
+
+# Vendors whose wrapper build needs a ROCm installation on the host.
+_ROCM_VENDORS = frozenset({"amd"})
+
+# Where ROCm installs, in the order the ROCm build tooling itself looks. A
+# PyTorch ROCm wheel links against this tree rather than bundling it, so the
+# wrapper build needs it present.
+_ROCM_ENVIRONMENT_VARIABLES = ("ROCM_HOME", "ROCM_PATH")
+_ROCM_DEFAULT_ROOT = Path("/opt/rocm")
+
+_ROCM_HINT = (
+    "install ROCm (the PyTorch ROCm wheel links against it rather than bundling it), "
+    "or set ROCM_HOME to an existing installation"
+)
 
 # The PyTorch CUDA wheel bundles the runtime headers but not the compiler front
 # end, so `crt/host_defines.h` (nvidia-cuda-crt) and `nv/target` (nvidia-cuda-cccl)
@@ -160,7 +186,25 @@ def _cuda_build_environment(target: TargetSpec) -> Iterator[None]:
             cpp_extension.CUDA_HOME = previous_module_home
 
 
+def _rocm_home() -> Path | None:
+    """The ROCm installation the wrapper build will link against, if there is one."""
+    for name in _ROCM_ENVIRONMENT_VARIABLES:
+        value = os.environ.get(name)
+        if value and Path(value).is_dir():
+            return Path(value)
+    return _ROCM_DEFAULT_ROOT if _ROCM_DEFAULT_ROOT.is_dir() else None
+
+
 def _current_compute_capability() -> str | None:
+    """The `smXX` of the GPU in this process, or None when there is not one.
+
+    NVIDIA only. `torch.cuda.get_device_capability` answers on ROCm too -- it
+    returns (9, 4) on a gfx942 -- and formatting that as `sm94` would invent an
+    NVIDIA architecture that does not exist. `_current_gcn_architecture` is the
+    AMD counterpart.
+    """
+    if getattr(torch.version, "hip", None):
+        return None
     try:
         major, minor = torch.cuda.get_device_capability()
     except (AssertionError, RuntimeError):
@@ -168,12 +212,31 @@ def _current_compute_capability() -> str | None:
     return f"sm{major}{minor}"
 
 
+def _current_gcn_architecture() -> str | None:
+    """The `gfxNNN` of the AMD GPU in this process, or None when there is not one.
+
+    Normalized the same way `detection.detect_targets` normalizes it: ROCm
+    reports `gfx942:sramecc+:xnack-` and the feature suffixes are not part of the
+    architecture an artifact is bound to.
+    """
+    if not getattr(torch.version, "hip", None):
+        return None
+    try:
+        name = getattr(torch.cuda.get_device_properties(0), "gcnArchName", None)
+    except (AssertionError, RuntimeError):
+        return None
+    return str(name).split(":", 1)[0] if name else None
+
+
 # Manifest keys that describe what a package was built against, and the words to
-# use for them when a load fails.
+# use for them when a load fails. A manifest carries the CUDA pair or the ROCm
+# pair, never both, so a hint names whichever the artifact actually recorded.
 _ENVIRONMENT_LABELS = {
     "torch": "PyTorch",
     "cuda": "CUDA runtime",
+    "hip": "ROCm runtime",
     "compute_capability": "GPU architecture",
+    "gcn_architecture": "GPU architecture",
 }
 
 
@@ -191,7 +254,9 @@ def _environment_mismatch_hint(built_with: Mapping[str, Any] | None) -> str:
     current: Mapping[str, str | None] = {
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
+        "hip": torch.version.hip,
         "compute_capability": _current_compute_capability(),
+        "gcn_architecture": _current_gcn_architecture(),
     }
     built = ", ".join(
         f"{label} {built_with[key]}"
@@ -210,11 +275,12 @@ def _environment_mismatch_hint(built_with: Mapping[str, Any] | None) -> str:
             f" The artifact was built with {built}, which is what this process has, so the "
             "package or its dependencies are at fault rather than the environment."
         )
+    runtime = "ROCm" if built_with.get("hip") else "CUDA"
     return (
         f" The artifact was built with {built}, and this process differs: "
         f"{'; '.join(differences)}. An AOTInductor package holds kernels compiled for one "
-        "architecture and a wrapper linked against one CUDA runtime, so re-export the model "
-        "on this machine."
+        f"architecture and a wrapper linked against one {runtime} runtime, so re-export the "
+        "model on this machine."
     )
 
 
@@ -239,8 +305,8 @@ class AOTInductorBackend:
         if request.target.vendor not in SUPPORTED_VENDORS:
             return Support(
                 False,
-                "LM7 v0.1 only validates packaged AOTInductor execution for CPU, "
-                "Apple Silicon, and NVIDIA targets.",
+                "LM7 packages AOTInductor output for CPU, Apple Silicon, NVIDIA, and AMD "
+                f"targets only; {request.target} is none of those.",
             )
         if request.target.vendor in _CUDA_VENDORS and _cuda_toolkit_home() is None:
             return Support(
@@ -248,9 +314,15 @@ class AOTInductorBackend:
                 "AOTInductor needs a CUDA toolkit to build its wrapper for a CUDA "
                 f"target, and LM7 found none: {_CUDA_TOOLKIT_HINT}.",
             )
+        if request.target.vendor in _ROCM_VENDORS and _rocm_home() is None:
+            return Support(
+                False,
+                "AOTInductor needs a ROCm installation to build its wrapper for an AMD "
+                f"target, and LM7 found none: {_ROCM_HINT}.",
+            )
         return Support(
             True,
-            "AOTInductor can package an ExportedProgram for CPU, Apple, or NVIDIA execution.",
+            "AOTInductor can package an ExportedProgram for CPU, Apple, NVIDIA, or AMD execution.",
             priority=90,
         )
 
@@ -322,6 +394,12 @@ class AOTInductorBackend:
                 f"found, and the wrapper for a {target.vendor} target cannot be built "
                 f"without one. To fix this, {_CUDA_TOOLKIT_HINT}."
             )
+        if target is not None and target.vendor in _ROCM_VENDORS and _rocm_home() is None:
+            raise CompilationError(
+                f"AOTInductor packaging failed for {package_path}: no ROCm installation "
+                f"was found, and the wrapper for a {target.vendor} target cannot be built "
+                f"without one. To fix this, {_ROCM_HINT}."
+            )
         configs = dict(options or {})
         try:
             with _cuda_build_environment(target) if target else contextlib.nullcontext():
@@ -346,6 +424,19 @@ class AOTInductorBackend:
         probe = self.probe()
         if not probe.available:
             raise ArtifactLoadError(probe.reason)
+        # `aoti_load_package` reaches for `torch._inductor.codecache` without
+        # importing it, and that submodule is lazy. A process that only did
+        # `import torch` therefore fails with `module 'torch._inductor' has no
+        # attribute 'codecache'` -- which is precisely the fresh-process reload
+        # this backend exists for, and precisely the process least likely to have
+        # imported it by some other route. Compiling in the same process hides it,
+        # because Inductor pulls codecache in on the way through.
+        #
+        # Found on an MI300X under torch 2.10.0+rocm7.2.4, where it failed every
+        # cross-process load; it is not AMD-specific, and a CUDA box on a torch
+        # that imports codecache eagerly would never show it.
+        with contextlib.suppress(ImportError):
+            importlib.import_module("torch._inductor.codecache")
         try:
             return torch._inductor.aoti_load_package(str(package_path))
         except Exception as exc:

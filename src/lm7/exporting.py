@@ -277,8 +277,8 @@ def export(
     resolved_target = _artifact_target(target, backend)
     if backend == "aot_inductor" and resolved_target.vendor not in AOT_INDUCTOR_VENDORS:
         raise BackendUnavailableError(
-            "LM7 v0.1 only validates packaged AOTInductor artifacts for CPU, Apple "
-            "Silicon, and NVIDIA targets."
+            "LM7 writes packaged AOTInductor artifacts for CPU, Apple Silicon, NVIDIA, "
+            f"and AMD targets only; {resolved_target} is none of those."
         )
     if backend == "openvino" and resolved_target.vendor not in {"cpu", "intel"}:
         raise BackendUnavailableError(
@@ -1167,19 +1167,28 @@ def _tensorrt_runtime_version() -> str | None:
 
 
 def _aot_inductor_requirements(target: TargetSpec) -> dict[str, Any]:
-    """What an AOTInductor payload was built against, for a CUDA target.
+    """What an AOTInductor payload was built against, for a GPU target.
 
-    The package holds kernels compiled for one compute capability and a wrapper
-    linked against one CUDA runtime, which is why `_validate_target_architecture`
-    refuses to load it on a different GPU. Recording the pair is what makes both
-    outcomes diagnosable from the artifact alone: a refusal can name what the
-    artifact wanted, and a failure that gets past the guard can be told apart
-    from a merely broken package.
+    The package holds kernels compiled for one architecture and a wrapper linked
+    against one GPU runtime, which is why `_validate_target_architecture` refuses
+    to load it on a different GPU. Recording the pair is what makes both outcomes
+    diagnosable from the artifact alone: a refusal can name what the artifact
+    wanted, and a failure that gets past the guard can be told apart from a
+    merely broken package.
+
+    AMD records the ROCm pair rather than the CUDA one. Both vendors reach the
+    GPU through `torch.cuda`, and reusing `_cuda_device_requirements` for AMD
+    would write `"cuda": null` beside a `compute_capability` of `"sm94"` -- the
+    (9, 4) that `get_device_capability` returns for a gfx942, formatted as an
+    NVIDIA architecture that has never existed. The manifest carries one pair or
+    the other, never both.
 
     CPU and Apple targets record nothing here. Their payload is bound to a host
     toolchain too, but LM7 has not characterized how, and a guess in a manifest
     is worse than a gap.
     """
+    if target.vendor == "amd":
+        return {"device_bound": True, **_rocm_device_requirements()}
     if target.vendor != "nvidia":
         return {}
     return {"device_bound": True, **_cuda_device_requirements()}
@@ -1192,6 +1201,26 @@ def _cuda_device_requirements() -> dict[str, Any]:
         return {
             "cuda": torch.version.cuda,
             "compute_capability": f"sm{major}{minor}",
+            "device_name": torch.cuda.get_device_name(),
+        }
+    except (AssertionError, RuntimeError):
+        return {}
+
+
+def _rocm_device_requirements() -> dict[str, Any]:
+    """The AMD counterpart, keyed on `gfx` rather than on a capability number.
+
+    The architecture is normalized the way `detection.detect_targets` normalizes
+    it: ROCm reports `gfx942:sramecc+:xnack-`, and the feature suffixes are not
+    part of what the payload is bound to.
+    """
+    try:
+        architecture = getattr(torch.cuda.get_device_properties(0), "gcnArchName", None)
+        if not architecture:
+            return {}
+        return {
+            "hip": torch.version.hip,
+            "gcn_architecture": str(architecture).split(":", 1)[0],
             "device_name": torch.cuda.get_device_name(),
         }
     except (AssertionError, RuntimeError):
