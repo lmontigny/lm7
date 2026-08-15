@@ -200,10 +200,11 @@ faster than the JIT it came from** (4.045 ms against 7.969 ms), which is the sam
 per-call framework-overhead effect the NVIDIA page records.
 
 **The two `aoti_load_package` rows are the codecache bug, reproduced.** That arm
-calls PyTorch's loader directly and bypasses LM7's, so it still fails where
-`lm7.load_artifact` now succeeds. Read those two rows as "this is what the bug
-looks like from the outside", not as an AMD limitation —
-`benchmarks/aot_artifact_lifecycle.py` needs the same import LM7 got.
+calls PyTorch's loader directly and bypassed LM7's, so it failed where
+`lm7.load_artifact` succeeded — the clearest possible demonstration that the bug
+is in the raw call and not in the artifact. The benchmark has since been given
+the same import, so a re-run would fill those rows in; the table above is the
+run that found it.
 
 All six mismatch cases were **rejected with a clear message**, which is the bar
 [artifact compatibility](aot-artifact-compatibility.md) sets — including the
