@@ -234,6 +234,49 @@ the box and author docs locally afterwards; don't write prose on a rented GPU."*
 Anything that needs a compiler, a test run, or a second opinion should already be
 on a branch before the first SSH.
 
+### Prove the numbers are yours, before you collect any
+
+`git rev-parse` below records which commit you *checked out*. On a shared or
+reused box that is not the same question as which code ran, and the gap is
+silent — every hazard here produces plausible numbers rather than an error.
+
+**An editable install pins `import lm7` to one path, whichever directory you
+run from.** `pip install -e` writes a `.pth` naming an absolute `src`, so a
+second checkout does not get used by cd-ing into it:
+
+```bash
+python -c "import lm7; print(lm7.__file__)"   # the only answer that counts
+```
+
+If that is not the tree you think you are measuring, fix it before anything
+else. `PYTHONPATH=<checkout>/src` takes precedence over the `.pth` and is enough;
+re-check the line above rather than assuming it worked.
+
+**The working tree may not match the commit.** These boxes get reused across
+sessions, and uncommitted work in `src/` is measured exactly like committed work:
+
+```bash
+git status --short                      # expect empty
+git diff --stat origin/main -- src/ benchmarks/
+```
+
+Docs-only drift is harmless. Anything under `src/` or `benchmarks/` means the
+run describes code that is not on any branch. Clone to a fresh directory at a
+known commit and point `PYTHONPATH` at it rather than checking out over someone
+else's work.
+
+**Another process can hold the GPU without using it.** An inference server
+parked at idle still reserves its memory pool — vLLM defaults to 90% of VRAM —
+so latency measured beside one is contended, and neither run says so:
+
+```bash
+rocm-smi --showmemuse | grep VRAM%      # or: nvidia-smi --query-gpu=memory.used --format=csv
+```
+
+Expect roughly zero before a timing run, and check again afterwards. This is the
+one hazard that also damages *someone else's* numbers, so on a shared box find
+out what is running before ending it.
+
 ### Identity, first, because it is cheap and it is the row
 
 ```bash
@@ -286,6 +329,72 @@ read the second as the first.
 
 Other plans, in rough order of cost: `artifacts`, `quant`, `large`, `moe`.
 
+### When a harness dies mid-sweep, isolate before you debug
+
+One cell per process is the matrix's design; on a new vendor it is also the
+first thing to try on any *other* harness that will not finish. Most multi-arm
+benchmarks — `benchmarks/decode.py` is the worked example — run every arm in one
+process, which means one arm can take the run down with it.
+
+Split the loop the driver would have run, one process per cell, and let a
+crashing cell cost only itself:
+
+```bash
+for arm in eager inductor cudagraphs decode-only; do
+  python benchmarks/decode.py --target <vendor> --arm "$arm" \
+    --sequence-length 512 --batch-size 1 \
+    --output artifacts/<host>/cells/$arm-s512-b1.json
+  echo "$arm rc=$?"
+done
+```
+
+Two things this buys beyond finishing. It tells you whether the failure is a
+shape, an arm, or an *ordering* — on the MI300X the answer was ordering, and the
+first two diagnoses (a sequence length, then graph capture at that length) were
+both wrong because a crash that only sometimes happens looks shape-dependent.
+And it turns "the sweep died" into a bounded set of results plus a defect.
+
+Two things it costs, and both belong in whatever you write:
+
+- **Isolation is a different execution mode.** A fresh allocator and cold caches
+  per cell is not obviously worth nothing, so numbers taken this way are not
+  strictly row-for-row against a sweep that ran arms in one process.
+- **Cross-arm assertions stop working.** A harness that compares each arm to a
+  reference arm compares each cell to *itself* once isolated, so fields like
+  "same tokens as reference" become vacuously true. Recover the check by
+  comparing the recorded outputs across cells afterwards, and say that you did.
+
+A crash worth reporting needs the signature, not the symptom: capture whether it
+is a Python exception, a non-zero exit, or a fault, and for a fault check
+`dmesg | tail` for the faulting binary. `segfault ... in python3.12` and three
+different glibc messages across runs is one heap-corruption bug, not three bugs
+— and it is a different conversation from an OOM, which `rocm-smi` and `free -g`
+rule in or out in a second.
+
+### The artifact lifecycle, with the GPU's own target
+
+[Above](#artifact-lifecycle-if-the-host-will-export) runs on `--target cpu`.
+Point it at the GPU instead — the cross-process part is the whole point, and on
+a GPU it also exercises the architecture guard, which is the check that a
+package built for one chip refuses to load on another:
+
+```bash
+python benchmarks/aot_artifact_lifecycle.py run --model smollm2 \
+  --dtype bfloat16 --target <vendor> \
+  --results-dir artifacts/aoti-<host> --repeats 15
+```
+
+Every mismatch case should be `rejected` with a message naming the cause; a case
+that loads is the finding. On a first-of-its-kind card the guard message is
+itself worth pasting into the hardware doc, because it is the first time that
+code path has named this architecture.
+
+Run it against the vendor's *own* loader as well as LM7's where the harness
+offers both. The MI300X session found a torch bug that way — `aoti_load_package`
+uses `torch._inductor.codecache` without importing it — which was visible only
+because the arm calling PyTorch directly failed where the arm calling
+`lm7.load_artifact` succeeded.
+
 ### Weights last, and queued in the background from minute zero
 
 Downloads are usually the binding constraint, and they are the one thing that
@@ -318,7 +427,13 @@ Record:
 - median latencies only with command shape, model, batch, warmup, repeats, dtype,
   **which harness produced them**, and whether the run was a bounded smoke
   benchmark or a full sweep;
-- skipped paths and why.
+- skipped paths and why;
+- **which tree actually ran** — the `lm7.__file__` the process resolved and
+  whether `src/` was clean at that commit — and, if the box was shared, that the
+  GPU was idle when timing started;
+- **whether cells ran isolated or in one process**, if the harness supports both,
+  and which cross-arm checks were recovered afterwards rather than asserted
+  during the run.
 
 Do not add a hardware row for a failed setup. Record the blocker in the relevant
 backend or hardware doc instead.
