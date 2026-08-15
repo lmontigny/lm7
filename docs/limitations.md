@@ -415,17 +415,26 @@ reason, and the pattern does not generalise.
   not universal, but one machine and one ROCm build cannot say whether it belongs
   to LM7, to `torch 2.13.0+rocm7.2`, or to the container's glibc. There is no
   minimal reproducer outside the benchmark and nothing has been filed upstream.
-- **`lm7 targets` now names an AMD generation and its precision support, and
-  every one of those values is a prediction.** The `gfx` tables in
-  `src/lm7/detection.py` are read from AMD's ISA documentation, pinned by unit
-  tests, and confirmed by nothing: no AMD GPU has executed LM7. The NVIDIA
-  counterpart earned the same report on three generations of real silicon, so
-  the two lines look alike in the terminal and are not equally evidenced. Two
+- **`lm7 targets` names an AMD generation and its precision support, and only
+  the `gfx942` row has met hardware.** The `gfx` tables in
+  `src/lm7/detection.py` are read from AMD's ISA documentation and pinned by unit
+  tests. One rented MI300X has since confirmed the `gfx942` row unmodified,
+  including `fp8_format: fnuz`; **every other row remains a prediction**, and the
+  NVIDIA counterpart earned its report on three generations of real silicon, so
+  the two lines look alike in the terminal and are not equally evidenced. Three
   things it is deliberately careful about — `gfx` numbers do not order by
   capability the way `smXX` does, so the table matches exactly rather than
-  comparing; and `fp8` on CDNA 3 is the `fnuz` encoding rather than the OCP one
+  comparing; `fp8` on CDNA 3 is the `fnuz` encoding rather than the OCP one
   `sm89`+ uses, reported separately as `fp8_format` so a MI300X FP8 number is
-  not read as comparable to an H100 one. See [AMD GPU
+  not read as comparable to an H100 one; and `fp4` is native on `gfx950` (CDNA 4)
+  and absent everywhere else in the table, which is why an `nvfp4` run on the
+  MI300X is emulated and measures [1.96x *slower* than
+  BF16](amd-mi300x.md#quantization-and-why-none-of-it-changes-the-gate) while
+  every FP8 mode lands near 1.2x. That last row is read from [ROCm's
+  precision-support
+  table](https://rocm.docs.amd.com/en/latest/reference/precision-support.html)
+  rather than from a product announcement, and no `gfx950` part has run LM7. See
+  [AMD GPU
   support](amd-rocm.md#what-lm7-targets-says-about-the-card-and-how-much-to-trust-it).
 - OpenXLA TPU has now been **exercised on real hardware** — a single-chip TPU
   v6e — which the rest of that list has not. It still has no CI, and one chip
