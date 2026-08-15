@@ -316,6 +316,121 @@ run alone can say which.
 
 Zero graph breaks throughout, and every backend pair agrees on the next token.
 
+## Decode, the memory-bound half
+
+Everything above is a forward pass. Generation is two problems, and the second
+one — a long run of one-token passes bounded by how fast weights come out of
+memory — is the half [prefill and KV-cache decode](kv-cache-decode.md) measures
+on an H100 and this page previously left blank.
+
+`benchmarks/decode.py` on `unsloth/Llama-3.2-1B-Instruct`, BF16, 100 decode steps
+per cell, prompts of tiled English, in the `torch 2.13.0+rocm7.2` venv with
+`transformers 5.15.0` — the same torch minor the H100 page used
+(`2.13.0+cu130`), chosen so the comparison is not also a version comparison.
+
+**This is 16 cells of the H100 page's 60**, and they were not produced the way
+that page's were. Read [the two caveats below](#what-the-decode-numbers-are-not)
+before comparing anything.
+
+At 512 tokens, batch 1 — the shape the H100 page leads with:
+
+| Arm | Prefill | Decode | Throughput | vs eager | MI300X ÷ H100 |
+| --- | --- | --- | --- | --- | --- |
+| `eager` | 9.3 ms | 9.318 ms/token | 107 tok/s | 1.00x | **1.47x faster** |
+| `inductor` | 6.9 ms | 3.539 ms/token | 283 tok/s | 2.63x | 1.26x faster |
+| `cudagraphs` | 14.0 ms | **2.288 ms/token** | **437 tok/s** | **4.07x** | 1.29x *slower* |
+| `decode-only` | 10.2 ms | 2.290 ms/token | 437 tok/s | 4.07x | 1.28x *slower* |
+
+**The card is faster than an H100 at the arm that does not measure the card, and
+slower at the arm that does.** Eager decode here is 9.32 ms/token against the
+H100's 13.72 — but the H100 page's own reading of that column is that eager
+decode is "Python and kernel launches almost end to end", so the MI300X winning
+it says the host loop is cheaper, not that the GPU is faster. Once graphs remove
+the launches, the ordering inverts: 2.288 ms/token against 1.77.
+
+That is also why compiling buys less here — **4.07x against the H100's 7.75x**.
+Not because HIP graph capture underperforms, but because there was less overhead
+to delete. Both machines land in the same place by a different route:
+`cudagraphs` and `decode-only` are within 0.1% of each other on every cell, so
+compiling the prompt pass buys nothing at these lengths on either vendor.
+
+Per-token decode, `eager`, across the shapes that ran:
+
+| Prompt | batch 1 | batch 4 | batch 8 |
+| --- | --- | --- | --- |
+| 512 | 9.318 | 8.928 | 9.117 |
+| 1024 | 9.203 | 9.228 | — |
+
+Flat, exactly as on the H100 — 8.93 to 9.32 ms/token across eight times the
+batch. The same grid with HIP graphs, where the work becomes visible:
+
+| Prompt | batch 1 | batch 4 | batch 8 |
+| --- | --- | --- | --- |
+| 512 | 2.288 (4.07x) | 2.420 (3.69x) | 2.649 (3.44x) |
+| 1024 | 2.681 (3.43x) | — | — |
+
+Decode throughput under `cudagraphs`, tokens/second across the batch: 437 at
+batch 1, 1653 at batch 4, 3021 at batch 8 (512-token prompt). Peak memory never
+exceeded **2.79 GiB** — 1.5% of the card.
+
+Three counters held on every one of the 16 cells: `cudagraphs_active` true on
+both graphs for the two capture arms, `recompiled_during_decode` false, and
+`steady` frames zero. **HIP graph capture drives a KV-cache decode loop for 100
+consecutive tokens without recapturing** — the claim [HIP graph
+capture](#hip-graph-capture-behaves-like-cudas) makes for a forward pass, now
+also for the stateful path.
+
+### The harness cannot complete a sweep on this machine
+
+The 60-cell sweep the H100 page runs **does not finish here.** It died after 13
+cells with `segfault at a9 ... in python3.12`, and re-running it reproduced a
+crash every time, with three different signatures — `segfault at a9`,
+`free(): invalid pointer`, `corrupted double-linked list`. All three are glibc
+heap-corruption symptoms, the fault address is inside the CPython binary rather
+than `libamdhip64` or `libtorch`, VRAM unwinds to zero, and the host had 227 GiB
+free. It is not an OOM and not a GPU fault.
+
+It is also **not deterministic and not shape-dependent**, which took four
+narrowing runs to establish — the first two readings, that it was a 1024-token
+problem and then that it was HIP capture at 1024, were both wrong:
+
+| Arms, one process | Result |
+| --- | --- |
+| `cudagraphs` alone, s1024 and s2048 | clean |
+| `inductor cudagraphs`, s1024 | clean |
+| `eager cudagraphs`, s1024 | **crash** |
+| all four, s512 — a cell that had just passed | **crash** |
+
+The common factor is the `eager` arm running *before* another arm in the same
+process; the crash then lands on the later arm. Isolating one process per
+(arm, shape) sidesteps it completely — **every cell launched that way exited 0,
+18 of them before the run was stopped by hand** — and that is how the numbers
+above were produced.
+
+What this does *not* establish is where the bug lives. The same harness completes
+all 60 cells on an H100, so it is not universal, but one machine and one ROCm
+build cannot separate LM7, `torch 2.13.0+rocm7.2`, and this container's glibc. No
+minimal reproducer outside `decode.py` was built, so nothing has been filed
+upstream. See [limitations](limitations.md#compilation-and-artifacts).
+
+### What the decode numbers are not
+
+- **16 cells, not 60.** Prompt lengths 2048, 4096 and 8192 never ran, and batch 8
+  ran only at 512. The H100's most interesting decode result is that the speedup
+  *collapses* as context grows — 7.75x at 512/batch 1 down to 1.86x at
+  8192/batch 8. **Nothing here reaches the lengths where that happens**, so this
+  page says how compiling pays at short context and is silent about the slope.
+  The 3.44x at 512/batch 8 is the only hint that the same decline starts.
+- **A different execution mode from the H100 rows.** Those 60 cells ran four arms
+  in one process; these 16 ran one arm per process out of necessity. A fresh
+  allocator and a cold cache per cell is not obviously worth nothing, so treat
+  cross-vendor ratios as indicative rather than exact.
+- **Token agreement was recovered offline, not asserted by the harness.** With
+  one arm per process each cell is its own reference, so its `same_tokens` field
+  is self-comparing and vacuous. Comparing the recorded token ids across cells
+  afterwards, every arm matches `eager` exactly at all four complete shapes — the
+  check holds, but it was reconstructed rather than enforced during the run.
+
 ## Serving
 
 `lm7 model serve` had been [validated on five
@@ -405,7 +520,9 @@ when the process starts.
   model, no quantized serve — which is the configuration that was silently wrong
   on NVIDIA. The vLLM handover starts and answers; **its throughput is
   unmeasured**, as it is on every platform in this repo.
-- **No decode benchmark.** `benchmarks/decode.py` was not run, so the
-  memory-bound half of generation is unmeasured here; the ~18 ms/token above is
-  an end-to-end HTTP figure and not comparable to the 1.77 ms/token
-  `compile_generation` reaches on an H100.
+- **Decode is measured at short context only.** [16 of the H100 page's 60
+  cells](#what-the-decode-numbers-are-not) — nothing past a 1024-token prompt,
+  because the harness [cannot complete a sweep on this
+  machine](#the-harness-cannot-complete-a-sweep-on-this-machine). The ~18
+  ms/token in the serving section above is an end-to-end HTTP figure and is not
+  comparable to either those numbers or the H100's 1.77 ms/token.
