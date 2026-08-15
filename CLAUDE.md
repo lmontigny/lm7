@@ -105,9 +105,16 @@ actually run; this is what to reach for and why.
   `benchmarks/nvidia_matrix.py` build inputs differently and disagree by 2.3x on
   the same card and model — enough to invert a conclusion. State which harness
   produced a number.
-- **AMD ROCm GPU, Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have
-  never run on real hardware.** Those adapters are unit-tested against mocks, so
-  say "implemented" and not "validated".
+- **Intel XPU, Tenstorrent, the Intel NPU, and AWS Trainium have never run on
+  real hardware.** Those adapters are unit-tested against mocks, so say
+  "implemented" and not "validated".
+- **AMD ROCm has run, once, on a rented MI300X** (`gfx942`, CDNA 3, 191.7 GiB) —
+  detection, the core matrix, a quantization sweep and an AOTInductor artifact.
+  See [docs/amd-mi300x.md](docs/amd-mi300x.md). It has no CI and no bare-metal
+  part, so it is as validated as the TPU row and no more. Two things from that
+  session generalize: torchao skips its cpp extensions on torch < 2.11, which
+  confounds every quantized latency it produces, and the ROCm PyTorch on the AMD
+  Developer Cloud is a pre-pulled Docker image rather than a system install.
 
 ## Adding or changing a backend
 

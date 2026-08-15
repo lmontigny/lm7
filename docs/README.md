@@ -30,6 +30,7 @@ This index covers everything else.
 | NVIDIA Blackwell (`sm100`, `sm120`) | [nvidia-blackwell.md](nvidia-blackwell.md) |
 | NVIDIA validation suite (any card) | [nvidia-validation.md](nvidia-validation.md) |
 | AMD GPU (ROCm) | [amd-rocm.md](amd-rocm.md) |
+| AMD MI300X (`gfx942`, CDNA 3) | [amd-mi300x.md](amd-mi300x.md) |
 | Apple Silicon (MPS) | [apple-mps.md](apple-mps.md) |
 | Intel GPU/XPU vs. Intel NPU (Core Ultra) | [intel-npu.md](intel-npu.md) |
 | Google TPU | [google-tpu.md](google-tpu.md) |

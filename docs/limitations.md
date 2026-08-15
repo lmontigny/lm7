@@ -381,6 +381,13 @@ reason, and the pattern does not generalise.
   [Android device testing](android-device-testing.md).
 - AMD ROCm, Intel GPU/XPU, OpenXLA TPU, and Tenstorrent are initial
   single-process integrations **without physical-hardware CI**.
+- **AMD ROCm has now been exercised on real hardware** — one rented MI300X
+  (`gfx942`, CDNA 3, 191.7 GiB, SPX), which the Intel and Tenstorrent entries
+  above have not. Detection, the 20-cell core matrix, a seven-mode quantization
+  sweep and an AOTInductor artifact all ran; HIP graph capture works and is the
+  fastest path on every real model measured. It has no CI, it is one card in one
+  session, and it is an SR-IOV `VF` rather than a bare-metal part. See [AMD
+  MI300X](amd-mi300x.md).
 - **`lm7 targets` now names an AMD generation and its precision support, and
   every one of those values is a prediction.** The `gfx` tables in
   `src/lm7/detection.py` are read from AMD's ISA documentation, pinned by unit
@@ -443,7 +450,13 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
   scripted runner and a fake tokenizer. It proves the path works, not that
   output is right: the model has random weights, so no test in CI checks that a
   served answer is correct.
-- **Validated on five targets and two models.** Apple M-series `cpu:arm64` and
+- **Validated on six targets and two models.** `amd:gfx942` (MI300X, CDNA 3) is
+  the newest and the thinnest: SmolLM2-135M at FP16 through `inductor`, one
+  stream, `curl` only, no quantized serve, and no vLLM handover — the argv
+  translation dry-runs correctly and vLLM was never installed. `/metrics`
+  reports ROCm device memory correctly and `steady_frames` stayed at 0. See [AMD
+  MI300X](amd-mi300x.md#serving). The other five:
+  Apple M-series `cpu:arm64` and
   `apple:metal` with SmolLM2-135M-Instruct; `nvidia:sm89` (RTX 4070 SUPER, WSL2)
   with SmolLM2-135M-Instruct and Llama-3.2-1B-Instruct; `cpu:x86_64` (Intel
   Coffee Lake, AVX2) with SmolLM2-135M-Instruct; and `cpu:aarch64` (Arm Neoverse
@@ -534,7 +547,19 @@ These have measurement harnesses or written plans, and no registered backend:
 
 The `lm7 model run` path is validated per (model, mode) pair. It reaches NVIDIA
 GPUs and CPU; `int8` is the only mode measured off NVIDIA, and AMD, Apple, Intel
-XPU, and TPU have no path at all. Two export backends quantize the artifact
+XPU, and TPU have no path at all.
+
+**All six modes have now been measured on an AMD MI300X, and none of them moved
+the gate.** `_QUANTIZATION_VENDORS` is unchanged, deliberately: `nvfp4` failed
+the accuracy bar at 3/4 top-1, `nvfp4-dynamic` was refused by torchao's own
+`sm100+` assertion, and every FP8 mode held 4/4 while costing 1.21–1.36x in
+latency. The `int8` result — 9.72x slower than BF16 — is **not attributable to
+CDNA 3**: torchao 0.17.0 skips its compiled extensions against that host's torch
+2.10, so the dequantization ran unfused in pure Python. Re-run against torch
+≥ 2.11 before anyone reads that number as a property of the silicon. See [AMD
+MI300X](amd-mi300x.md#quantization-and-why-none-of-it-should-change-the-gate-yet).
+
+Two export backends quantize the artifact
 through their own unrelated mechanisms — ExecuTorch's calibrated XNNPACK PTQ, and
 OpenVINO's NNCF weight compression, the latter validated for two models out of
 three tried.
