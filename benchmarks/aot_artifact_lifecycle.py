@@ -54,6 +54,29 @@ from typing import Any
 
 _PROCESS_START = time.perf_counter()
 
+
+def _import_codecache() -> None:
+    """Import the submodule `aoti_load_package` uses and does not import itself.
+
+    `torch._inductor.codecache` is lazy, and `aoti_load_package` reaches for it
+    by attribute. A process that only did `import torch` therefore fails with
+    `module 'torch._inductor' has no attribute 'codecache'` -- which is every
+    process this script starts for the `--api torch` arm, because being a bare
+    reload process is the whole point of it.
+
+    LM7's own loader does this in `backends/aot_inductor.load_package`, so the
+    `--api lm7` arm never saw it. Measured on an MI300X under torch
+    2.10.0+rocm7.2.4, where both `--api torch` load stages failed and both
+    `--api lm7` ones passed; nothing about it is AMD-specific.
+    """
+    import importlib
+
+    try:
+        importlib.import_module("torch._inductor.codecache")
+    except ImportError:
+        pass
+
+
 HF_MODELS = {
     "smollm2": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "llama32-1b": "unsloth/Llama-3.2-1B-Instruct",
@@ -311,6 +334,7 @@ def run_load(arguments: argparse.Namespace) -> dict[str, Any]:
     if arguments.api == "lm7":
         loaded: Any = lm7.load_artifact(artifact_path)
     else:
+        _import_codecache()
         loaded = torch._inductor.aoti_load_package(str(artifact_path / PAYLOAD_NAME))
     load_ms = _elapsed_ms(started)
 
@@ -350,6 +374,7 @@ def run_load(arguments: argparse.Namespace) -> dict[str, Any]:
     if arguments.api == "lm7":
         lm7.load_artifact(artifact_path)
     else:
+        _import_codecache()
         torch._inductor.aoti_load_package(str(artifact_path / PAYLOAD_NAME))
     second_load_ms = _elapsed_ms(started)
 
