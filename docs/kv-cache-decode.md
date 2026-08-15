@@ -454,8 +454,17 @@ equal `model.generate`'s for both an unpadded and a left-padded batch, under
   spend cache slots the caller never asked for.
 - **JIT only.** Nothing here outlives the process; the exported artifact path is
   still prefill-only. See [limitations](limitations.md).
-- **Measured on `sm90` and `sm89`.** The tables above are an H100 80GB HBM3, and
-  the path also runs on an RTX 4070 SUPER (Ada, `sm89`). It runs on CPU too —
+- **Measured on `sm90` and `sm89`, and partly on `gfx942`.** The tables above are
+  an H100 80GB HBM3, and the path also runs on an RTX 4070 SUPER (Ada, `sm89`).
+  It runs on an AMD MI300X as well, where HIP graph capture drives the decode
+  loop with no recapture and every arm agrees on tokens — but only 16 of these 60
+  cells were reached, because this harness **cannot complete a sweep there**: the
+  `eager` arm corrupts the heap and kills a later arm in the same process. One
+  process per cell works around it. Both the numbers and the crash are in [AMD
+  MI300X](amd-mi300x.md#decode-the-memory-bound-half); the short version is that
+  the MI300X wins the `eager` column (9.32 against 13.72 ms/token) and loses the
+  captured one (2.288 against 1.77), so compiling buys 4.07x there against 7.75x
+  here. It runs on CPU too —
   correct tokens, no recompiles, and the benchmark accepts `--target cpu` — but
   no CPU timings are quoted here, because the only CPU `benchmarks/decode.py` has
   been run on is a 2018 desktop part and its numbers would not transfer to the

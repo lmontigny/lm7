@@ -401,6 +401,20 @@ reason, and the pattern does not generalise.
   fastest path on every real model measured. It has no CI, it is one card in one
   session, and it is an SR-IOV `VF` rather than a bare-metal part. See [AMD
   MI300X](amd-mi300x.md).
+- **`benchmarks/decode.py` cannot complete a sweep on that MI300X.** Running the
+  `eager` arm before another arm in the same process corrupts the heap, and a
+  later arm dies — `segfault at a9` inside the CPython binary, `free(): invalid
+  pointer`, or `corrupted double-linked list`, all three from what is presumably
+  one fault. It is neither an OOM (227 GiB host free, VRAM unwinds to zero) nor a
+  GPU fault, and it is **not deterministic**: a 512-token cell that passed in one
+  run crashed in the next, which is why the first two diagnoses — a 1024-token
+  problem, then HIP capture at 1024 — were both wrong. One process per (arm,
+  shape) avoids it entirely and is how the [16 measured
+  cells](amd-mi300x.md#decode-the-memory-bound-half) were produced; the other 44
+  were never reached. The same harness completes all 60 on an H100, so this is
+  not universal, but one machine and one ROCm build cannot say whether it belongs
+  to LM7, to `torch 2.13.0+rocm7.2`, or to the container's glibc. There is no
+  minimal reproducer outside the benchmark and nothing has been filed upstream.
 - **`lm7 targets` now names an AMD generation and its precision support, and
   every one of those values is a prediction.** The `gfx` tables in
   `src/lm7/detection.py` are read from AMD's ISA documentation, pinned by unit
