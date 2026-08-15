@@ -96,7 +96,7 @@ Measured investigations, including the ones that did not become backends.
 - [TensorRT validation on Blackwell](tensorrt-validation.md) — four model
   families, four precisions, batch and sequence sweeps, and four ways the backend
   fails without raising.
-- [AMD MIGraphX](amd-migraphx.md) — harness, no backend.
+- [AMD MIGraphX](amd-migraphx.md) — measured on an MI300X, not adopted.
 - [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR plan; the QNN export path is documented in [qnn.md](qnn.md).
 - [StableHLO and PJRT](stablehlo-pjrt-evaluation.md) — became the `stablehlo` backend.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — evaluated, not adopted.

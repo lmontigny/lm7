@@ -565,7 +565,7 @@ serving engine fast are absent from it on purpose — see [serving](serving.md).
 
 These have measurement harnesses or written plans, and no registered backend:
 
-- [AMD MIGraphX](amd-migraphx.md) — benchmark harness only.
+- [AMD MIGraphX](amd-migraphx.md) — **measured on an MI300X and not adopted**. It compiles neither SmolLM2-135M nor Llama-3.2-1B (`torch_migraphx 1.1` breaks against torch 2.10 in its own constant-folding pass), and on the one workload it does compile — the hand-built MLP — it is slower than both eager and Inductor. Coverage 1 of 5 against its own acceptance criteria, so no `backend="migraphx"` is registered.
 - [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR evaluation
   plan. The initial [ExecuTorch QNN backend](qnn.md) supports static FP16 SM8750
   export but remains SDK-gated and has no automated hardware validation.

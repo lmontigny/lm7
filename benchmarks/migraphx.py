@@ -223,7 +223,27 @@ def main() -> None:
             continue
 
         model = copy.deepcopy(base_model)
-        measured = _measure(_build(path, model), args, kwargs, arguments.warmup, arguments.repeats)
+        try:
+            built = _build(path, model)
+            measured = _measure(built, args, kwargs, arguments.warmup, arguments.repeats)
+        except Exception as error:
+            # A path this stack cannot compile is a result, not a crash -- the same
+            # rule benchmarks/quantization.py already follows. Without it a
+            # backend that refuses one model takes the eager and Inductor rows
+            # down with it and the run writes no JSON at all, which is what
+            # torch_migraphx did to SmolLM2 and Llama-3.2-1B on an MI300X.
+            #
+            # `eager` is the exception: it is the correctness reference, so
+            # continuing past a failure there would compare every later row
+            # against nothing.
+            if path == "eager":
+                raise
+            detail = f"{type(error).__name__}: {error}"
+            print(f"{path:>10}  failed: {detail.splitlines()[0][:120]}")
+            results.append({"path": path, "available": True, "failed": detail[:2000]})
+            del model
+            torch.cuda.empty_cache()
+            continue
         output = _output_tensor(measured.pop("output"))
         max_abs_diff = (reference_output - output.to(reference_output.dtype)).abs().max().item()
         measured.update(
