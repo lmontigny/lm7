@@ -1,10 +1,9 @@
 """The AMD half of `tests/test_nvidia_aot_integration.py`.
 
-Nothing in this file has ever run. No AMD GPU has executed LM7 at all, so these
-are the assertions a first `gfx942` session is meant to either confirm or
-correct -- in particular whether the AOTInductor wrapper links against ROCm,
-which is the one thing about the AMD packaging path that cannot be settled by
-reading code. See docs/limitations.md#hardware-validation.
+The first `gfx942` session confirmed the path this file protects: the
+AOTInductor wrapper links against ROCm, records AMD runtime fields, and reloads
+across a process boundary. The tests still skip without a local ROCm GPU.
+See docs/amd-mi300x.md.
 """
 
 from __future__ import annotations

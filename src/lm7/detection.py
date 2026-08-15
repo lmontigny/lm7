@@ -46,9 +46,10 @@ _NVIDIA_GENERATIONS: tuple[tuple[int, str], ...] = (
 # `gfx90a` is why the key is the string and not an int: the last position is
 # hexadecimal, so CDNA 2 does not parse as a number at all.
 #
-# Every value here is read from AMD's ISA documentation, and none of it has been
-# confirmed against hardware -- LM7 has never run on an AMD GPU. See
-# docs/limitations.md#hardware-validation.
+# These values started as AMD ISA documentation rather than measurements. One row
+# has since been checked on hardware: a gfx942 MI300X confirmed CDNA 3, native
+# FP8, absent FP4 and the FNUZ FP8 encoding. The other rows remain table-derived.
+# See docs/limitations.md#hardware-validation.
 _AMD_GENERATIONS: dict[str, str] = {
     "gfx906": "Vega 20",
     "gfx908": "CDNA 1",

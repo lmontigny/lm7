@@ -323,15 +323,16 @@ Transformers registers. What the `HF_MODELS` dicts in `benchmarks/*.py` record i
 narrower: which checkpoints this project has actually pointed a harness at, so
 that a new measurement is comparable to the ones already in `docs/`.
 
-**Four entries are named but unmeasured.** They were added to the dense ladder so
-they can be reached by name, and nothing in this repo has run them:
+**Three entries are named but unmeasured.** They were added to the dense ladder
+so they can be reached by name. The MI300X run moved Mistral-7B out of this
+bucket; the remaining unmeasured entries are:
 
 | model | parameters | why it is in the set | status |
 | --- | --- | --- | --- |
 | `LiquidAI/LFM2.5-350M` | 354M | a second size of the LFM2.5 architecture already present at 230M, so scale varies with architecture held fixed | **not measured** |
 | `Qwen/Qwen3-1.7B` | 2.03B | Qwen3 rather than the Qwen3.5-0.8B elsewhere in these dicts | **not measured** |
 | `unsloth/Llama-3.2-1B-Instruct` | 1.24B | the existing quantization reference model | measured — see [quantization](quantization.md) |
-| `mistralai/Mistral-7B-Instruct-v0.3` | 7.25B | the first *dense* 7B; Mixtral-8x7B is sparse, and the two are not interchangeable as "a 7B" | **not measured** |
+| `mistralai/Mistral-7B-Instruct-v0.3` | 7.25B | the first *dense* 7B; Mixtral-8x7B is sparse, and the two are not interchangeable as "a 7B" | measured on MI300X — see [AMD MI300X](amd-mi300x.md#what-1917-gib-holds) |
 
 Two things follow from that table that are easy to get wrong:
 
@@ -354,7 +355,7 @@ reason, and the pattern does not generalise.
 | Backend | Scope and caveats |
 | --- | --- |
 | `inductor` | The default and the best-covered path. CPU and Apple Silicon (MPS) are the only targets with CI. |
-| `aot_inductor` | Validated for CPU (x86-64 and aarch64), Apple Silicon (MPS), and NVIDIA GPU; **implemented and never run for AMD**, where it needs a ROCm installation on the host and no AMD GPU has executed LM7 at all. Uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). Packages hold code compiled for one architecture — kernels for one GPU compute capability, or a native `.so` for one CPU ISA — and refuse to load on another (LM7 raises before loading; PyTorch's own check only warns, then hits a driver error) — see [artifact compatibility](aot-artifact-compatibility.md). |
+| `aot_inductor` | Validated for CPU (x86-64 and aarch64), Apple Silicon (MPS), NVIDIA GPU, and AMD ROCm on one MI300X. On AMD it needs a ROCm installation on the host because the PyTorch ROCm wheel links against `/opt/rocm`; the MI300X package records `hip` and `gcn_architecture`, reloads through `lm7.load_artifact`, and rejects architecture/runtime mismatches by name. Uses Beta PyTorch APIs. On NVIDIA it packages against a CUDA toolkit the PyTorch wheel does not ship — install `".[cuda-aot]"`. See the [WSL linker caveat](development.md#nvidia-aot-inductor). Packages hold code compiled for one architecture — kernels for one GPU compute capability, or a native `.so` for one CPU ISA — and refuse to load on another (LM7 raises before loading; PyTorch's own check only warns, then hits a driver error) — see [artifact compatibility](aot-artifact-compatibility.md). |
 | `tensorrt` | NVIDIA only. Slower engine builds and narrower model coverage than Inductor — see the [evaluation](nvidia-tensorrt-evaluation.md). `lm7.export` serializes the engine so a second process need not rebuild it; the artifact is static-shape and bound to the GPU architecture, TensorRT version, and Torch-TensorRT version that built it. **Four failure modes do not raise**: an export whose graph falls below the partitioner's `min_block_size` writes a TensorRT-labelled artifact containing no engine; the JIT path returns wrong numbers on BERT; `options={"dynamic": True}` is accepted and ignored by the export path, while the JIT path silently rebuilds an engine per unseen shape; and FP8 arithmetic is unreachable. See [tensorrt-validation.md](tensorrt-validation.md). |
 | `openvino` | Any `cpu` target plus `intel:npu`, not Intel silicon only: the aarch64 wheel's CPU plugin loads on an Arm Neoverse N3 and the IR path is *faster* there than on either other host (4.16x over eager on SmolLM2-135M), while its INT8 advantage does not transfer at all — 1.83-2.53x faster than FP32 on Intel, 1.08x slower on Arm. `intel:npu` is **implemented but never run on an NPU**. Rejects bfloat16, because its runtime exchanges tensors through NumPy. Returns tensors or tuples, so a model whose `forward` returns a dataclass needs a wrapper. Optional NNCF INT8 weight compression on both `model run` and `model export`, validated per model. On the NPU: static shapes only, and FP16 compute, so expect FP16-level error. See the [guide](intel-npu.md). |
 | `onnxruntime` | CPU and NVIDIA CUDA. Returns CPU tensors even after CUDA execution, because the initial adapter uses NumPy rather than I/O binding. Tensor-only inputs and flat outputs; external-data packaging above the 2 GiB protobuf limit is future work. See the [guide](onnxruntime.md). |

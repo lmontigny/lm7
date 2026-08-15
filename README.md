@@ -138,7 +138,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 >
 > **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
 >
-> **AMD:** EPYC x86-64 CPU
+> **AMD:** EPYC x86-64 CPU · Instinct MI300X GPU
 >
 > **Arm:** Neoverse N2/N3 CPU
 >
@@ -162,7 +162,7 @@ Integration means that LM7 has target and backend code for a toolchain. It does
 | --- | --- | --- | --- |
 | Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | Inductor, AOTInductor, OpenVINO, ONNX Runtime, eager; explicit/export integrations |
 | NVIDIA | GPU | `nvidia` | Inductor, AOTInductor, TensorRT, ONNX Runtime, eager, IREE Vulkan export |
-| AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, eager, IREE Vulkan export |
+| AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, AOTInductor, eager, IREE Vulkan export |
 | Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager, Core ML export |
 | Intel | GPU (XPU/Vulkan) | `intel` | Inductor, eager, IREE Vulkan export |
 | Arm | GPU (Mali/Vulkan) | `arm`, `arm:mali-g715` | IREE Vulkan export; never executed on device |
@@ -175,10 +175,12 @@ Integration means that LM7 has target and backend code for a toolchain. It does
 
 Intel XPU, Tenstorrent, Intel NPU, and Trainium have not run through LM7 on real
 hardware. AMD ROCm has, once: an MI300X (`gfx942`, CDNA 3) ran detection, the
-core benchmark matrix, a quantization sweep and an AOTInductor artifact — see
-[AMD MI300X](docs/amd-mi300x.md). See [tested hardware](docs/tested-hardware.md)
-and [limitations](docs/limitations.md#hardware-validation) for the evidence
-behind each row.
+core benchmark matrix, FP8 quantization, AOTInductor packaging, MoE/dense 7B
+capacity checks, short-context decode, local serving, and the vLLM ROCm handoff
+— see [AMD MI300X](docs/amd-mi300x.md). See [tested
+hardware](docs/tested-hardware.md) and
+[limitations](docs/limitations.md#hardware-validation) for the evidence behind
+each row.
 
 ## Validated models
 

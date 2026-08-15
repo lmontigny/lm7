@@ -20,11 +20,9 @@ from ..errors import ArtifactLoadError, CompilationError
 from ..targets import TargetSpec
 from .base import Artifact, BackendInfo, CompileRequest, Support
 
-# Vendors LM7 will package AOTInductor output for. CPU, Apple and NVIDIA are
-# validated on physical hardware; AMD is not -- no AMD GPU has run LM7 at all --
-# and is here because `exporting._ARCHITECTURE_BOUND_VENDORS` already lists
-# `amd` for this backend, so the artifact gate was wired for a payload nothing
-# could produce. See docs/limitations.md#hardware-validation.
+# Vendors LM7 will package AOTInductor output for. AMD is validated on one ROCm
+# host, a gfx942 MI300X; the wrapper links against ROCm there and the artifact
+# records `hip` plus `gcn_architecture`. See docs/amd-mi300x.md.
 SUPPORTED_VENDORS = frozenset({"cpu", "apple", "nvidia", "amd"})
 
 # Vendors that reach the GPU through CUDA, and therefore need a CUDA toolkit at

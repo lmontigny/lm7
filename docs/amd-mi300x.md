@@ -572,9 +572,10 @@ when the process starts.
   `torch 2.10.0+rocm7.2`; the re-run used `2.13.0+rocm7.2` in a separate venv, and
   the two are compared by ratio rather than row-for-row because the BF16 baseline
   moved 13%. The matrix and MoE numbers are 2.10 and were not repeated.
-- **No MIGraphX.** The native bindings import on the host and not inside the
-  ROCm PyTorch container, and chasing that was not worth the metered time. The
-  [evaluation plan](amd-migraphx.md) is unchanged.
+- **MIGraphX was evaluated later and not adopted.** The follow-up run reached
+  Torch-MIGraphX on the MI300X: it was slowest on the MLP and failed both
+  causal-LM shapes in Torch-MIGraphX's lowering. See the
+  [MIGraphX evaluation](amd-migraphx.md).
 - **No CI, and there will not be.** GitHub's hosted runners provide no AMD GPU,
   and the GPU-hosted runners that exist are gated to Organizations on
   Team/Enterprise Cloud.

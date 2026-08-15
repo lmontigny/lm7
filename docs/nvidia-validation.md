@@ -77,8 +77,9 @@ a traceback reads as "this broke here", when the truth is the path was never
 available on this vendor. The skip also returns before the model is built, so
 learning it does not cost an 8B checkpoint download.
 
-**No AMD GPU has run this suite.** The support above is written and unexercised,
-like every other AMD claim in this repo — see
+The same matrix has now run on one AMD GPU, a rented MI300X (`gfx942`). All 20
+core cells passed, HIP graph capture worked, and the AMD row is recorded in
+[AMD MI300X](amd-mi300x.md). Other AMD architectures remain unexercised; see
 [limitations](limitations.md#hardware-validation).
 
 ### `supported_precisions` is the silicon; `cuda_build` is the install
