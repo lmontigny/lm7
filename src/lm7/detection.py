@@ -65,7 +65,7 @@ _AMD_GENERATIONS: dict[str, str] = {
 
 # Which `gfx` architectures compute each format, as the sets that differ. Formats
 # every entry in `_AMD_GENERATIONS` handles natively -- fp32, fp16 -- are not
-# listed, and neither is fp4, which no shipping AMD part in this table has.
+# listed.
 #
 # The CDNA line gained bf16 matrix instructions with CDNA 1 and FP8 with CDNA 3;
 # the RDNA line gained bf16 with RDNA 3 (WMMA) and FP8 with RDNA 4. Vega 20 has
@@ -75,6 +75,20 @@ _AMD_BF16 = frozenset(
 )
 _AMD_INT8 = frozenset(_AMD_GENERATIONS) - {"gfx906"}
 _AMD_FP8 = frozenset({"gfx942", "gfx950", "gfx1200", "gfx1201"})
+
+# FP4 arrives with CDNA 4 and exists nowhere else in this table. `gfx950` gets
+# block-scaled MXFP4 (E2M1) and MXFP6 matrix instructions; CDNA 3 stops at FP8,
+# which is why an `nvfp4` run on `gfx942` is emulated rather than computed -- see
+# docs/amd-mi300x.md#quantization-and-why-none-of-it-changes-the-gate, where it
+# measures 1.96x *slower* than BF16 while every FP8 mode lands near 1.2x.
+#
+# This one is read from ROCm's own precision-support table rather than from a
+# product announcement, which is the bar the rest of this file is held to:
+# https://rocm.docs.amd.com/en/latest/reference/precision-support.html
+#
+# FP6 is native on the same part and is not reported here, because no format key
+# for it exists on either vendor; adding one is a schema change, not a fix.
+_AMD_FP4 = frozenset({"gfx950"})
 
 # FP8 is one name for two incompatible encodings, and this is the difference
 # between "AMD has fp8 too" and a comparable measurement. CDNA 3 implements the
@@ -432,10 +446,7 @@ def _amd_precision_support(target: TargetSpec) -> dict[str, str]:
         "bf16": NATIVE if architecture in _AMD_BF16 else ABSENT,
         "int8": NATIVE if architecture in _AMD_INT8 else ABSENT,
         "fp8": NATIVE if architecture in _AMD_FP8 else ABSENT,
-        # No shipping part in `_AMD_GENERATIONS` computes FP4. CDNA 4 adds FP6
-        # and FP4 on paper; `gfx950` stays absent here until that is read from
-        # something better than a product announcement.
-        "fp4": ABSENT,
+        "fp4": NATIVE if architecture in _AMD_FP4 else ABSENT,
     }
 
 

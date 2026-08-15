@@ -766,6 +766,19 @@ def test_fp4_is_native_only_on_blackwell():
     assert precision_support(nvidia("sm120"))["fp4"] == "native"
 
 
+def test_amd_fp4_arrives_with_cdna_4():
+    """CDNA 3 stops at FP8 and CDNA 4 adds block-scaled MXFP4, so these two rows
+    are the difference between an emulated format and a computed one. An `nvfp4`
+    run on the MI300X measured 1.96x *slower* than BF16 while every FP8 mode
+    landed near 1.2x, which is what emulation costs; reporting `gfx950` as absent
+    would have made that indistinguishable from silicon that simply lacks it."""
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx950"))["fp4"] == "native"
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx942"))["fp4"] == "absent"
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx90a"))["fp4"] == "absent"
+    # RDNA 4 has the OCP FP8 encoding and no FP4 -- FP4 is a CDNA 4 addition.
+    assert precision_support(TargetSpec("amd", "gpu", architecture="gfx1201"))["fp4"] == "absent"
+
+
 def test_blackwell_reports_every_format_as_native():
     assert set(precision_support(nvidia("sm120")).values()) == {"native"}
 

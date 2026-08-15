@@ -129,6 +129,23 @@ Four things to read out of that, and only the last is a recommendation.
 is only supported on sm100+ machines"*. That is `precision_support`'s
 `fp4: absent` confirmed a second time by an independent mechanism.
 
+**`nvfp4` weight-only is not refused, and that is the more interesting half.**
+It runs, and it is the only mode here that gets *slower* the more precision it
+gives up — 1.96x against BF16 on torch 2.13, where every FP8 mode lands near
+1.2x. The reason is that **CDNA 3 has no FP4 silicon**: [ROCm's precision-support
+table](https://rocm.docs.amd.com/en/latest/reference/precision-support.html)
+gives `gfx942` FP8 E4M3/E5M2 in the `fnuz` encoding and stops there, and the
+block-scaled MXFP4 (E2M1) and MXFP6 matrix instructions arrive with CDNA 4
+(`gfx950`). So torchao unpacks 4-bit weights to a supported type and does the
+arithmetic there — the footprint is real (1.073 GB, the smallest of any mode at
+2.30x), the throughput is not, and the 4.62 logit difference is what paying for
+emulation in accuracy looks like.
+
+That is a general shape worth stating once: **a format that is stored narrower
+than the hardware can compute buys memory and costs time.** `fp4` on this card
+is the clearest example in this repo, because the same mode on an `sm120`
+Blackwell has silicon under it.
+
 **FP8 is the mode this silicon is built for, and it is still a latency loss.**
 Per-row dynamic FP8 is the best of the six at 1.21x slower than BF16 while
 holding 4/4 top-1 — the same shape as every weight-only result in this repo,
