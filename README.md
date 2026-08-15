@@ -173,10 +173,12 @@ Integration means that LM7 has target and backend code for a toolchain. It does
 | Qualcomm | Snapdragon 8 Elite HTP | `qualcomm:sm8750` | QNN export |
 | AWS | Trainium | `aws:trainium` | Parse only; never executed |
 
-AMD ROCm GPU, Intel XPU, Tenstorrent, Intel NPU, and Trainium have not run
-through LM7 on real hardware. See [tested hardware](docs/tested-hardware.md) and
-[limitations](docs/limitations.md#hardware-validation) for the evidence behind
-each row.
+Intel XPU, Tenstorrent, Intel NPU, and Trainium have not run through LM7 on real
+hardware. AMD ROCm has, once: an MI300X (`gfx942`, CDNA 3) ran detection, the
+core benchmark matrix, a quantization sweep and an AOTInductor artifact — see
+[AMD MI300X](docs/amd-mi300x.md). See [tested hardware](docs/tested-hardware.md)
+and [limitations](docs/limitations.md#hardware-validation) for the evidence
+behind each row.
 
 ## Validated models
 
