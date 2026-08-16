@@ -21,7 +21,11 @@ def inputs_for(tokenizer, batch: int, sequence: int, device: torch.device):
     seed = tokenizer("The capital of France is", add_special_tokens=True)["input_ids"]
     ids = (seed * ((sequence + len(seed) - 1) // len(seed)))[:sequence]
     input_ids = torch.tensor([ids] * batch, dtype=torch.long, device=device)
-    return {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "use_cache": False}
+    return {
+        "input_ids": input_ids,
+        "attention_mask": torch.ones_like(input_ids),
+        "use_cache": False,
+    }
 
 
 def main() -> None:
