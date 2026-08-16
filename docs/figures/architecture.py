@@ -82,7 +82,7 @@ class Column:
 #
 # JIT   compiles in this process
 # AOT   writes a reloadable .lm7 artifact
-# J+A   does both
+# J+A   compiles in-process and also writes an artifact
 # *     explicit opt-in; automatic selection never picks it
 
 COLUMNS = [
@@ -149,7 +149,12 @@ COLUMNS = [
                     ("tvm", "JIT*"),
                 ],
             ),
-            Silicon("GPU", "ROCm", "amd", [("inductor", "JIT"), ("iree_vulkan", "EXPORT")]),
+            Silicon(
+                "GPU",
+                "ROCm",
+                "amd",
+                [("inductor", "JIT"), ("aot_inductor", "AOT"), ("iree_vulkan", "EXPORT")],
+            ),
         ],
         runtime=["CPU: C++ · ZenDNN", "GPU: Triton · ROCm", "HIP · AMDGPU", "Vulkan / SPIR-V"],
         hardware="AMD CPU + GPU",
@@ -194,7 +199,12 @@ COLUMNS = [
                     ("tvm", "JIT*"),
                 ],
             ),
-            Silicon("GPU", "Metal", "apple", [("inductor", "JIT"), ("aot_inductor", "AOT")]),
+            Silicon(
+                "GPU",
+                "Metal",
+                "apple",
+                [("inductor", "JIT"), ("aot_inductor", "AOT"), ("coreml", "EXPORT")],
+            ),
         ],
         runtime=["CPU: C++ / OpenMP", "GPU: Metal / MPS"],
         hardware="Apple CPU + GPU",
@@ -252,10 +262,10 @@ COLUMNS = [
 ]
 
 
-# Brand marks from Simple Icons (https://simpleicons.org). The path data is
-# CC0; the marks themselves remain the trademarks of their respective owners.
-# Each entry is the brand colour and a 24x24 viewBox path.
-LOGOS: dict[str, tuple[str, str]] = {
+# Brand marks use 24x24 viewBox paths. Simple Icons path data is CC0; the marks
+# themselves remain the trademarks of their respective owners. A logo entry is
+# either one coloured path or several coloured paths for multicolour marks.
+LOGOS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "pytorch": (
         "#EE4C2C",
         (
@@ -346,16 +356,39 @@ LOGOS: dict[str, tuple[str, str]] = {
             ".609-.924-.609-.396 0-.74.213-.954.508-.284.395-.314.984-.314 1.572v3.562h-1.573z"
         ),
     ),
-    "google": (
-        "#4285F4",
+    "google": [
         (
-            "M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 "
-            "2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.3"
-            "07-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3."
-            "573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2"
-            ".053H12.48z"
+            "#4285F4",
+            (
+                "M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 "
+                "1.48-1.14 2.73-2.4 3.58v2.98h3.86c2.26-2.08 3.56-5.15 "
+                "3.56-8.8z"
+            ),
         ),
-    ),
+        (
+            "#34A853",
+            (
+                "M12 24c3.24 0 5.95-1.08 7.93-2.93l-3.86-2.98c-1.08.72-2.45 "
+                "1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.07C3.26 "
+                "21.25 7.29 24 12 24z"
+            ),
+        ),
+        (
+            "#FBBC05",
+            (
+                "M5.27 14.24c-.25-.72-.39-1.49-.39-2.24s.14-1.52.39-2.24V6."
+                "69H1.29C.47 8.31 0 10.1 0 12s.47 3.69 1.29 5.31l3.98-3.07z"
+            ),
+        ),
+        (
+            "#EA4335",
+            (
+                "M12 4.84c1.76 0 3.34.61 4.58 1.8L20 3.22C17.95 1.33 15.24 "
+                "0 12 0 7.29 0 3.26 2.75 1.29 6.69l3.98 3.07C6.22 6.95 "
+                "8.87 4.84 12 4.84z"
+            ),
+        ),
+    ],
     "qualcomm": (
         "#3253DC",
         (
@@ -401,15 +434,15 @@ def _rect(x, y, w, h, fill, stroke=None, r=10, width=1):
 
 
 def _logo(key, x, y, size):
-    colour, path = LOGOS[key]
-    return (
-        f'<g transform="translate({x} {y}) scale({size / 24:.4f})">'
-        f'<path d="{path}" fill="{colour}"/></g>'
-    )
+    paths = LOGOS[key]
+    if isinstance(paths, tuple):
+        paths = [paths]
+    body = "".join(f'<path d="{path}" fill="{colour}"/>' for colour, path in paths)
+    return f'<g transform="translate({x} {y}) scale({size / 24:.4f})">{body}</g>'
 
 
 def _pill(x, y, kind):
-    """Right-aligned badge. Width follows the label so J+A does not float."""
+    """Right-aligned badge. Width follows the label so longer badges do not float."""
     fg, bg = BADGE[kind]
     w = 12 + len(kind) * 6.4
     return (

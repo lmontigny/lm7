@@ -251,7 +251,7 @@ Edge and personal-device setup: [ExecuTorch](docs/executorch.md) ·
 | `inductor` | TorchInductor | JIT | CPU, NVIDIA, AMD, Intel GPU, Apple |
 | `openxla` | PyTorch/XLA + OpenXLA | JIT | TPU |
 | `tenstorrent` | tt-xla + tt-mlir + tt-metal | JIT | Tenstorrent |
-| `aot_inductor` | AOTInductor | AOT | CPU, NVIDIA, Apple |
+| `aot_inductor` | AOTInductor | AOT | CPU, NVIDIA, AMD, Apple |
 | `tensorrt` | Torch-TensorRT | JIT/AOT | NVIDIA |
 | `openvino` | OpenVINO | AOT | Intel CPU/NPU |
 | `onnxruntime` | ONNX Runtime | JIT/AOT | CPU, NVIDIA |

@@ -167,3 +167,4 @@ file stays a index rather than a second, drifting description.
 | [#176](https://github.com/lmontigny/lm7/pull/176) | Give the MI300X runbook the three commands it was missing |
 | [#179](https://github.com/lmontigny/lm7/pull/179) | Add the changelog lines for the AMD campaign |
 | [#188](https://github.com/lmontigny/lm7/pull/188) | Refresh AMD ROCm validation docs |
+| [#189](https://github.com/lmontigny/lm7/pull/189) | Clean up MI300X validation docs |
