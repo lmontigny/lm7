@@ -110,6 +110,70 @@ Representative local run (`mlp`, batch size 8, float16, M4):
   inductor  first=  678 ms  median=0.78 ms  p95=0.96 ms  throughput=10313 samples/s
 ```
 
+## What compiling buys, measured on an M3 Pro
+
+The benchmark above is a hand-built MLP. This is the same question asked of a
+causal LM, through `benchmarks/generation_paths.py` — four ways of generating the
+same tokens in **one** harness, sharing one tokenized prompt, one token budget,
+one timing function and a freshly loaded copy of the same checkpoint per arm.
+One script rather than four because two harnesses in this repo disagree by 2.3x
+on the same card purely from building inputs differently.
+
+```bash
+python benchmarks/generation_paths.py --target apple --model smollm2-135m
+python benchmarks/generation_paths.py --target apple --model llama-3.2-1b
+```
+
+Apple M3 Pro (14-core GPU, 18 GB unified memory), macOS 26.5.2, torch 2.13.0,
+transformers 5.15.0, `apple:metal`, float16, 64 new tokens, median of 3:
+
+| Arm | SmolLM2-135M | vs eager | Llama-3.2-1B | vs eager |
+| --- | --- | --- | --- | --- |
+| `eager` — `model.generate()` | 19.01 ms/token | 1.00x | 26.87 ms/token | 1.00x |
+| `hf-static` — `+ StaticCache + CompileConfig` | 18.21 ms/token | 1.04x | 29.51 ms/token | 0.91x |
+| `hf-forced` — the same, past the device allowlist | 10.17 ms/token | 1.87x | 25.56 ms/token | 1.05x |
+| `lm7` — `lm7.compile_generation()` | **7.08 ms/token** | **2.69x** | **21.90 ms/token** | **1.23x** |
+
+All four arms produced byte-identical text in both runs, and `steady_frames` was
+0 — no token triggered a recompile. JSON in `artifacts/` on the machine that ran
+it; the harness writes it with `--output`.
+
+Four things are worth reading off that table.
+
+**`hf-static` is the arm you would otherwise write, and on Apple it does not
+compile at all.** Transformers gates compiled generation on a hardcoded device
+allowlist — `["cuda", "xpu", "neuron", "tpu"]` in `generation/utils.py` — so
+asking for it on MPS logs `unable to meet the criteria for compilation` and
+decodes eagerly. 1.04x and 0.91x is the sound of nothing happening.
+
+**The hardware was capable the whole time.** `hf-forced` flips the private
+`_compile_all_devices` escape hatch, which is the only way to separate "this
+device cannot compile" from "this device is not on the list", and reaches 1.87x
+on SmolLM2. So the gap the first point measures is a gating gap, not a Metal
+one.
+
+**LM7 is ahead of even the forced arm** — 1.44x on SmolLM2 and 1.17x on
+Llama-3.2-1B — because `compile_generation` compiles prefill and decode as
+separate graphs against one static cache, rather than compiling the generate
+loop as a whole. See [prefill and KV-cache decode](kv-cache-decode.md).
+
+**The speedup shrinks as the model grows, and 2.69x does not transfer.**
+SmolLM2-135M is 30 layers of small matmuls, so it is launch-bound and compiling
+removes the launch overhead; by 1B enough of the time is GEMM that there is less
+overhead left to remove. This is the same shape as the H100 finding that
+[compiling prefill stops paying at about 2,048
+tokens](kv-cache-decode.md#compiling-prefill-stops-paying-at-about-2048-tokens).
+Read the small number as "what a launch-bound model gets", not as LM7's number.
+
+> **LFM2.5-230M could not be measured on this path.** Its hybrid
+> linear-attention/convolution cache leaves its conv states unallocated by
+> `early_initialization`, so they are created lazily inside the first
+> inference-mode call and the *second* sequence raises `Inplace update to
+> inference tensor outside InferenceMode`. Confirmed on this machine and filed
+> as [#192](https://github.com/lmontigny/lm7/issues/192); Qwen3.5-0.8B shares
+> the architecture and is likely affected but was not checked. Both models run
+> fine through `lm7.compile` and `lm7 model run`, which is a different path.
+
 ## Hugging Face models
 
 The [Hugging Face causal-LM path](../README.md#4-run-a-hugging-face-model) runs on
