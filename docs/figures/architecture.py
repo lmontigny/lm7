@@ -181,7 +181,7 @@ COLUMNS = [
         ],
         runtime=["C++ / OpenMP", "XNNPACK · NEON", "KleidiAI", "ExecuTorch runtime"],
         hardware="Arm CPU",
-        hardware_detail="ARM64 servers · SBCs",
+        hardware_detail="ARM64 servers · SBCs · phones",
     ),
     Column(
         vendor="Apple",
@@ -460,9 +460,7 @@ def _arrow(x1, y1, x2, y2, colour=ARROW):
 
 def render() -> str:
     n = len(COLUMNS)
-    cols_per_row = 4
-    rows = (n + cols_per_row - 1) // cols_per_row
-    grid_w = cols_per_row * COL_W + (cols_per_row - 1) * COL_GAP
+    grid_w = n * COL_W + (n - 1) * COL_GAP
     width = RAIL_W + grid_w + PAD
     x0 = RAIL_W
 
@@ -470,27 +468,23 @@ def render() -> str:
         return 66 + len(si.backends) * 28 + 16
 
     head_h = 40
-    backend_row_h = (
+    backend_band_h = (
         head_h
         + max(sum(card_h(si) for si in c.silicon) + 12 * (len(c.silicon) - 1) for c in COLUMNS)
         + 34
     )
     runtime_h = max(len(c.runtime) for c in COLUMNS) * 27 + 42
     hw_h = 128
-    row_gap = 38
-    backend_band_h = rows * backend_row_h + (rows - 1) * row_gap
-    runtime_band_h = rows * runtime_h + (rows - 1) * row_gap
-    hw_band_h = rows * hw_h + (rows - 1) * row_gap
 
     y_model = TOP
-    model_h = 132
+    model_h = 96
     y_orch = y_model + model_h + 26
-    orch_h = 156
+    orch_h = 132
     y_bus = y_orch + orch_h
     y_backend = y_bus + 86
     y_runtime = y_backend + backend_band_h + 46
-    y_hw = y_runtime + runtime_band_h + 46
-    height = y_hw + hw_band_h + 34 + PAD
+    y_hw = y_runtime + runtime_h + 46
+    height = y_hw + hw_h + 34 + PAD
 
     opening = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -518,17 +512,16 @@ def render() -> str:
     s.append(
         _t(x0 + 108, y_model + 70, "nn.Module or hf:// id, with representative inputs", 15, MUTED)
     )
-    bx = x0 + 42
-    by = y_model + 82
-    s.append(_rect(bx, by, 72, 36, NAVY, r=10))
-    s.append(_t(bx + 36, by + 24, "LM7", 20, NAVY_INK, "800", "middle"))
+    bx = x0 + grid_w - 560
+    s.append(_rect(bx, y_model + 24, 72, 44, NAVY, r=10))
+    s.append(_t(bx + 36, y_model + 53, "LM7", 21, NAVY_INK, "800", "middle"))
     s.append(
-        f'<path d="M {bx + 22} {by + 36} L {bx + 34} {by + 46} L {bx + 40} '
-        f'{by + 36} z" fill="{NAVY}"/>'
+        f'<path d="M {bx + 22} {y_model + 68} L {bx + 34} {y_model + 78} L {bx + 40} '
+        f'{y_model + 68} z" fill="{NAVY}"/>'
     )
-    s.append(_t(bx + 88, by + 16, "LM7: PyTorch-first compiler orchestration", 19, INK, "800"))
+    s.append(_t(bx + 88, y_model + 44, "LM7: PyTorch-first compiler orchestration", 19, INK, "800"))
     s.append(
-        _t(bx + 88, by + 38, "one model · many compiler stacks · local hardware", 14.5, MUTED)
+        _t(bx + 88, y_model + 68, "one model · many compiler stacks · local hardware", 14.5, MUTED)
     )
     s.append(_arrow(x0 + grid_w / 2, y_model + model_h, x0 + grid_w / 2, y_orch - 4))
 
@@ -543,32 +536,29 @@ def render() -> str:
             ("shape + compile cache", "safe eager fallback"),
         ]
     ):
-        fx = x0 + 315 + i * 210
+        fx = x0 + 300 + i * 230
         s.append(_t(fx, y_orch + 48, a, 15.5, NAVY_INK, "700"))
         s.append(_t(fx, y_orch + 80, b, 15.5, NAVY_INK, "700"))
     for i, call in enumerate(["lm7.compile()", "lm7.export()"]):
         px = x0 + grid_w - 400 + i * 200
-        s.append(_rect(px, y_orch + 96, 182, 44, CARD, r=10))
-        s.append(_t(px + 91, y_orch + 125, call, 19, INK, "800", "middle"))
+        s.append(_rect(px, y_orch + 42, 182, 50, CARD, r=10))
+        s.append(_t(px + 91, y_orch + 74, call, 19, INK, "800", "middle"))
 
     # the bus: which call reaches the backends, and how
     jit_y, aot_y = y_bus + 26, y_bus + 56
     s.append(
-        f'<path d="M {x0 + grid_w - 309} {y_orch + orch_h - 32} L {x0 + grid_w - 309} '
+        f'<path d="M {x0 + grid_w - 309} {y_orch + orch_h - 40} L {x0 + grid_w - 309} '
         f'{jit_y} L {x0 + 30} {jit_y}" stroke="{JIT_LINE}" stroke-width="1.8" fill="none"/>'
     )
     s.append(_t(x0 + 40, jit_y - 9, "JIT · in-process execution", 15, JIT_LINE, "700"))
     s.append(
-        f'<path d="M {x0 + grid_w - 109} {y_orch + orch_h - 32} L {x0 + grid_w - 109} '
+        f'<path d="M {x0 + grid_w - 109} {y_orch + orch_h - 40} L {x0 + grid_w - 109} '
         f'{aot_y} L {x0 + 30} {aot_y}" stroke="{ARROW}" stroke-width="1.8" fill="none"/>'
     )
     s.append(_t(x0 + grid_w - 420, aot_y - 9, "AOT · artifact creation", 15, MUTED, "700"))
-    def column_xy(index: int, y: int, row_h: int) -> tuple[float, int]:
-        row = index // cols_per_row
-        col = index % cols_per_row
-        return x0 + col * (COL_W + COL_GAP), y + row * (row_h + row_gap)
-
-    s.append(_arrow(x0 + grid_w / 2, aot_y, x0 + grid_w / 2, y_backend - 6))
+    for i in range(n):
+        cx = x0 + i * (COL_W + COL_GAP) + COL_W / 2
+        s.append(_arrow(cx, aot_y, cx, y_backend - 6))
 
     # 03 backends
     rail(y_backend - 12, "03", "BACKENDS")
@@ -583,25 +573,17 @@ def render() -> str:
             r=14,
         )
     )
-    s.append(
-        _arrow(
-            x0 + grid_w / 2,
-            y_backend + backend_band_h,
-            x0 + grid_w / 2,
-            y_runtime - 8,
-        )
-    )
     for i, col in enumerate(COLUMNS):
-        cx, row_y = column_xy(i, y_backend, backend_row_h)
+        cx = x0 + i * (COL_W + COL_GAP)
         # Name the column, or the cards below read as anonymous CPU/GPU/NPU boxes.
         if col.logo:
-            s.append(_logo(col.logo, cx + 2, row_y - 2, 17))
-            s.append(_t(cx + 25, row_y + 13, col.vendor, 17, col.tint, "800"))
+            s.append(_logo(col.logo, cx + 2, y_backend - 2, 17))
+            s.append(_t(cx + 25, y_backend + 13, col.vendor, 17, col.tint, "800"))
         else:
-            s.append(_t(cx + 2, row_y + 13, col.vendor, 17, col.tint, "800"))
-        s.append(_rect(cx, row_y + 20, COL_W, 2, col.tint, r=0))
+            s.append(_t(cx + 2, y_backend + 13, col.vendor, 17, col.tint, "800"))
+        s.append(_rect(cx, y_backend + 20, COL_W, 2, col.tint, r=0))
 
-        y = row_y + head_h
+        y = y_backend + head_h
         for si in col.silicon:
             h = card_h(si)
             s.append(_rect(cx, y, COL_W, h, CARD, CARD_LINE, r=12))
@@ -620,61 +602,40 @@ def render() -> str:
     rail(y_runtime - 12, "04", "LOWERING", "+ RUNTIME")
     s.append(
         _rect(
-            x0 - 12,
-            y_runtime - 18,
-            grid_w + 24,
-            runtime_band_h + 24,
-            BAND_LOWER[0],
-            BAND_LOWER[1],
-            r=14,
-        )
-    )
-    s.append(
-        _arrow(
-            x0 + grid_w / 2,
-            y_runtime + runtime_band_h,
-            x0 + grid_w / 2,
-            y_hw - 8,
+            x0 - 12, y_runtime - 18, grid_w + 24, runtime_h + 24, BAND_LOWER[0], BAND_LOWER[1], r=14
         )
     )
     for i, col in enumerate(COLUMNS):
-        cx, backend_y = column_xy(i, y_backend, backend_row_h)
-        _, runtime_y = column_xy(i, y_runtime, runtime_h)
-        s.append(_rect(cx, runtime_y, COL_W, runtime_h, CARD, CARD_LINE, r=12))
-        ry = runtime_y + 34
+        cx = x0 + i * (COL_W + COL_GAP)
+        s.append(
+            _arrow(cx + COL_W / 2, y_backend + backend_band_h - 22, cx + COL_W / 2, y_runtime - 8)
+        )
+        s.append(_rect(cx, y_runtime, COL_W, runtime_h, CARD, CARD_LINE, r=12))
+        ry = y_runtime + 34
         for line in col.runtime:
             s.append(_t(cx + COL_W / 2, ry, line, 15, INK, "700", "middle"))
             ry += 27
 
     # 05 hardware
     rail(y_hw - 12, "05", "HARDWARE")
-    s.append(_rect(x0 - 12, y_hw - 18, grid_w + 24, hw_band_h + 24, BAND_HW[0], BAND_HW[1], r=14))
+    s.append(_rect(x0 - 12, y_hw - 18, grid_w + 24, hw_h + 24, BAND_HW[0], BAND_HW[1], r=14))
     for i, col in enumerate(COLUMNS):
-        cx, runtime_y = column_xy(i, y_runtime, runtime_h)
-        _, hw_y = column_xy(i, y_hw, hw_h)
-        s.append(_rect(cx, hw_y, COL_W, hw_h, CARD, CARD_LINE, r=12))
+        cx = x0 + i * (COL_W + COL_GAP)
+        s.append(_arrow(cx + COL_W / 2, y_runtime + runtime_h, cx + COL_W / 2, y_hw - 8))
+        s.append(_rect(cx, y_hw, COL_W, hw_h, CARD, CARD_LINE, r=12))
         if col.logo:
-            s.append(_logo(col.logo, cx + COL_W / 2 - 20, hw_y + 20, 40))
+            s.append(_logo(col.logo, cx + COL_W / 2 - 20, y_hw + 20, 40))
         else:
-            s.append(_t(cx + COL_W / 2, hw_y + 50, "tt", 30, "#7c68ee", "800", "middle"))
-        s.append(_t(cx + COL_W / 2, hw_y + 91, col.hardware, 16, INK, "800", "middle"))
-        s.append(_t(cx + COL_W / 2, hw_y + 112, col.hardware_detail, 13, MUTED, anchor="middle"))
+            s.append(_t(cx + COL_W / 2, y_hw + 50, "tt", 30, "#7c68ee", "800", "middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 91, col.hardware, 16, INK, "800", "middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 112, col.hardware_detail, 13, MUTED, anchor="middle"))
 
     s.append(
         _t(
             x0 + grid_w / 2,
-            height - 36,
+            height - 20,
             "J+A = compiles in-process and also writes an artifact.  "
-            "* = explicit opt-in, never chosen automatically.",
-            14,
-            MUTED,
-            anchor="middle",
-        )
-    )
-    s.append(
-        _t(
-            x0 + grid_w / 2,
-            height - 18,
+            "* = explicit opt-in, never chosen automatically.  "
             "Backend priority and artifact formats are in the table below.",
             14,
             MUTED,
