@@ -63,16 +63,20 @@ SANS = (
 )
 MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
-WIDTH, HEIGHT = 900, 356
-PLOT = {"x": 268, "y": 154, "w": 470, "h": 132}
+WIDTH, HEIGHT = 900, 296
+PLOT = {"x": 268, "y": 92, "w": 470, "h": 132}
 BAR_H = 26
 X_MAX = 10.0  # milliseconds; the axis starts at zero, because a bar chart must
 
 # The arms, in the order they are drawn, with the label each gets on the left.
+# The third label names what it does rather than the setting that does it:
+# `transfers="automatic"` is LM7's default and copies the caller's inputs to the
+# device on every call, and "+ transfers" read as jargon to the first person who
+# saw this figure. What the setting is called belongs in the prose around it.
 ARMS = {
     "torch-compile": ("torch.compile", REFERENCE),
     "inductor-placed": ("lm7.compile", LM7),
-    "inductor": ("lm7.compile + transfers", LM7),
+    "inductor": ("lm7.compile, copying inputs", LM7),
 }
 
 
@@ -115,7 +119,6 @@ def collect(paths: list[Path]) -> tuple[dict[str, list[float]], dict[str, Any]]:
 def render(runs: dict[str, list[float]], context: dict[str, Any]) -> str:
     scale = PLOT["w"] / X_MAX
     row_h = PLOT["h"] / len(ARMS)
-    count = len(next(iter(runs.values())))
     medians = {arm: statistics.median(values) for arm, values in runs.items()}
     baseline = medians["torch-compile"]
 
@@ -133,36 +136,15 @@ def render(runs: dict[str, list[float]], context: dict[str, Any]) -> str:
     )
     s: list[str] = [opening, f'<rect width="{WIDTH}" height="{HEIGHT}" fill="{PAGE}"/>', surface]
 
-    s.append(_t(44, 56, "LM7 adds no measurable time to the compiler it calls", 19, INK, "600"))
     s.append(
         _t(
             44,
-            82,
+            56,
             f"Median forward pass · {context['model_id'].split('/')[-1]} · "
             f"batch {context['batch_size']} · {context['dtype']} · "
             f"{context.get('device_name', 'GPU')} · torch {context.get('torch', '?')}",
             13,
             MUTED,
-        )
-    )
-    s.append(
-        _t(
-            44,
-            104,
-            "All three compile through TorchInductor. Bars are the median of "
-            f"{count} runs; the line through each is the spread across them.",
-            13,
-            MUTED,
-        )
-    )
-    s.append(
-        _t(
-            44,
-            126,
-            "That spread is wider than the gaps between the bars.",
-            13,
-            INK,
-            "500",
         )
     )
 
@@ -235,6 +217,15 @@ def main() -> None:
     arguments = parser.parse_args()
 
     runs, context = collect(list(arguments.artifacts.glob(arguments.glob)))
+    # Printed because the figure itself no longer says any of it: the run count
+    # and the medians live in the README prose beside the image, and that prose
+    # has to be updated by hand when these move.
+    print(f"{len(next(iter(runs.values())))} runs")
+    for arm, values in runs.items():
+        print(
+            f"  {arm:<16} median {statistics.median(values):6.2f} ms   "
+            f"range {min(values):.2f}-{max(values):.2f}"
+        )
     svg = here / "lm7-overhead.svg"
     svg.write_text(render(runs, context), encoding="utf-8")
     print(f"wrote {svg.name} ({svg.stat().st_size:,} bytes)")

@@ -185,29 +185,37 @@ currently fails on:
 
 ### And what does the layer itself cost?
 
-The other direction: LM7 against the toolchain it orchestrates, both compiling
-through Inductor, on the same machine.
+The other direction: **LM7 adds no measurable time to the compiler it calls.**
+All three bars below compile the same model through TorchInductor; what differs
+is how much of LM7 is in the call path.
 
-![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms, the same model through lm7.compile at 7.91 ms, and through lm7.compile with its default per-call input transfer at 8.30 ms. The range across runs on each bar is wider than the gaps between the bars.](docs/figures/lm7-overhead.png)
+![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms, the same model through lm7.compile at 7.91 ms, and through lm7.compile copying its inputs at 8.30 ms. The range across runs on each bar is wider than the gaps between the bars.](docs/figures/lm7-overhead.png)
 
-The line through each bar is the spread across 7 runs, and it is wider than the
-distance between the bars — which is the whole finding. The same numbers, with
-the ratios computed within each process, where the arms run seconds apart:
+Each bar is the median of 7 runs, and the line through it is the spread across
+those runs. **That spread is wider than the gaps between the bars**, which is the
+whole finding: the difference the layer makes is smaller than the difference
+between two runs of the same thing.
 
-| `torch.compile` called directly | LM7, inputs placed | LM7, default transfers |
+The third bar is LM7's default, `transfers="automatic"`, which copies your inputs
+to the device on every call so that a caller holding CPU tensors does not have to
+think about it. The second bar is the same LM7 path with `transfers="explicit"`
+and the inputs already placed, which is what any code already holding device
+tensors would do. Same numbers, with each ratio computed inside its own process,
+where the arms run seconds apart:
+
+| `torch.compile` called directly | LM7, inputs placed | LM7, copying inputs |
 | --- | --- | --- |
 | 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
 
 Both ranges contain 1.0, so on a model doing real work the overhead is below what
 this machine can resolve — individual runs land on either side. The cost is
-**fixed per call, not proportional**: about
-0.03 ms of dispatch plus about 0.21 ms of input transfer, the latter only because
-`transfers="automatic"` is the default and opt-out. On a microbenchmark small
-enough for that to dominate — a 0.44 ms MLP — the same fixed cost reads as 1.44x,
-which is a fact about the microbenchmark rather than about the layer. See [what
-LM7 costs over calling `torch.compile`
+**fixed per call, not proportional**: about 0.03 ms of dispatch plus about
+0.21 ms of input copying. On a microbenchmark small enough for that to dominate —
+a 0.44 ms MLP — the same fixed cost reads as 1.44x, which is a fact about the
+microbenchmark rather than about the layer. See [what LM7 costs over calling
+`torch.compile`
 yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself)
-for the method, the caveats, and the arm that separates dispatch from transfer.
+for the method and the caveats.
 
 ## Integrated targets
 
