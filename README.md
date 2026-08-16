@@ -150,7 +150,16 @@ arm produced byte-identical text.
 
 ### What the layer costs
 
-![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms and the same model through lm7.compile at 7.91 ms, with the range across runs on each bar wider than the gap between the bars.](docs/figures/lm7-overhead.png)
+<table>
+<tr>
+<td width="50%"><img src="docs/figures/lm7-overhead.png" alt="Apple M3 Pro overhead comparison: direct torch.compile at 7.88 ms and lm7.compile at 7.91 ms."></td>
+<td width="50%"><img src="docs/figures/lm7-overhead-rtx.png" alt="RTX 4070 SUPER overhead comparison: direct torch.compile at 19.12 ms and lm7.compile at 19.92 ms."></td>
+</tr>
+<tr>
+<td align="center">Apple M3 Pro · Metal</td>
+<td align="center">RTX 4070 SUPER · CUDA 13.0</td>
+</tr>
+</table>
 
 Both bars compile the same model through TorchInductor; only one has LM7 in the
 call path. Each is the median of 7 runs, and the line through it is the spread
@@ -163,6 +172,12 @@ LM7's default also copies your inputs to the device on every call
 rather than proportional, so on a 0.44 ms MLP it reads as 1.44x — a fact about
 the microbenchmark. [Method and
 caveats](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself).
+The CUDA result tells the same story on different hardware. SmolLM2-135M at
+float16 and batch 1 measured 19.12 ms for direct torch.compile (18.49-25.44
+across seven runs) and 19.92 ms through LM7 with inputs placed (19.09-22.29),
+or 1.04x. The ranges overlap substantially, so this host does not resolve a
+reliable difference either. The RTX reports use PyTorch 2.13.0+cu130 and
+Transformers 5.14.1 under WSL2, with 100 timed calls per arm in each run.
 
 ## Integrated targets
 
