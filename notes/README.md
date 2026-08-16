@@ -19,6 +19,9 @@ evaluating LM7.
 - [`servable-artifacts.md`](servable-artifacts.md) — design note on what it
   would take to `lm7 model serve ./model.lm7`, and why the artifact format
   cannot do it today. Nothing implemented.
+- [blackwell-quantization-figure.md](blackwell-quantization-figure.md) — runbook for a
+  measured Llama-3.1-8B BF16/INT8/FP8/NVFP4 figure on an RTX PRO 6000
+  Blackwell, including shape pilots, kernel checks and fidelity gates.
 - [`project-summary-draft.md`](project-summary-draft.md) — unpublished one-page
   external summary of LM7: the compressed pitch, the use cases it is the
   shortest path for, where it is the wrong tool, and every claim traced back to
