@@ -181,7 +181,7 @@ COLUMNS = [
         ],
         runtime=["C++ / OpenMP", "XNNPACK · NEON", "KleidiAI", "ExecuTorch runtime"],
         hardware="Arm CPU",
-        hardware_detail="ARM64 servers · SBCs · phones",
+        hardware_detail="ARM64 · SBCs",
     ),
     Column(
         vendor="Apple",
@@ -444,10 +444,10 @@ def _logo(key, x, y, size):
 def _pill(x, y, kind):
     """Right-aligned badge. Width follows the label so longer badges do not float."""
     fg, bg = BADGE[kind]
-    w = 14 + len(kind) * 7.2
+    w = 16 + len(kind) * 8.2
     return (
-        _rect(x - w, y - 13, w, 18, bg, r=9)
-        + _t(x - w / 2, y + 0.5, kind, 10.5, fg, "700", "middle", "0.02em")
+        _rect(x - w, y - 14, w, 20, bg, r=10)
+        + _t(x - w / 2, y + 0.5, kind, 12, fg, "700", "middle", "0.02em")
     ), w
 
 
@@ -465,16 +465,16 @@ def render() -> str:
     x0 = RAIL_W
 
     def card_h(si: Silicon) -> int:
-        return 66 + len(si.backends) * 28 + 16
+        return 78 + len(si.backends) * 34 + 20
 
-    head_h = 40
+    head_h = 46
     backend_band_h = (
         head_h
         + max(sum(card_h(si) for si in c.silicon) + 12 * (len(c.silicon) - 1) for c in COLUMNS)
         + 34
     )
-    runtime_h = max(len(c.runtime) for c in COLUMNS) * 27 + 42
-    hw_h = 128
+    runtime_h = max(len(c.runtime) for c in COLUMNS) * 32 + 50
+    hw_h = 142
 
     y_model = TOP
     model_h = 96
@@ -499,10 +499,10 @@ def render() -> str:
     s = [opening, marker, _rect(0, 0, width, height, PAGE, r=0)]
 
     def rail(y, num, label, second=""):
-        s.append(_t(28, y + 36, num, 38, RAIL_NUM, "800"))
-        s.append(_t(28, y + 58, label, 13, MUTED, "700", spacing="0.08em"))
+        s.append(_t(28, y + 38, num, 42, RAIL_NUM, "800"))
+        s.append(_t(28, y + 62, label, 14.5, MUTED, "700", spacing="0.08em"))
         if second:
-            s.append(_t(28, y + 75, second, 13, MUTED, "700", spacing="0.08em"))
+            s.append(_t(28, y + 81, second, 14.5, MUTED, "700", spacing="0.08em"))
 
     # 01 model
     rail(y_model, "01", "MODEL")
@@ -578,24 +578,24 @@ def render() -> str:
         # Name the column, or the cards below read as anonymous CPU/GPU/NPU boxes.
         if col.logo:
             s.append(_logo(col.logo, cx + 2, y_backend - 2, 17))
-            s.append(_t(cx + 25, y_backend + 13, col.vendor, 17, col.tint, "800"))
+            s.append(_t(cx + 25, y_backend + 15, col.vendor, 19, col.tint, "800"))
         else:
-            s.append(_t(cx + 2, y_backend + 13, col.vendor, 17, col.tint, "800"))
-        s.append(_rect(cx, y_backend + 20, COL_W, 2, col.tint, r=0))
+            s.append(_t(cx + 2, y_backend + 15, col.vendor, 19, col.tint, "800"))
+        s.append(_rect(cx, y_backend + 24, COL_W, 2, col.tint, r=0))
 
         y = y_backend + head_h
         for si in col.silicon:
             h = card_h(si)
             s.append(_rect(cx, y, COL_W, h, CARD, CARD_LINE, r=12))
-            s.append(_t(cx + 14, y + 27, si.label, 17, INK, "800"))
-            s.append(_t(cx + 14, y + 46, si.detail, 12.5, MUTED))
-            s.append(_t(cx + 14, y + 66, f"target={si.target}", 12.5, col.tint, "700"))
-            by = y + 92
+            s.append(_t(cx + 14, y + 31, si.label, 20, INK, "800"))
+            s.append(_t(cx + 14, y + 54, si.detail, 14, MUTED))
+            s.append(_t(cx + 14, y + 77, f"target={si.target}", 14, col.tint, "700"))
+            by = y + 108
             for name, kind in si.backends:
-                s.append(_t(cx + 14, by, name, 14.5, INK))
+                s.append(_t(cx + 14, by, name, 16.5, INK))
                 pill, _ = _pill(cx + COL_W - 14, by, kind)
                 s.append(pill)
-                by += 28
+                by += 34
             y += h + 12
 
     # 04 lowering and runtime
@@ -611,10 +611,10 @@ def render() -> str:
             _arrow(cx + COL_W / 2, y_backend + backend_band_h - 22, cx + COL_W / 2, y_runtime - 8)
         )
         s.append(_rect(cx, y_runtime, COL_W, runtime_h, CARD, CARD_LINE, r=12))
-        ry = y_runtime + 34
+        ry = y_runtime + 40
         for line in col.runtime:
-            s.append(_t(cx + COL_W / 2, ry, line, 15, INK, "700", "middle"))
-            ry += 27
+            s.append(_t(cx + COL_W / 2, ry, line, 16.5, INK, "700", "middle"))
+            ry += 32
 
     # 05 hardware
     rail(y_hw - 12, "05", "HARDWARE")
@@ -627,8 +627,8 @@ def render() -> str:
             s.append(_logo(col.logo, cx + COL_W / 2 - 20, y_hw + 20, 40))
         else:
             s.append(_t(cx + COL_W / 2, y_hw + 50, "tt", 30, "#7c68ee", "800", "middle"))
-        s.append(_t(cx + COL_W / 2, y_hw + 91, col.hardware, 16, INK, "800", "middle"))
-        s.append(_t(cx + COL_W / 2, y_hw + 112, col.hardware_detail, 13, MUTED, anchor="middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 96, col.hardware, 18, INK, "800", "middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 120, col.hardware_detail, 14.5, MUTED, anchor="middle"))
 
     s.append(
         _t(
@@ -637,7 +637,7 @@ def render() -> str:
             "J+A = compiles in-process and also writes an artifact.  "
             "* = explicit opt-in, never chosen automatically.  "
             "Backend priority and artifact formats are in the table below.",
-            14,
+            15,
             MUTED,
             anchor="middle",
         )
