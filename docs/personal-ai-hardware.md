@@ -37,7 +37,7 @@ instead of spreading the branching logic through the application.
 | Intel AI PCs and mini PCs | OpenVINO for CPU/GPU/NPU | CPU paths are validated; `intel:npu` is integrated but still mock-tested. |
 | Arm Linux edge boxes | CPU Inductor, ONNX Runtime, OpenVINO, ExecuTorch | Arm Neoverse CPU and ExecuTorch paths are validated; small-board accelerators need device work. |
 | NVIDIA edge GPUs and Jetson | CUDA, TensorRT, ONNX Runtime, IREE Vulkan | NVIDIA GPUs are validated, but Jetson-specific validation and setup docs are still missing. |
-| AMD Ryzen/Radeon edge systems | ROCm, Vulkan/IREE, ONNX Runtime | AMD CPU is validated; ROCm GPU and AI-PC NPU coverage still need hardware runs. |
+| AMD Ryzen/Radeon edge systems | ROCm, Vulkan/IREE, ONNX Runtime | AMD CPU and one ROCm GPU path on MI300X are validated; Radeon and AI-PC NPU coverage still need hardware runs. |
 | Custom or emerging accelerators | StableHLO, IREE, TVM, MLIR/PJRT, vendor SDK | Useful integration direction; support depends on the vendor compiler exposing a usable bridge. |
 
 See [tested hardware](tested-hardware.md) for the exact physical machines that
