@@ -122,7 +122,7 @@ Transformers 5.15.0 and PyTorch 2.15.0.dev20260816+cu130. This is newer than
 the 2.13.0 stack in the earlier Blackwell report and must be stated beside any
 comparison.
 
-![Two-panel bar chart showing throughput and model-storage reduction for the validated and rejected FP8/NVFP4 modes on Llama-3.1-8B. Dynamic FP8 passes fidelity and improves throughput; dynamic NVFP4 is faster and smaller but rejected by the fidelity gate.](../docs/figures/blackwell-quantization.png)
+![Horizontal bar chart showing throughput relative to BF16 for the validated and rejected FP8/NVFP4 modes on Llama-3.1-8B. Dynamic FP8 passes fidelity and improves throughput; dynamic NVFP4 is faster and smaller but rejected by the fidelity gate.](../docs/figures/blackwell-quantization.png)
 
 The selected workload was batch 8, sequence 128, BF16 input/output, through LM7
 and TorchInductor. Input IDs repeat the tokens for "The capital of France is";
