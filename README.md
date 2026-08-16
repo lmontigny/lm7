@@ -102,7 +102,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 >
 > **NVIDIA:** RTX 4070 SUPER · H100 · RTX PRO 6000 Blackwell
 >
-> **AMD:** EPYC x86-64 CPU · Instinct MI300X GPU *(one rented card, one session)*
+> **AMD:** EPYC x86-64 CPU · Instinct MI300X GPU
 >
 > **Arm:** Neoverse N2/N3 CPU
 >
