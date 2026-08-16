@@ -122,7 +122,7 @@ Transformers 5.15.0 and PyTorch 2.15.0.dev20260816+cu130. This is newer than
 the 2.13.0 stack in the earlier Blackwell report and must be stated beside any
 comparison.
 
-![Two-panel bar chart showing throughput and model-storage reduction for seven quantization modes on Llama-3.1-8B. Dynamic FP8 passes fidelity and improves throughput; dynamic NVFP4 is faster and smaller but rejected by the fidelity gate.](../docs/figures/blackwell-quantization.png)
+![Two-panel bar chart showing throughput and model-storage reduction for the validated and rejected FP8/NVFP4 modes on Llama-3.1-8B. Dynamic FP8 passes fidelity and improves throughput; dynamic NVFP4 is faster and smaller but rejected by the fidelity gate.](../docs/figures/blackwell-quantization.png)
 
 The selected workload was batch 8, sequence 128, BF16 input/output, through LM7
 and TorchInductor. Input IDs repeat the tokens for "The capital of France is";
@@ -133,6 +133,13 @@ quality workload.
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | BF16 | 46.84 ms | 1.00x | 16.06 GB | 1.00x | — | baseline |
 | INT8 weight-only | 8997.06 ms | 0.005x | 9.09 GB | 1.77x | 224 | prior 4/4 |
+
+> [!WARNING]
+> This INT8 row is retained as diagnostic evidence but excluded from the headline
+> figure. LM7 `int8` is weight-only, leaving BF16 activations and dequantizing
+> weights around the matmul. On this PyTorch 2.15 nightly stack that path regressed
+> to 0.005x throughput. The follow-up `int8-dynamic` mode quantizes both operands
+> and stays behind the hardware-validation gate until it is remeasured.
 | FP8 weight-only | 57.01 ms | 0.82x | 10.43 GB | 1.54x | 96 | prior 3/4, rejected |
 | FP8 dynamic | 35.85 ms | **1.31x** | 10.42 GB | 1.54x | 96 | **4/4**, diff 0.83 |
 | FP8 dynamic rowwise | 34.47 ms | **1.36x** | 10.43 GB | 1.54x | 96 | **4/4**, diff 0.70 |

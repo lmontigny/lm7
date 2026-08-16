@@ -5,7 +5,6 @@ from xml.sax.saxutils import escape
 
 ROWS = [
     ("BF16", 46.8431, 16.0605, "accepted"),
-    ("INT8 weight-only", 8997.056, 9.0853, "accepted"),
     ("FP8 weight-only", 57.0100, 10.4276, "rejected"),
     ("FP8 dynamic", 35.8532, 10.4234, "accepted"),
     ("FP8 dynamic rowwise", 34.4706, 10.4276, "accepted"),
@@ -31,7 +30,7 @@ def render():
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">',
         '<rect width="1000" height="540" fill="#f7f9fc"/>',
         '<rect x="16" y="16" width="968" height="508" rx="10" fill="#fff" stroke="#dde4ec"/>',
-        text(42, 50, "What quantization buys on Blackwell", 18, INK, "650"),
+        text(42, 50, "Validated quantization on Blackwell", 18, INK, "650"),
         text(
             42,
             72,
@@ -91,7 +90,8 @@ def render():
             text(
                 42,
                 505,
-                "Blue: passes 4/4 top-1 fidelity gate · Red: rejected · INT8 throughput 0.005×",
+                "Blue: passes 4/4 top-1 fidelity gate · Red: rejected · "
+                "INT8 weight-only excluded (nightly regression)",
                 11,
                 MUTED,
             ),
@@ -104,7 +104,7 @@ def render():
 def main():
     here = Path(__file__).parent
     svg = here / "blackwell-quantization.svg"
-    svg.write_text(render(), encoding="utf-8")
+    svg.write_text(render(), encoding="utf-8", newline="\n")
     try:
         import cairosvg
     except (ImportError, OSError):
