@@ -156,6 +156,33 @@ part** — as validated as the TPU row and no more. Exact parts, backends,
 workloads, and known gaps are recorded in
 [tested hardware](docs/tested-hardware.md).
 
+## What compiling through LM7 buys
+
+Speed is evidence that the orchestration layer costs you nothing, not the reason
+to reach for LM7 — a dedicated single-target engine will beat it on that
+engine's own target. Generating the same 64 tokens on an Apple M3 Pro (14-core
+GPU, macOS 26.5.2, torch 2.13.0, transformers 5.15.0, `apple:metal`, float16,
+median of 3):
+
+| | SmolLM2-135M | Llama-3.2-1B |
+| --- | --- | --- |
+| `model.generate()` — plain PyTorch | 19.01 ms/token | 26.87 ms/token |
+| `+ StaticCache + CompileConfig` — Transformers' compiled generation | 18.21 ms/token (1.04x) | 29.51 ms/token (0.91x) |
+| `lm7.compile_generation()` | **7.08 ms/token (2.69x)** | **21.90 ms/token (1.23x)** |
+
+The middle row is the interesting one. Transformers gates compiled generation on
+a hardcoded device allowlist — `cuda`, `xpu`, `neuron`, `tpu` — so on Apple
+Silicon it logs "unable to meet the criteria for compilation" and decodes
+eagerly. The GPU was capable the whole time: forcing the private escape hatch
+open reaches 1.87x on SmolLM2. That is an orchestration gap rather than a kernel
+one, which is the kind LM7 exists to close.
+
+**The speedup does not transfer upward.** 2.69x is what a launch-bound 135M
+model gets; at 1B, where GEMM time dominates, it is 1.23x. Every arm produced
+byte-identical text. Method, the full four-arm table, and the model this path
+currently fails on:
+[Apple Silicon](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
+
 ## Integrated targets
 
 Integration means that LM7 has target and backend code for a toolchain. It does

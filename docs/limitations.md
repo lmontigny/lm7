@@ -350,6 +350,23 @@ none needs a token or an `unsloth/` mirror. That is worth stating because the
 Llama entries in the same dicts *do* use `unsloth/` mirrors for exactly that
 reason, and the pattern does not generalise.
 
+**A hybrid attention cache breaks the compiled decode loop on its second
+sequence.** `lm7.compile_generation` — and therefore `lm7 model serve` — answers
+one request for LFM2.5-230M and raises on the next with `Inplace update to
+inference tensor outside InferenceMode`. Transformers'
+`early_initialization` fills the attention layers' key/value buffers and leaves
+a `LinearAttentionLayer`'s conv states unallocated, so those are created lazily
+inside the first inference-mode call and the next `reset()` zeroes an inference
+tensor from outside inference mode. That also means the buffers are allocated
+inside the first traced call, which is precisely what materializing the cache
+eagerly exists to prevent. Confirmed on an Apple M3 Pro and tracked in
+[#192](https://github.com/lmontigny/lm7/issues/192). Qwen3.5-0.8B shares the
+architecture and is likely affected but has not been checked; whether it
+reproduces on `cpu` and `nvidia` has not been checked either, and nothing about
+it is MPS-specific. Both models are fine through `lm7.compile` and
+`lm7 model run`, which is a different path — so "validated" in the README's
+model table does not extend to the decode loop for these two.
+
 ## Per-backend scope
 
 | Backend | Scope and caveats |
