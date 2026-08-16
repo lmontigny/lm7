@@ -112,12 +112,9 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 >
 > **Qualcomm:** Snapdragon 8 Elite
 
-These machines have executed LM7 paths on physical hardware. Only CPU and Apple
-MPS run in CI; every other row is a hand run, once, on one part of its kind, and
-every GPU above the local dev card was rented for a session. **AMD ROCm in
-particular is one hand run on one cloud MI300X, with no CI and no bare-metal
-part** — as validated as the TPU row and no more. Exact parts, backends,
-workloads, and known gaps are recorded in
+These machines have executed LM7 paths on physical hardware. CPU and Apple MPS
+run in CI; everything else was exercised by hand. Exact parts, backends,
+workloads, and what each run did *not* cover are recorded in
 [tested hardware](docs/tested-hardware.md).
 
 ## Benchmarks
