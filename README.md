@@ -183,6 +183,25 @@ byte-identical text. Method, the full four-arm table, and the model this path
 currently fails on:
 [Apple Silicon](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
+### And what does the layer itself cost?
+
+The other direction: LM7 against the toolchain it orchestrates, both compiling
+through Inductor, on the same machine. A forward pass of SmolLM2-135M, batch 1,
+float16, over 7 runs:
+
+| `torch.compile` called directly | LM7, inputs placed | LM7, default transfers |
+| --- | --- | --- |
+| 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
+
+Both ranges contain 1.0, so on a model doing real work the overhead is below
+what this machine can resolve — individual runs land on either side. The cost is
+**fixed per call, not proportional**: about 0.03 ms of dispatch plus about
+0.21 ms of input transfer, the latter only because `transfers="automatic"` is
+the default and opt-out. On a microbenchmark small enough for that to dominate —
+a 0.44 ms MLP — the same fixed cost reads as 1.44x, which is a fact about the
+microbenchmark. See [what LM7 costs over calling `torch.compile`
+yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself).
+
 ## Integrated targets
 
 Integration means that LM7 has target and backend code for a toolchain. It does

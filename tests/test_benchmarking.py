@@ -6,7 +6,12 @@ import pytest
 import torch
 
 import lm7
-from lm7.benchmarking import _environment, _package_version, _percentile
+from lm7.benchmarking import (
+    _environment,
+    _package_version,
+    _percentile,
+    benchmark_callable,
+)
 from lm7.targets import TargetSpec
 
 
@@ -61,6 +66,45 @@ def test_benchmark_rejects_invalid_iteration_counts():
         lm7.benchmark(model, args=(torch.tensor(1),), warmup=-1)
     with pytest.raises(ValueError, match="repeats"):
         lm7.benchmark(model, args=(torch.tensor(1),), repeats=0)
+
+
+def test_a_callable_outside_lm7_is_timed_by_the_same_loop():
+    """The baseline arm has to be timed by the code that times the LM7 arm.
+
+    `benchmark_callable` exists so that "what does LM7 cost over the toolchain
+    underneath it" is not answered by two different timing loops -- see
+    benchmarks/gpu.py, where it backs the arms that call PyTorch directly.
+    """
+    model = torch.nn.Linear(4, 3).eval()
+    inputs = torch.randn(2, 4)
+
+    result = benchmark_callable(
+        lambda: model(inputs),
+        target=TargetSpec("cpu", "cpu"),
+        backend="torch-eager",
+        warmup=1,
+        repeats=3,
+        batch_size=2,
+    )
+
+    assert result.backend == "torch-eager"
+    assert result.target.startswith("cpu")
+    assert result.latency_median_ms > 0
+    assert result.latency_p95_ms >= result.latency_median_ms
+    assert result.samples_per_second > 0
+    # Reported as given: this function compiles nothing and inspects nothing, so
+    # the batch size is the caller's to state.
+    assert result.batch_size == 2
+    assert result.repeats == 3
+
+
+def test_benchmark_callable_rejects_invalid_iteration_counts():
+    # The same guards `benchmark` has, on the path that no longer goes through
+    # it -- otherwise a repeats=0 arm would divide by an empty list.
+    with pytest.raises(ValueError, match="warmup"):
+        benchmark_callable(lambda: None, target=TargetSpec("cpu", "cpu"), backend="x", warmup=-1)
+    with pytest.raises(ValueError, match="repeats"):
+        benchmark_callable(lambda: None, target=TargetSpec("cpu", "cpu"), backend="x", repeats=0)
 
 
 def test_percentile_interpolates():

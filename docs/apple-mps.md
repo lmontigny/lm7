@@ -165,6 +165,58 @@ overhead left to remove. This is the same shape as the H100 finding that
 tokens](kv-cache-decode.md#compiling-prefill-stops-paying-at-about-2048-tokens).
 Read the small number as "what a launch-bound model gets", not as LM7's number.
 
+### What LM7 costs over calling `torch.compile` yourself
+
+The table above compares LM7 against what a reader would otherwise write. This
+is the other direction: what the orchestration layer costs over the toolchain it
+is orchestrating. `benchmarks/gpu.py` has arms for it — `torch-compile` calls
+PyTorch directly with LM7 nowhere in the call path, and `inductor-placed` is LM7
+with `transfers="explicit"` — timed by `benchmark_callable`, the same loop,
+warmup and statistics the ordinary arms get.
+
+```bash
+python benchmarks/gpu.py --target apple --model smollm2 --dtype float16 \
+  --backend torch-compile inductor-placed inductor --repeats 100
+```
+
+Same M3 Pro, float16, batch 1. Every arm compiles through Inductor with
+`mode=None`, so the generated code is the same and the difference is dispatch:
+
+| | `torch.compile` | LM7, inputs placed | LM7, default transfers |
+| --- | --- | --- | --- |
+| SmolLM2-135M forward (7 runs) | 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
+| MLP 1024→4096→1024, batch 1 (5 runs) | 0.44 ms | 0.47 ms — **1.06x** (+0.03 ms) | 0.68 ms — **1.44x** (+0.21 ms) |
+
+Ratios are computed within each process, where the arms run seconds apart, and
+the parenthesised spread is across whole runs. **On the real model both ranges
+contain 1.0**: LM7's overhead there is smaller than what this machine can
+resolve, and individual runs put LM7 ahead of the direct call as often as a few
+percent behind.
+
+What the MLP row adds is the shape of the cost, because a 0.44 ms workload
+resolves what a 7.9 ms one hides. LM7 charges a **fixed** amount per call, not a
+proportional one, in two parts:
+
+- **~0.03 ms of dispatch** — the input signature, the compiled-variant lookup,
+  and entering the inference context. At the edge of measurability even here,
+  and one run of five came out negative.
+- **~0.21 ms of input transfer**, under the default `transfers="automatic"`,
+  which copies inputs to the device on every call. This is the whole of the
+  1.44x, and it is consistent run to run (+0.159 to +0.251 ms).
+
+So the honest summary is that the layer costs a fixed fraction of a millisecond
+per call. On a model doing real work that is a few percent at most; on a
+microbenchmark small enough to be dominated by dispatch it is 44%, which is a
+statement about the microbenchmark. The transfer half is opt-out — pass
+`transfers="explicit"` and place inputs yourself, which is what `inductor-placed`
+does and what any code already holding device tensors would do.
+
+> Two caveats on these numbers. They are one chip, and MPS run-to-run jitter on
+> this machine is large enough (p95 routinely 1.5-2x the median) that the
+> conclusion is "a few percent, below the noise floor" rather than a specific
+> percentage. And the comparison is Inductor against Inductor: it says nothing
+> about backends whose vendor path LM7 wraps more thickly.
+
 > **LFM2.5-230M could not be measured on this path.** Its hybrid
 > linear-attention/convolution cache leaves its conv states unallocated by
 > `early_initialization`, so they are created lazily inside the first
