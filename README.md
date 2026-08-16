@@ -235,7 +235,8 @@ Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cu
 
 Export and device setup: [ExecuTorch](docs/executorch.md) ·
 [Core ML](docs/coreml.md) · [Qualcomm QNN](docs/qnn.md) ·
-[Android device testing](docs/android-device-testing.md).
+[Android device testing](docs/android-device-testing.md) ·
+[iOS device testing](docs/ios-device-testing.md).
 
 ## Compiler and backend overview
 

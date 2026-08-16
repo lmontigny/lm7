@@ -17,6 +17,7 @@ This index covers everything else.
 | [Hardware validation procedure](hardware-validation.md) | Reproducible checklist for adding a physical machine to tested hardware, CPU or GPU. |
 | [Merged work](changelog.md) | One line per merged pull request, grouped by area. |
 | [Android device testing](android-device-testing.md) | Running an exported artifact on a real phone and checking it against the host. |
+| [iOS device testing](ios-device-testing.md) | Planned iPhone simulator and AWS Device Farm validation for ExecuTorch/Core ML artifacts. |
 
 ## Hardware setup
 
@@ -36,6 +37,7 @@ This index covers everything else.
 | Google TPU | [google-tpu.md](google-tpu.md) |
 | Tenstorrent | [tenstorrent.md](tenstorrent.md) |
 | Qualcomm Snapdragon 8 Elite HTP | [qnn.md](qnn.md) |
+| Apple iPhone / iPad | [ios-device-testing.md](ios-device-testing.md) |
 | Personal AI and edge devices | [personal-ai-hardware.md](personal-ai-hardware.md) |
 
 ## Backends
