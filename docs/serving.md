@@ -13,7 +13,7 @@ lm7 model serve hf://HuggingFaceTB/SmolLM2-135M-Instruct --target auto --max-mod
 ```
 lm7: loading HuggingFaceTB/SmolLM2-135M-Instruct for cpu:arm64...
 lm7: serving HuggingFaceTB/SmolLM2-135M-Instruct on http://127.0.0.1:8000 (cpu:arm64, backend=auto, max_model_len=512, kv cache 24 MB)
-lm7: the first request compiles the prefill and decode graphs and will be slower.
+lm7: the first request compiles the decode graph and will be slower. The prompt pass stays eager; --compile-prefill compiles it too.
 ```
 
 ```python
@@ -183,10 +183,10 @@ is slow:
 
 ```
 cold — the first message compiles the graphs and will be slow
-compiling prefill and decode graphs…          ← first message, from /metrics warm:false
+compiling the decode graph…                   ← first message, from /metrics warm:false
 prefill…                                      ← subsequent messages, before the first token
 generating · 88 char/s                        ← streaming
-20 tokens · 412 ms to first token · 9.4 tok/s · 1 prefill graph(s) · 0 decode recompiles
+20 tokens · 412 ms to first token · 9.4 tok/s · eager prefill · 0 decode recompiles
 ```
 
 The last line is the part no other local server can show you, and it is the
@@ -196,9 +196,13 @@ whole point of the two-graph split:
   means a *token* triggered a compile — the regression separate prefill and
   decode graphs exist to prevent — and the page turns red and says `RECOMPILED`
   rather than burying it. See [prefill and KV-cache decode](kv-cache-decode.md).
-- **`N prefill graph(s)`** is the cost that split accepts: the prompt pass is
-  compiled per prompt length, so this climbs as prompt lengths vary. Watching it
-  climb while recompiles stay at 0 is the design working as intended.
+- **`eager prefill`** is the default, and it is why the first line says *the
+  decode graph* rather than both. Under `--compile-prefill` this slot becomes
+  **`N prefill graph(s)`** — the cost that split accepts, one compile per
+  distinct prompt length, climbing as prompt lengths vary while recompiles stay
+  at 0. The page reads `compile_prefill` from `/metrics` to know which it is
+  looking at, because `prefill_lengths` climbs either way and only counts
+  compiles when the prompt pass is compiled.
 
 Both are also on `/metrics`, so a script can assert them without the browser.
 
@@ -425,11 +429,64 @@ counters         : prefill {frames: 1, unique_graphs: 1, graph_breaks: 0}
                    steady  {frames: 0}
 ```
 
-One graph per phase, no graph breaks, and nothing compiled in steady state. `--no-compile-prefill` leaves the prompt
-pass in eager, which is worth it when prompt lengths vary: a compiled prefill is
-compiled *per prompt length*, so a varied workload recompiles it repeatedly
-while the decode graph — the one that runs a thousand times — is compiled once
-either way. See [prefill and KV-cache decode](kv-cache-decode.md).
+One graph per phase, no graph breaks, and nothing compiled in steady state.
+
+Those two runs predate the default flipping and so are what `--compile-prefill`
+now produces: a `prefill` counter with a frame in it, and a `prefill_lengths`
+that is a count of compiles. **By default the prompt pass is left eager**, and
+only the decode graph is compiled — so the `prefill` counter stays empty,
+`prefill_lengths` still climbs with each distinct prompt length but costs
+nothing, and `/metrics` reports `compile_prefill: false` so a reader can tell
+those two situations apart. A compiled prefill is compiled *per prompt length*,
+which a server sees a new one of on nearly every request, while the decode graph
+— the one that runs a thousand times — is compiled once either way. See
+[prefill and KV-cache decode](kv-cache-decode.md) for where compiling the prompt
+pass does and does not pay, and [the defaults](#why-the-prompt-pass-is-eager-here)
+for the measurement that moved it.
+
+### Why the prompt pass is eager here
+
+`lm7.compile_generation` compiles the prompt pass by default; this server does
+not. The two defaults disagree on purpose, because they are aimed at different
+workloads — and the flag is the same one either way, `compile_prefill`, spelled
+`--compile-prefill` on the command line.
+
+A compiled prefill is compiled **once per distinct prompt length**. That is a
+good trade for a caller that sends one shape repeatedly, which is what a
+benchmark harness does. It is close to the worst case for a chat client, which
+resends its whole transcript every turn and therefore arrives at a length it has
+never seen before on essentially every request.
+
+Measured on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) under WSL2, torch
+2.13.0+cu130, `SmolLM2-135M-Instruct`, `--target nvidia`:
+
+| | first request | a later request at a new prompt length | a repeat length |
+| --- | --- | --- | --- |
+| compiled prefill (`--compile-prefill`) | ~100 s | **~80 s** | 0.13–0.45 s |
+| eager prefill (the default) | 11.4 s | **0.54 s** | 0.13–0.45 s |
+
+So the browser page this server ships with used to pay a fresh ~80 s stall on
+nearly every turn, with `/metrics` showing exactly that: `prefill_lengths`
+climbing by one each time while `steady_frames` stayed 0. Nothing was broken —
+the design was working as documented — but the default made the page look hung,
+which is the one thing the status line exists to prevent.
+
+The same conclusion arrives from the other direction in [prefill and KV-cache
+decode](kv-cache-decode.md#compiling-prefill-stops-paying-at-about-2048-tokens):
+compiling the prompt pass is 2.26x faster at 512 tokens, a tie at 2,048, and
+*slower* beyond that. It pays for short prompts at a repeated shape, and a chat
+server is neither.
+
+`--compile-prefill` turns it back on for a workload whose prompt lengths repeat.
+`--no-compile-prefill` still parses — it is what this behaviour used to be called
+— and is now a no-op.
+
+Confirmed on an Apple M3 Pro (macOS 26.5.2, torch 2.13.0, transformers 5.15.0,
+`SmolLM2-135M-Instruct`, `--target cpu` → `cpu:arm64`, `--max-model-len 512`):
+the first request took **22.9 s** and a second request at a different prompt
+length took **0.41 s**, with `/metrics` reporting `warm: true`,
+`compile_prefill: false`, `prefill_lengths: 2` and `steady_frames: 0`. Two
+distinct lengths, no second compile — which is the whole of the change.
 
 ## Sampling
 
@@ -763,8 +820,13 @@ the claim the two-graph split exists to support. `prefill_lengths` climbed with
 the number of distinct prompt lengths, as designed — and on this box that is
 expensive: the first request compiled for **~100 s** and each new prompt length
 cost roughly **80 s** more, against a warm request of 0.13–0.45 s.
-`--no-compile-prefill` brought the first request to 11.4 s and a second, unseen
-prompt length to 0.54 s, which makes it the flag to reach for while iterating.
+Leaving the prompt pass eager brought the first request to 11.4 s and a second,
+unseen prompt length to 0.54 s.
+
+**This run is why eager prefill is now the default**, and why the numbers above
+are what `--compile-prefill` costs rather than what the server does out of the
+box — see [why the prompt pass is eager here](#why-the-prompt-pass-is-eager-here).
+It was measured before that change, so the run itself is unmodified.
 
 **Both quantized modes NVIDIA gates now serve**, from `--dtype auto`:
 `--quantize int8` and `--quantize fp8` on SmolLM2-135M-Instruct, and
@@ -834,6 +896,10 @@ lm7: loading HuggingFaceTB/SmolLM2-135M-Instruct for cpu:aarch64...
 lm7: serving ... on http://127.0.0.1:8124 (cpu:aarch64, backend=auto, max_model_len=512, kv cache 24 MB)
 lm7: the first request compiles the prefill and decode graphs and will be slower.
 ```
+
+That last line is the banner as it read when this run was made, with the prompt
+pass compiled by default; today it names the decode graph alone unless
+`--compile-prefill` is passed. The transcript is left as it was recorded.
 
 **The target string in the API is `cpu:aarch64`, not `cpu:arm64`.** Every other
 `arm64` line on this page came from a Mac, and `platform.machine()` spells the

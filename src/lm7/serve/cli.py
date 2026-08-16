@@ -90,6 +90,10 @@ def serve_plan(config: ServeConfig) -> dict[str, Any]:
         plan["runtime"] = "lm7"
         plan["dtype"] = config.dtype
         plan["compile_mode"] = config.compile_mode
+        # Reported because it is the setting that decides whether a second,
+        # unseen prompt length costs milliseconds or a fresh Inductor compile,
+        # and --dry-run is where that is cheap to notice.
+        plan["compile_prefill"] = config.compile_prefill
         plan["quantize"] = config.quantize
         plan["cors_origins"] = list(config.cors_origins)
         # Whether, not which: --dry-run output ends up in terminals and issues.
@@ -155,8 +159,19 @@ def serve_model(config: ServeConfig, *, dry_run: bool = False, as_json: bool = F
     )
     # Said out loud because it is the first thing that looks like a bug: the
     # graphs compile on their first call, so request one is slower than the rest
-    # by however long Inductor takes.
-    print("lm7: the first request compiles the prefill and decode graphs and will be slower.")
+    # by however long Inductor takes. Which graphs those are is the whole of
+    # --compile-prefill, and naming them is what makes a later stall legible --
+    # with prefill compiled, every new prompt length pays the compile again.
+    if config.compile_prefill:
+        print(
+            "lm7: the first request compiles the prefill and decode graphs and will be slower, "
+            "and each new prompt length compiles the prefill again."
+        )
+    else:
+        print(
+            "lm7: the first request compiles the decode graph and will be slower. "
+            "The prompt pass stays eager; --compile-prefill compiles it too."
+        )
     run_server(config, engine)
     return 0
 
@@ -251,6 +266,7 @@ def _format_plan(plan: dict[str, Any]) -> str:
             lines.append(f"{'chat page':<16}http://{plan['host']}:{plan['ui_port']}")
     else:
         lines.append(f"{'quantize':<16}{plan['quantize']}")
+        lines.append(f"{'prefill':<16}{'compiled' if plan['compile_prefill'] else 'eager'}")
         lines.append(f"{'cors_origins':<16}{', '.join(plan['cors_origins']) or 'none'}")
         lines.append(f"{'api_key':<16}{'required' if plan['api_key'] else 'none'}")
         lines.append(f"{'endpoints':<16}{' '.join(plan['endpoints'])}")

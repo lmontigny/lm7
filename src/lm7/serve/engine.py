@@ -103,6 +103,19 @@ class ServeConfig:
     ``cors_origins`` defaults to every origin because the server binds loopback
     and holds no credentials, and a browser UI on another port is the ordinary
     way to use it. Narrow it when the server is reachable from anywhere else.
+
+    ``compile_prefill`` defaults to ``False`` here and to ``True`` in
+    :func:`lm7.compile_generation`, which is a deliberate disagreement rather
+    than an oversight. A compiled prefill is compiled *per prompt length*, so it
+    pays for a caller that reuses one shape and charges a serving workload —
+    a chat client above all, which resends its whole transcript and so arrives
+    at a new length every single turn. Measured on an RTX 4070 SUPER (Ada
+    ``sm89``, WSL2, torch 2.13.0+cu130, SmolLM2-135M-Instruct): ~100 s for the
+    first request and ~80 s for each new prompt length, against 11.4 s and
+    0.54 s with prefill left eager, and 0.13-0.45 s warm either way. Compiling
+    prefill also stops paying at about 2,048 tokens even when the shape does
+    repeat. ``--compile-prefill`` opts back in -- see docs/serving.md and
+    docs/kv-cache-decode.md.
     """
 
     model: str
@@ -111,7 +124,7 @@ class ServeConfig:
     dtype: str = "auto"
     max_model_len: int = 4096
     compile_mode: str | None = None
-    compile_prefill: bool = True
+    compile_prefill: bool = False
     host: str = "127.0.0.1"
     port: int = 8000
     # Only meaningful with a launcher backend (`vllm`, `trtllm`): LM7's own
@@ -709,7 +722,11 @@ class LM7ServeEngine:
 
         ``prefill_lengths`` is the cost the split accepts in exchange: the prompt
         pass is compiled per prompt length, so a varied workload pays repeatedly.
-        See docs/kv-cache-decode.md.
+        It counts the distinct lengths the prefill graph has run at, which is a
+        count of compiles only when ``compile_prefill`` is on -- left eager (the
+        server's default) it still climbs, and none of it cost anything. The
+        snapshot reports both fields for exactly that reason. See
+        docs/kv-cache-decode.md.
         """
         counters = getattr(self.runner, "counters", None)
         steady = counters.get("steady", {}) if isinstance(counters, dict) else {}
@@ -729,6 +746,10 @@ class LM7ServeEngine:
             "weights_bytes": self.weights_bytes,
             "max_model_len": self.max_model_len,
             "warm": self.warm,
+            # Reported next to `prefill_lengths`, which counts distinct prompt
+            # lengths whether or not any of them was compiled. This is the field
+            # that says which of the two that count is.
+            "compile_prefill": self.config.compile_prefill,
             **self.memory_snapshot(),
             **self.graph_stats(),
             **self.metrics.to_dict(),
