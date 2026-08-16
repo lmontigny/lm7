@@ -444,10 +444,10 @@ def _logo(key, x, y, size):
 def _pill(x, y, kind):
     """Right-aligned badge. Width follows the label so longer badges do not float."""
     fg, bg = BADGE[kind]
-    w = 12 + len(kind) * 6.4
+    w = 14 + len(kind) * 7.2
     return (
-        _rect(x - w, y - 11, w, 16, bg, r=8)
-        + _t(x - w / 2, y + 0.5, kind, 9.5, fg, "700", "middle", "0.02em")
+        _rect(x - w, y - 13, w, 18, bg, r=9)
+        + _t(x - w / 2, y + 0.5, kind, 10.5, fg, "700", "middle", "0.02em")
     ), w
 
 
@@ -465,15 +465,15 @@ def render() -> str:
     x0 = RAIL_W
 
     def card_h(si: Silicon) -> int:
-        return 56 + len(si.backends) * 25 + 14
+        return 66 + len(si.backends) * 28 + 16
 
-    head_h = 34
+    head_h = 40
     backend_band_h = (
         head_h
         + max(sum(card_h(si) for si in c.silicon) + 12 * (len(c.silicon) - 1) for c in COLUMNS)
         + 34
     )
-    runtime_h = max(len(c.runtime) for c in COLUMNS) * 24 + 34
+    runtime_h = max(len(c.runtime) for c in COLUMNS) * 27 + 42
     hw_h = 128
 
     y_model = TOP
@@ -499,37 +499,37 @@ def render() -> str:
     s = [opening, marker, _rect(0, 0, width, height, PAGE, r=0)]
 
     def rail(y, num, label, second=""):
-        s.append(_t(28, y + 34, num, 34, RAIL_NUM, "800"))
-        s.append(_t(28, y + 54, label, 12, MUTED, "700", spacing="0.08em"))
+        s.append(_t(28, y + 36, num, 38, RAIL_NUM, "800"))
+        s.append(_t(28, y + 58, label, 13, MUTED, "700", spacing="0.08em"))
         if second:
-            s.append(_t(28, y + 70, second, 12, MUTED, "700", spacing="0.08em"))
+            s.append(_t(28, y + 75, second, 13, MUTED, "700", spacing="0.08em"))
 
     # 01 model
     rail(y_model, "01", "MODEL")
     s.append(_rect(x0, y_model, grid_w, model_h, CARD, CARD_LINE, r=14))
     s.append(_logo("pytorch", x0 + 42, y_model + 26, 44))
-    s.append(_t(x0 + 108, y_model + 44, "PyTorch / Hugging Face model", 23, INK, "800"))
+    s.append(_t(x0 + 108, y_model + 44, "PyTorch / Hugging Face model", 26, INK, "800"))
     s.append(
-        _t(x0 + 108, y_model + 68, "nn.Module or hf:// id, with representative inputs", 13.5, MUTED)
+        _t(x0 + 108, y_model + 70, "nn.Module or hf:// id, with representative inputs", 15, MUTED)
     )
     bx = x0 + grid_w - 560
     s.append(_rect(bx, y_model + 24, 72, 44, NAVY, r=10))
-    s.append(_t(bx + 36, y_model + 52, "LM7", 19, NAVY_INK, "800", "middle"))
+    s.append(_t(bx + 36, y_model + 53, "LM7", 21, NAVY_INK, "800", "middle"))
     s.append(
         f'<path d="M {bx + 22} {y_model + 68} L {bx + 34} {y_model + 78} L {bx + 40} '
         f'{y_model + 68} z" fill="{NAVY}"/>'
     )
-    s.append(_t(bx + 88, y_model + 44, "LM7: PyTorch-first compiler orchestration", 17, INK, "800"))
+    s.append(_t(bx + 88, y_model + 44, "LM7: PyTorch-first compiler orchestration", 19, INK, "800"))
     s.append(
-        _t(bx + 88, y_model + 66, "one model · many compiler stacks · local hardware", 13, MUTED)
+        _t(bx + 88, y_model + 68, "one model · many compiler stacks · local hardware", 14.5, MUTED)
     )
     s.append(_arrow(x0 + grid_w / 2, y_model + model_h, x0 + grid_w / 2, y_orch - 4))
 
     # 02 orchestrator
     rail(y_orch, "02", "ORCHESTRATION")
     s.append(_rect(x0, y_orch, grid_w, orch_h, NAVY, r=14))
-    s.append(_t(x0 + 40, y_orch + 52, "LM7", 30, NAVY_INK, "800"))
-    s.append(_t(x0 + 40, y_orch + 80, "one model · one target string", 14, "#b9c7dd"))
+    s.append(_t(x0 + 40, y_orch + 54, "LM7", 34, NAVY_INK, "800"))
+    s.append(_t(x0 + 40, y_orch + 84, "one model · one target string", 16, "#b9c7dd"))
     for i, (a, b) in enumerate(
         [
             ("target detection", "backend selection"),
@@ -537,12 +537,12 @@ def render() -> str:
         ]
     ):
         fx = x0 + 300 + i * 230
-        s.append(_t(fx, y_orch + 48, a, 14, NAVY_INK, "700"))
-        s.append(_t(fx, y_orch + 78, b, 14, NAVY_INK, "700"))
+        s.append(_t(fx, y_orch + 48, a, 15.5, NAVY_INK, "700"))
+        s.append(_t(fx, y_orch + 80, b, 15.5, NAVY_INK, "700"))
     for i, call in enumerate(["lm7.compile()", "lm7.export()"]):
         px = x0 + grid_w - 400 + i * 200
         s.append(_rect(px, y_orch + 42, 182, 50, CARD, r=10))
-        s.append(_t(px + 91, y_orch + 73, call, 17, INK, "800", "middle"))
+        s.append(_t(px + 91, y_orch + 74, call, 19, INK, "800", "middle"))
 
     # the bus: which call reaches the backends, and how
     jit_y, aot_y = y_bus + 26, y_bus + 56
@@ -550,12 +550,12 @@ def render() -> str:
         f'<path d="M {x0 + grid_w - 309} {y_orch + orch_h - 40} L {x0 + grid_w - 309} '
         f'{jit_y} L {x0 + 30} {jit_y}" stroke="{JIT_LINE}" stroke-width="1.8" fill="none"/>'
     )
-    s.append(_t(x0 + 40, jit_y - 9, "JIT · in-process execution", 13.5, JIT_LINE, "700"))
+    s.append(_t(x0 + 40, jit_y - 9, "JIT · in-process execution", 15, JIT_LINE, "700"))
     s.append(
         f'<path d="M {x0 + grid_w - 109} {y_orch + orch_h - 40} L {x0 + grid_w - 109} '
         f'{aot_y} L {x0 + 30} {aot_y}" stroke="{ARROW}" stroke-width="1.8" fill="none"/>'
     )
-    s.append(_t(x0 + grid_w - 420, aot_y - 9, "AOT · artifact creation", 13.5, MUTED, "700"))
+    s.append(_t(x0 + grid_w - 420, aot_y - 9, "AOT · artifact creation", 15, MUTED, "700"))
     for i in range(n):
         cx = x0 + i * (COL_W + COL_GAP) + COL_W / 2
         s.append(_arrow(cx, aot_y, cx, y_backend - 6))
@@ -578,24 +578,24 @@ def render() -> str:
         # Name the column, or the cards below read as anonymous CPU/GPU/NPU boxes.
         if col.logo:
             s.append(_logo(col.logo, cx + 2, y_backend - 2, 17))
-            s.append(_t(cx + 25, y_backend + 12, col.vendor, 15, col.tint, "800"))
+            s.append(_t(cx + 25, y_backend + 13, col.vendor, 17, col.tint, "800"))
         else:
-            s.append(_t(cx + 2, y_backend + 12, col.vendor, 15, col.tint, "800"))
+            s.append(_t(cx + 2, y_backend + 13, col.vendor, 17, col.tint, "800"))
         s.append(_rect(cx, y_backend + 20, COL_W, 2, col.tint, r=0))
 
         y = y_backend + head_h
         for si in col.silicon:
             h = card_h(si)
             s.append(_rect(cx, y, COL_W, h, CARD, CARD_LINE, r=12))
-            s.append(_t(cx + 14, y + 24, si.label, 15, INK, "800"))
-            s.append(_t(cx + 14, y + 40, si.detail, 11, MUTED))
-            s.append(_t(cx + 14, y + 58, f"target={si.target}", 11, col.tint, "700"))
-            by = y + 82
+            s.append(_t(cx + 14, y + 27, si.label, 17, INK, "800"))
+            s.append(_t(cx + 14, y + 46, si.detail, 12.5, MUTED))
+            s.append(_t(cx + 14, y + 66, f"target={si.target}", 12.5, col.tint, "700"))
+            by = y + 92
             for name, kind in si.backends:
-                s.append(_t(cx + 14, by, name, 13, INK))
+                s.append(_t(cx + 14, by, name, 14.5, INK))
                 pill, _ = _pill(cx + COL_W - 14, by, kind)
                 s.append(pill)
-                by += 25
+                by += 28
             y += h + 12
 
     # 04 lowering and runtime
@@ -611,10 +611,10 @@ def render() -> str:
             _arrow(cx + COL_W / 2, y_backend + backend_band_h - 22, cx + COL_W / 2, y_runtime - 8)
         )
         s.append(_rect(cx, y_runtime, COL_W, runtime_h, CARD, CARD_LINE, r=12))
-        ry = y_runtime + 30
+        ry = y_runtime + 34
         for line in col.runtime:
-            s.append(_t(cx + COL_W / 2, ry, line, 13.5, INK, "700", "middle"))
-            ry += 24
+            s.append(_t(cx + COL_W / 2, ry, line, 15, INK, "700", "middle"))
+            ry += 27
 
     # 05 hardware
     rail(y_hw - 12, "05", "HARDWARE")
@@ -627,8 +627,8 @@ def render() -> str:
             s.append(_logo(col.logo, cx + COL_W / 2 - 20, y_hw + 20, 40))
         else:
             s.append(_t(cx + COL_W / 2, y_hw + 50, "tt", 30, "#7c68ee", "800", "middle"))
-        s.append(_t(cx + COL_W / 2, y_hw + 90, col.hardware, 14.5, INK, "800", "middle"))
-        s.append(_t(cx + COL_W / 2, y_hw + 110, col.hardware_detail, 11.5, MUTED, anchor="middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 91, col.hardware, 16, INK, "800", "middle"))
+        s.append(_t(cx + COL_W / 2, y_hw + 112, col.hardware_detail, 13, MUTED, anchor="middle"))
 
     s.append(
         _t(
@@ -637,7 +637,7 @@ def render() -> str:
             "J+A = compiles in-process and also writes an artifact.  "
             "* = explicit opt-in, never chosen automatically.  "
             "Backend priority and artifact formats are in the table below.",
-            13,
+            14,
             MUTED,
             anchor="middle",
         )
