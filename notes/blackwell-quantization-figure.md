@@ -124,6 +124,18 @@ comparison.
 
 ![Two-panel bar chart showing throughput and model-storage reduction for the validated and rejected FP8/NVFP4 modes on Llama-3.1-8B. Dynamic FP8 passes fidelity and improves throughput; dynamic NVFP4 is faster and smaller but rejected by the fidelity gate.](../docs/figures/blackwell-quantization.png)
 
+That is the full record, and it stays the figure for this note. A **second,
+simpler figure** was drawn from the same aggregates for the README, where a
+reader has not yet committed to the detail: one panel, five arms, speedup only,
+no storage and no per-arm fidelity labels
+(`docs/figures/blackwell_quantization_speedup.py`). It does not replace this
+one — the plan's two-panel design is still what a reader who came here wants,
+and the README's version deliberately answers less. The published prose sits
+[in the quantization
+doc](../docs/quantization.md#dynamic-modes-are-the-first-to-beat-bf16-on-this-model),
+which is what the README links to; this file stays the runbook and the raw
+session log.
+
 The selected workload was batch 8, sequence 128, BF16 input/output, through LM7
 and TorchInductor. Input IDs repeat the tokens for "The capital of France is";
 this makes the matrix shape reproducible but is a performance workload, not a

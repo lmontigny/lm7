@@ -122,10 +122,11 @@ workloads, and known gaps are recorded in
 
 ## Benchmarks
 
-Both measured on an Apple M3 Pro (14-core GPU, macOS 26.5.2, torch 2.13.0,
-transformers 5.15.0, `apple:metal`, float16). Speed is evidence that the layer
-costs nothing, not the reason to reach for LM7: a dedicated single-target engine
-will beat it on that engine's own target.
+Speed is evidence that the layer costs nothing, not the reason to reach for LM7:
+a dedicated single-target engine will beat it on that engine's own target. The
+first two sections were measured on an Apple M3 Pro (14-core GPU, macOS 26.5.2,
+torch 2.13.0, transformers 5.15.0, `apple:metal`, float16); the third on a
+rented NVIDIA Blackwell card, named in its own caption.
 
 ### What compiling through LM7 buys
 
@@ -170,6 +171,27 @@ across seven runs) and 19.92 ms through LM7 with inputs placed (19.09-22.29),
 or 1.04x. The ranges overlap substantially, so this host does not resolve a
 reliable difference either. The RTX reports use PyTorch 2.13.0+cu130 and
 Transformers 5.14.1 under WSL2, with 100 timed calls per arm in each run.
+
+### What quantization buys
+
+![Bar chart of speedup against a BF16 baseline for five quantization modes on Llama-3.1-8B. Dynamic NVFP4 is fastest at 1.86x, rowwise dynamic FP8 reaches 1.36x and per-tensor dynamic FP8 1.31x, while FP8 weight-only is slower than BF16 at 0.82x.](docs/figures/blackwell-quantization-speedup.png)
+
+**Rowwise dynamic FP8 is the only mode here that is both faster than BF16 and
+keeps every top-1 token** — 1.36x, and 1.54x smaller, on a rented RTX PRO 6000
+Blackwell.
+
+**The bars measure speed and nothing else**, and the longest one is not
+admitted. NVFP4 dynamic is the fastest thing measured, at 1.86x, and loses half
+its top-1 tokens against the BF16 baseline — a fast wrong answer, and the reason
+this figure is not the whole decision. FP8 weight-only goes the other way and
+lands at 0.82x: **compressing weights buys footprint, not arithmetic**, and only
+the dynamic modes reach the narrow kernels that make quantization faster rather
+than smaller.
+
+This is one model at one shape on one card, and the modes that win here are
+opt-in per (model, mode) pair rather than defaults. [Method, the storage and
+fidelity columns this figure leaves out, and what the gate does and does not
+prove](docs/quantization.md#dynamic-modes-are-the-first-to-beat-bf16-on-this-model).
 
 ## Integrated targets
 

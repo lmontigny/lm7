@@ -499,6 +499,84 @@ latency**; only rowwise-on-1B is faster than not quantizing at all.
 > A throughput claim at serving batch and sequence length is a different
 > measurement that this repo has not made.
 
+## Dynamic modes are the first to beat BF16 on this model
+
+That measurement has now been made, on a different card. At batch 8 and
+sequence 128 — a shape where the GEMMs are large enough to matter — the dynamic
+modes stop costing latency and start saving it:
+
+![Bar chart of speedup against a BF16 baseline for five quantization modes on Llama-3.1-8B. Dynamic NVFP4 is fastest at 1.86x, rowwise dynamic FP8 reaches 1.36x and per-tensor dynamic FP8 1.31x, while FP8 weight-only is slower than BF16 at 0.82x.](figures/blackwell-quantization-speedup.png)
+
+The host was a rented NVIDIA RTX PRO 6000 Blackwell Server Edition (`sm120`,
+95.6 GiB), driver 580.126.20, running CUDA 13.0, TorchAO 0.17.0, Transformers
+5.15.0 and PyTorch 2.15.0.dev20260816+cu130. **That stack is newer than the
+2.13.0 one behind every other table in this document**, so these rows are not a
+card-to-card comparison with the `sm90` section above — they are their own
+measurement. The model is `unsloth/Llama-3.1-8B-Instruct` at BF16 through LM7
+and TorchInductor.
+
+| mode | median | vs BF16 | storage | converted | top-1 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| BF16 baseline | 46.84 ms | 1.00x | 16.06 GB | — | — |
+| `int8` | 8997.06 ms | **0.005x** | 9.09 GB (1.77x) | 224 | prior 4/4 |
+| `fp8` | 57.01 ms | 0.82x | 10.43 GB (1.54x) | 96 | prior 3/4, rejected |
+| `fp8-dynamic` | 35.85 ms | **1.31x** | 10.42 GB (1.54x) | 96 | **4/4**, diff 0.83 |
+| `fp8-dynamic-rowwise` | 34.47 ms | **1.36x** | 10.43 GB (1.54x) | 96 | **4/4**, diff 0.70 |
+| `nvfp4` | 57.68 ms | 0.81x | 6.03 GB (2.66x) | 224 | prior 2/4, rejected |
+| `nvfp4-dynamic` | 25.23 ms | **1.86x** | 6.03 GB (**2.66x**) | 224 | **2/4**, rejected; diff 3.30 |
+
+"Prior" is this document's existing `sm120` result on the 2.13.0 stack rather
+than a rerun; only the dynamic rows were checked for fidelity during this
+session. The `int8` row is the weight-only path whose operand mismatch
+[`int8-dynamic` was added to fix](#supported-data-types) — it is kept here as
+the diagnostic it is, and it is in neither figure.
+
+**Two figures are drawn from this table, and neither is the table.** The one
+above plots five speedups and nothing else, for the README, where a reader has
+not yet committed to the detail. The [note's
+figure](../notes/blackwell-quantization-figure.md) plots throughput *and*
+storage for every arm and colors each by its fidelity verdict, which is the
+right picture once a reader has. The storage and `top-1` columns are the ones
+the README's figure leaves out; read it for the speed and this table for
+whether the speed is usable.
+
+Three things this does and does not establish:
+
+- **It answers the open question above in one direction only.** The H100 note
+  said a throughput claim at serving batch and sequence length had not been
+  made. At batch 8 × sequence 128 the answer is yes, rowwise dynamic FP8 beats
+  BF16 — by 1.36x, on Blackwell, on a newer stack. It does not reproduce
+  TorchAO's H100 figure, because it is neither that card nor that stack.
+- **The shape is doing as much work as the card.** The same model at batch 1
+  and a 5-token prefill put both dynamic modes *below* BF16 on `sm90`. Nothing
+  here contradicts that; it is the same finding from the other side, which is
+  that these modes need enough M to pay for their scaling.
+- **Fast is not admitted.** `nvfp4-dynamic` is the fastest row in the table and
+  keeps 2 of 4 top-1 tokens, so it stays out of `VALIDATED_ACTIVATION` — the
+  same verdict it gets everywhere else in this document, now with a speedup
+  attached that makes it tempting rather than merely narrow.
+
+The latency ordering is not noise. Each arm ran in a fresh process, and the
+planned five repetitions were stopped early to conserve rental credit, so the
+completed counts differ per arm and are reported rather than averaged over:
+
+| mode | processes | median of medians | range |
+| --- | ---: | ---: | ---: |
+| BF16 | 4 | 46.84 ms | 46.77–46.93 |
+| `fp8-dynamic` | 4 | 35.85 ms | 35.82–35.90 |
+| `fp8-dynamic-rowwise` | 3 | 34.47 ms | 34.45–34.51 |
+
+A long-prefill cross-check at batch 1, sequence 1024 preserved the ordering:
+51.48 ms BF16, 40.77 ms `fp8-dynamic`, 39.45 ms `fp8-dynamic-rowwise`, 30.14 ms
+`nvfp4-dynamic`. The last arm still fails fidelity there too.
+
+Generated Inductor caches contained `_scaled_mm` in 2,987 files, float8 markers
+in 45 and `e2m1` in 3, which is evidence that narrow scaled kernels were emitted
+at all — **not** evidence of which mode emitted which, since the arms shared a
+cache. A per-mode kernel audit needs one mode per empty cache and has not been
+run. The [runbook and the raw session
+log](../notes/blackwell-quantization-figure.md) carry the rest.
+
 ## INT8 on CPU
 
 INT8 is the only mode measured off NVIDIA. It converts the same layers, keeps
@@ -1019,10 +1097,15 @@ unmeasured here.
   memory-bound per token but the dequantization overhead is paid on every
   matmul, the net can go the wrong way. This is why it is opt-in rather than a
   default, and why the run reports latency alongside footprint. Compiled,
-  **every mode was slower than the BF16 baseline on both GPUs measured** — by
-  1.6x (`fp8`), 2.5x (`nvfp4`) and 7.3x (`int8`) on sm89, and by 1.17x, 1.24x
-  and 6.0x on sm120. Newer silicon shrinks the penalty substantially without
-  removing it. CPU is the one place where a mode came out even: INT8 is at
+  **every weight-only mode was slower than the BF16 baseline on both GPUs
+  measured** — by 1.6x (`fp8`), 2.5x (`nvfp4`) and 7.3x (`int8`) on sm89, and by
+  1.17x, 1.24x and 6.0x on sm120. Newer silicon shrinks the penalty
+  substantially without removing it. The *dynamic* modes are the exception and
+  only at a large enough shape: on `sm120` at batch 8 × sequence 128,
+  [`fp8-dynamic-rowwise` reaches 1.36x and `nvfp4-dynamic`
+  1.86x](#dynamic-modes-are-the-first-to-beat-bf16-on-this-model), while the
+  same modes at batch 1 and a 5-token prefill sit below BF16 on `sm90`. CPU is
+  the one place where a weight-only mode came out even: INT8 is at
   parity for SmolLM2-135M and 2.6x slower for Llama-3.2-1B. Treat the footprint
   saving as the reliable benefit and latency as something to measure per model
   *and* per target.
@@ -1041,10 +1124,11 @@ unmeasured here.
   FP8 activations with INT4 weights are not wired up. Four pairs are admitted:
   Llama-3.2-1B and Llama-3.1-8B, each with `fp8-dynamic` and
   `fp8-dynamic-rowwise`. `nvfp4-dynamic` is admitted for nothing.
-- **Per-row scaling is measured on one card.** The `fp8-dynamic-rowwise` numbers
-  are all `sm90`. The mode's `sm89` floor is a capability gate, not a
-  measurement — it has never been run on Ada, and the `sm120` tables above
-  predate it entirely.
+- **Per-row scaling is measured on two cards, neither of them Ada.** The
+  `fp8-dynamic-rowwise` numbers are `sm90` at batch 1 and `sm120` at batch 8 ×
+  sequence 128, on different PyTorch stacks, so the pair is two measurements
+  rather than a comparison. The mode's `sm89` floor is still a capability gate
+  and not a measurement — it has never been run on Ada.
 - **No INT4 or lower, and no quantization-aware training.** Those are unexplored
   rather than rejected.
 

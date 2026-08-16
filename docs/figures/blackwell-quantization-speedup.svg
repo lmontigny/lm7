@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="420" viewBox="0 0 780 420" role="img" aria-label="Bar chart of speedup against a BF16 baseline for five quantization modes on Llama-3.1-8B. Dynamic NVFP4 is fastest at 1.86 times BF16, rowwise dynamic FP8 reaches 1.36 times and per-tensor dynamic FP8 1.31 times, while FP8 weight-only is slower than BF16 at 0.82 times.">
+<rect width="780" height="420" fill="#f7f9fc"/>
+<rect x="16" y="16" width="748" height="388" rx="10" fill="#ffffff" stroke="#dde4ec"/>
+<text x="42.0" y="52.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1a2532" text-anchor="start">Quantization speedup on Blackwell</text>
+<text x="42.0" y="74.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#68788a" text-anchor="start">Llama-3.1-8B · batch 8 × sequence 128 · RTX PRO 6000 Blackwell (sm120) · TorchInductor</text>
+<line x1="268.0" y1="104" x2="268.0" y2="324" stroke="#eef2f7"/>
+<text x="268.0" y="344.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.0×</text>
+<line x1="365.5" y1="104" x2="365.5" y2="324" stroke="#eef2f7"/>
+<text x="365.5" y="344.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.5×</text>
+<line x1="463.0" y1="104" x2="463.0" y2="324" stroke="#c7d2de"/>
+<text x="463.0" y="344.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.0×</text>
+<line x1="560.5" y1="104" x2="560.5" y2="324" stroke="#eef2f7"/>
+<text x="560.5" y="344.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.5×</text>
+<line x1="658.0" y1="104" x2="658.0" y2="324" stroke="#eef2f7"/>
+<text x="658.0" y="344.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">2.0×</text>
+<text x="463.0" y="94.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="500" fill="#68788a" text-anchor="middle">BF16 baseline</text>
+<text x="250.0" y="130.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">BF16</text>
+<rect x="268" y="113.0" width="195.0" height="26" rx="4" fill="#8d99a6"/>
+<text x="473.0" y="130.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.00×</text>
+<text x="250.0" y="174.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 weight-only</text>
+<rect x="268" y="157.0" width="160.2" height="26" rx="4" fill="#2a78d6"/>
+<text x="438.2" y="174.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">0.82×</text>
+<text x="250.0" y="218.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic</text>
+<rect x="268" y="201.0" width="254.8" height="26" rx="4" fill="#2a78d6"/>
+<text x="532.8" y="218.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.31×</text>
+<text x="250.0" y="262.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic rowwise</text>
+<rect x="268" y="245.0" width="265.0" height="26" rx="4" fill="#2a78d6"/>
+<text x="543.0" y="262.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.36×</text>
+<text x="250.0" y="306.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">NVFP4 dynamic</text>
+<rect x="268" y="289.0" width="362.0" height="26" rx="4" fill="#2a78d6"/>
+<text x="640.0" y="306.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.86×</text>
+<text x="42.0" y="380.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#68788a" text-anchor="start">Median of 30+ synchronized forwards, one fresh process per arm. Speed only: two of these five</text>
+<text x="42.0" y="396.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#68788a" text-anchor="start">modes fail the top-1 fidelity gate and are not admitted. See the quantization doc for which, and by how much.</text>
+</svg>
