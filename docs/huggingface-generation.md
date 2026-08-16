@@ -207,6 +207,21 @@ one size on two targets: nothing here says what happens at 8B, on CUDA, or under
 concurrency. The CPU arm in particular is a 135M result and should not be read
 as "compiling never pays on CPU".
 
+The CPU result reproduced on a MacBook Pro environment where PyTorch had MPS
+built but unavailable (`cpu:arm64`, macOS 26.5.2, torch 2.13.0, transformers
+5.15.0), with `--repeats 5`:
+
+| arm | ms/token | vs eager |
+| --- | --- | --- |
+| `eager` | 17.09 | 1.00x |
+| `hf-static` | 19.55 | 0.87x |
+| `hf-forced` | 17.72 | 0.96x |
+| `lm7` | 20.42 | 0.84x |
+
+All four arms produced identical text, and LM7's steady decode counter stayed at
+zero. This confirms the shape of the table above on a second software stack:
+the CPU path is correct and stable, but this small model is not a CPU speed win.
+
 ## Current support
 
 - Greedy decoding (`do_sample=False`)

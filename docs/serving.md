@@ -248,6 +248,13 @@ that depends on tools will report an error rather than degrade.
 > they consume the same API, not because anyone here has run them. The `openai`
 > SDK is what has actually been driven end to end.
 
+A local MacBook Pro smoke test also drove two `/v1/chat/completions` turns
+against SmolLM2-135M on `cpu:arm64`, resending the first assistant message in the
+second request. That is the multi-turn contract LM7 supports: the client owns
+the transcript, LM7 compiles and answers one request at a time, and
+`steady_frames` stayed at 0. It is not tool-calling agent support; requests with
+`tools` or `tool_choice` are refused rather than silently ignored.
+
 ## Endpoints
 
 | | |
