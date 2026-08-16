@@ -261,7 +261,7 @@ the `loadKernel` call that will fetch the matching `.cubin` at runtime. The
 fused node above compiled to one kernel that materializes the bias, adds it, and
 applies GELU in a single pass:
 
-```python
+```text
 @triton.jit
 def triton_poi_fused_addmm_gelu_0(in_out_ptr0, xnumel, XBLOCK : tl.constexpr):
     xnumel = 24
