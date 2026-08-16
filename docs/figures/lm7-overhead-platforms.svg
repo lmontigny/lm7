@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="390" viewBox="0 0 900 390" role="img" aria-label="Grouped bar chart comparing direct torch.compile and lm7.compile latency on Apple M3 Pro and RTX 4070 SUPER">
+<rect width="900" height="390" fill="#f7f9fc"/>
+<rect x="16" y="16" width="868" height="358" rx="10" fill="#ffffff" stroke="#dde4ec"/>
+<text x="44.0" y="50.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="17" font-weight="650" fill="#1a2532" text-anchor="start">LM7 overhead across Metal and CUDA</text>
+<text x="44.0" y="72.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#68788a" text-anchor="start">SmolLM2-135M-Instruct · batch 1 · float16 · median of 7 runs</text>
+<line x1="290.0" y1="92" x2="290.0" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="290.0" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">0</text>
+<line x1="361.7" y1="92" x2="361.7" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="361.7" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">5</text>
+<line x1="433.3" y1="92" x2="433.3" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="433.3" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">10</text>
+<line x1="505.0" y1="92" x2="505.0" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="505.0" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">15</text>
+<line x1="576.7" y1="92" x2="576.7" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="576.7" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">20</text>
+<line x1="648.3" y1="92" x2="648.3" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="648.3" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">25</text>
+<line x1="720.0" y1="92" x2="720.0" y2="320" stroke="#eef2f7" stroke-width="1"/>
+<text x="720.0" y="340.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">30</text>
+<text x="44.0" y="105.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1a2532" text-anchor="start">Apple M3 Pro · Metal</text>
+<text x="274.0" y="135.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">torch.compile</text>
+<rect x="290" y="118.0" width="112.9" height="24" rx="4" fill="#8d99a6"/>
+<line x1="399.6" y1="130" x2="410.8" y2="130" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="399.6" y1="123" x2="399.6" y2="137" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="410.8" y1="123" x2="410.8" y2="137" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<text x="422.8" y="135.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">7.88 ms</text>
+<text x="274.0" y="173.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">lm7.compile</text>
+<rect x="290" y="156.0" width="113.4" height="24" rx="4" fill="#2a78d6"/>
+<line x1="399.2" y1="168" x2="422.2" y2="168" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="399.2" y1="161" x2="399.2" y2="175" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="422.2" y1="161" x2="422.2" y2="175" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<text x="434.2" y="173.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">7.91 ms  (1.00x)</text>
+<text x="44.0" y="241.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1a2532" text-anchor="start">RTX 4070 SUPER · CUDA 13.0</text>
+<text x="274.0" y="271.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">torch.compile</text>
+<rect x="290" y="254.0" width="274.0" height="24" rx="4" fill="#8d99a6"/>
+<line x1="555.0" y1="266" x2="654.6" y2="266" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="555.0" y1="259" x2="555.0" y2="273" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="654.6" y1="259" x2="654.6" y2="273" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<text x="666.6" y="271.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">19.12 ms</text>
+<text x="274.0" y="309.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">lm7.compile</text>
+<rect x="290" y="292.0" width="285.5" height="24" rx="4" fill="#2a78d6"/>
+<line x1="563.7" y1="304" x2="609.6" y2="304" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="563.7" y1="297" x2="563.7" y2="311" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<line x1="609.6" y1="297" x2="609.6" y2="311" stroke="#1a2532" stroke-width="2" stroke-opacity="0.65"/>
+<text x="621.6" y="309.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">19.92 ms  (1.04x)</text>
+<text x="505.0" y="368.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#68788a" text-anchor="middle">milliseconds per forward pass (lower is better)</text>
+</svg>

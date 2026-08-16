@@ -150,18 +150,10 @@ arm produced byte-identical text.
 
 ### What the layer costs
 
-<table>
-<tr>
-<td width="50%"><img src="docs/figures/lm7-overhead.png" alt="Apple M3 Pro overhead comparison: direct torch.compile at 7.88 ms and lm7.compile at 7.91 ms."></td>
-<td width="50%"><img src="docs/figures/lm7-overhead-rtx.png" alt="RTX 4070 SUPER overhead comparison: direct torch.compile at 19.12 ms and lm7.compile at 19.92 ms."></td>
-</tr>
-<tr>
-<td align="center">Apple M3 Pro · Metal</td>
-<td align="center">RTX 4070 SUPER · CUDA 13.0</td>
-</tr>
-</table>
+![Grouped bar chart comparing direct torch.compile with lm7.compile for SmolLM2-135M on an Apple M3 Pro and RTX 4070 SUPER. Both seven-run ranges overlap within each platform.](docs/figures/lm7-overhead-platforms.png)
 
-Both bars compile the same model through TorchInductor; only one has LM7 in the
+Within each platform both bars compile through TorchInductor; only one has LM7
+in the
 call path. Each is the median of 7 runs, and the line through it is the spread
 across those runs — **wider than the gap between the bars**, which is the whole
 finding.
