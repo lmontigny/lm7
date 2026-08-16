@@ -188,7 +188,25 @@ Same M3 Pro, float16, batch 1. Every arm compiles through Inductor with
 | MLP 1024→4096→1024, batch 1 (5 runs) | 0.44 ms | 0.47 ms — **1.06x** (+0.03 ms) | 0.68 ms — **1.44x** (+0.21 ms) |
 
 Ratios are computed within each process, where the arms run seconds apart, and
-the parenthesised spread is across whole runs. **On the real model both ranges
+the parenthesised spread is across whole runs.
+
+The [figure in the README](../README.md#and-what-does-the-layer-itself-cost) plots
+one of those runs at 300 repeats rather than summarizing it, because whether the
+two distributions overlap is the actual question and a pair of medians cannot
+answer it. Regenerate it from a fresh run with:
+
+```bash
+python benchmarks/gpu.py --target apple --model smollm2 --dtype float16 \
+  --backend torch-compile inductor-placed inductor \
+  --repeats 300 --record-latencies --output artifacts/overhead-hist-smollm2.json
+python docs/figures/overhead.py
+```
+
+`--record-latencies` keeps every per-call measurement in the report instead of
+only the median and p95; it is off by default so that a 300-repeat arm does not
+put 300 floats into every JSON that gets quoted in a doc. That single run has the
+two medians 0.21 ms apart (2.6%), which is inside the run-to-run spread above —
+so read the figure as "these overlap", not as a measurement of 2.6%. **On the real model both ranges
 contain 1.0**: LM7's overhead there is smaller than what this machine can
 resolve, and individual runs put LM7 ahead of the direct call as often as a few
 percent behind.

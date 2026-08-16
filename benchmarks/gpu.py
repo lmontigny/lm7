@@ -88,6 +88,7 @@ def _direct_arm(
     warmup: int,
     repeats: int,
     compile_mode: str | None,
+    record_latencies: bool = False,
 ) -> Any:
     """Time an arm whose model and inputs are already on the device."""
     import lm7
@@ -136,6 +137,7 @@ def _direct_arm(
         warmup=warmup,
         repeats=repeats,
         batch_size=_batch_size(args, kwargs),
+        record_latencies=record_latencies,
     )
 
 
@@ -194,6 +196,15 @@ def main() -> None:
         ),
         help="Optional torch.compile mode for the Inductor backend.",
     )
+    parser.add_argument(
+        "--record-latencies",
+        action="store_true",
+        help=(
+            "keep every per-call measurement in the JSON, not only median and p95. "
+            "Off by default because a 300-repeat arm would otherwise put 300 floats "
+            "in a report that gets quoted; docs/figures/overhead.py needs them"
+        ),
+    )
     parser.add_argument("--prompt", default="The capital of France is")
     parser.add_argument("--output", type=Path, help="Write machine-readable results as JSON.")
     arguments = parser.parse_args()
@@ -221,6 +232,7 @@ def main() -> None:
                 warmup=arguments.warmup,
                 repeats=arguments.repeats,
                 compile_mode=arguments.compile_mode,
+                record_latencies=arguments.record_latencies,
             )
         else:
             result = lm7.benchmark(
@@ -231,6 +243,7 @@ def main() -> None:
                 backend=backend,
                 warmup=arguments.warmup,
                 repeats=arguments.repeats,
+                record_latencies=arguments.record_latencies,
                 options=(
                     {"compile_mode": arguments.compile_mode}
                     if backend == "inductor" and arguments.compile_mode

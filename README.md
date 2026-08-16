@@ -186,21 +186,31 @@ currently fails on:
 ### And what does the layer itself cost?
 
 The other direction: LM7 against the toolchain it orchestrates, both compiling
-through Inductor, on the same machine. A forward pass of SmolLM2-135M, batch 1,
-float16, over 7 runs:
+through Inductor, on the same machine.
+
+![Two overlapping histograms of per-call latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly and the same model through lm7.compile. The distributions sit on top of each other, with medians 7.86 ms and 8.07 ms.](docs/figures/lm7-overhead.png)
+
+That is 300 consecutive forward passes through each path, plotted rather than
+summarized, because "these two are the same" is a claim about *distributions* and
+a pair of bars cannot show overlap. The medians differ by 0.21 ms.
+
+Across 7 separate runs of the same comparison — a forward pass of SmolLM2-135M,
+batch 1, float16:
 
 | `torch.compile` called directly | LM7, inputs placed | LM7, default transfers |
 | --- | --- | --- |
 | 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
 
-Both ranges contain 1.0, so on a model doing real work the overhead is below
-what this machine can resolve — individual runs land on either side. The cost is
-**fixed per call, not proportional**: about 0.03 ms of dispatch plus about
-0.21 ms of input transfer, the latter only because `transfers="automatic"` is
-the default and opt-out. On a microbenchmark small enough for that to dominate —
-a 0.44 ms MLP — the same fixed cost reads as 1.44x, which is a fact about the
-microbenchmark. See [what LM7 costs over calling `torch.compile`
-yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself).
+Both ranges contain 1.0, so on a model doing real work the overhead is below what
+this machine can resolve — individual runs land on either side, and the figure
+above is one of them. The cost is **fixed per call, not proportional**: about
+0.03 ms of dispatch plus about 0.21 ms of input transfer, the latter only because
+`transfers="automatic"` is the default and opt-out. On a microbenchmark small
+enough for that to dominate — a 0.44 ms MLP — the same fixed cost reads as 1.44x,
+which is a fact about the microbenchmark rather than about the layer. See [what
+LM7 costs over calling `torch.compile`
+yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself)
+for the method, the caveats, and the arm that separates dispatch from transfer.
 
 ## Integrated targets
 
