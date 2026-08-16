@@ -23,15 +23,24 @@ output = compiled(example_input)
 > compiled-artifact compatibility are not stable. See
 > [limitations](docs/limitations.md) before depending on it.
 
-## Why not just `torch.compile`?
+## When should I use LM7?
 
-On CPU, NVIDIA, AMD, Intel GPU, and Apple Silicon, LM7 often *does* use
-`torch.compile` with TorchInductor underneath. LM7 is not another compiler and
-does not replace Inductor, TensorRT, OpenXLA, OpenVINO, or the other toolchains
-it integrates.
+Use LM7 when the same PyTorch model needs to survive a change of hardware
+without growing vendor-specific branches:
 
-`torch.compile(model)` is a good answer when you already know the hardware and
-compiler you want to use. LM7 is for the case where the hardware can change.
+- software distributed to users with different accelerators;
+- development on one platform and deployment on another;
+- servers, workstations, or laptops with more than one kind of accelerator;
+- evaluating multiple compiler/runtime stacks for the same PyTorch model;
+- accelerator vendors exposing their stack to existing PyTorch applications;
+- runtime detection of hardware and compiler availability;
+- artifact build, inspection, and loading through one interface.
+
+If one `torch.compile(model)` call already covers your machine and deployment
+needs, LM7 is probably extra machinery. On CPU, NVIDIA, AMD, Intel GPU, and
+Apple Silicon, LM7 often *does* use `torch.compile` with TorchInductor
+underneath. LM7 is not another compiler and does not replace Inductor,
+TensorRT, OpenXLA, OpenVINO, or the other toolchains it integrates.
 
 The missing layer is everything around the compiler call:
 
@@ -63,53 +72,8 @@ broader goal of hardware-portable ML with cross-hardware compiler/runtime
 stacks. LM7 makes a different bet: keep PyTorch, own no compiler, and
 orchestrate the mature compiler stacks that already exist.
 
-If one `torch.compile(model)` call already covers your machine and deployment
-needs, you probably do not need LM7. If your PyTorch application needs to
-**survive a change of hardware**, LM7 is intended to make that change boring.
-
 See [what LM7 replaces](docs/what-this-replaces.md) for the concrete per-vendor
 code and behavior it centralizes.
-
-## When should I use LM7?
-
-Use LM7 when the same PyTorch code needs to run on more than one hardware setup
-without growing vendor-specific branches:
-
-- software distributed to users with different accelerators;
-- development on one platform and deployment on another;
-- servers, workstations, or laptops with more than one kind of accelerator;
-- evaluating multiple compiler/runtime stacks for the same PyTorch model;
-- accelerator vendors exposing their stack to existing PyTorch applications;
-- runtime detection of hardware and compiler availability;
-- artifact build, inspection, and loading through one interface.
-
-If you only ever run one model on one known target, LM7 is probably extra
-machinery.
-
-## Personal AI hardware
-
-Personal AI hardware should not force every application to grow a separate
-runtime path for CUDA, Metal, Core ML, OpenVINO, QNN, ExecuTorch, or the next
-edge accelerator. LM7 is meant to keep the application at the PyTorch
-`nn.Module` boundary while the hardware target changes underneath.
-
-That makes LM7 a fit for private assistants, local RAG boxes, robotics
-controllers, AI mini PCs, phones, and dedicated edge appliances where offline
-operation, predictable cost, and data locality matter.
-
-- `target="auto"` runs on the best available local accelerator and falls back to
-  CPU when the device backend is unavailable.
-- Export backends produce artifacts for mobile, embedded, and appliance-style
-  deployment through ExecuTorch, QNN, Core ML, OpenVINO, ONNX Runtime, IREE, and
-  StableHLO.
-- `lm7 doctor`, `lm7 explain`, and artifact inspection make backend selection,
-  missing SDKs, and deployment requirements visible before shipping a device
-  image.
-- New personal AI chips can plug in below PyTorch through their compiler stack
-  instead of forcing application authors to rewrite model code.
-
-See [personal AI hardware](docs/personal-ai-hardware.md) for the device classes
-LM7 validates today and the edge stacks worth adding next.
 
 ## How it works
 
@@ -269,10 +233,9 @@ Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cu
 [AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
 [Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
 
-Edge and personal-device setup: [ExecuTorch](docs/executorch.md) ·
+Export and device setup: [ExecuTorch](docs/executorch.md) ·
 [Core ML](docs/coreml.md) · [Qualcomm QNN](docs/qnn.md) ·
-[Android device testing](docs/android-device-testing.md) ·
-[Personal AI hardware](docs/personal-ai-hardware.md).
+[Android device testing](docs/android-device-testing.md).
 
 ## Compiler and backend overview
 
@@ -373,8 +336,6 @@ Examples and reproducible benchmark harnesses live in
 Start with:
 
 - [Limitations](docs/limitations.md) — what LM7 does not do, per backend.
-- [Personal AI hardware](docs/personal-ai-hardware.md) — local AI devices,
-  current validation, and recommended next edge stacks.
 - [Tested hardware](docs/tested-hardware.md) — physical machines and exact gaps.
 - [Architecture](docs/architecture.md) — targets, backends, planner, artifacts.
 - [What LM7 replaces](docs/what-this-replaces.md) — per-vendor application glue.
