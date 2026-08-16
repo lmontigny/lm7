@@ -170,3 +170,4 @@ file stays a index rather than a second, drifting description.
 | [#179](https://github.com/lmontigny/lm7/pull/179) | Add the changelog lines for the AMD campaign |
 | [#188](https://github.com/lmontigny/lm7/pull/188) | Refresh AMD ROCm validation docs |
 | [#189](https://github.com/lmontigny/lm7/pull/189) | Clean up MI300X validation docs |
+| [#198](https://github.com/lmontigny/lm7/pull/198) | Add IR inspection guide |
