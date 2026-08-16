@@ -34,11 +34,18 @@ Bare names are weight-only. The `-dynamic` names quantize activations too.
 | --- | --- | --- | --- | --- |
 | `none` (default) | as loaded | — | all | FP32 / FP16 / BF16 |
 | `int8` | INT8 | BF16 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
+| `int8-dynamic` | INT8 | **INT8, quantized per call** | NVIDIA Ampere (`sm80`) or newer | BF16 accumulate |
 | `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
 | `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | BF16 | NVIDIA Ampere (`sm80`) or newer | BF16 |
 | `fp8-dynamic` | FP8 | **FP8, quantized per call**, one scale per tensor | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
 | `fp8-dynamic-rowwise` | FP8 | **FP8, quantized per call**, one scale per row | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
 | `nvfp4-dynamic` | NVFP4 | **NVFP4, quantized per call** | NVIDIA **Blackwell** (`sm100`, `sm120`) | BF16 accumulate |
+
+`int8-dynamic` fixes the operand mismatch in the weight-only path: it uses
+TorchAO's `Int8DynamicActivationInt8WeightConfig(version=2)` so the compiled
+matmul receives INT8 activations and INT8 weights. It remains outside the
+validated-model allowlist until its fidelity and generated kernels are measured
+on real hardware.
 
 The two FP8 dynamic rows differ only in scale granularity, and the difference is
 worth a mode of its own because it is not visible from the call site: TorchAO's
