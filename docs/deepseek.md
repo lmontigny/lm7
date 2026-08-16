@@ -1,7 +1,7 @@
 # DeepSeek coverage
 
 `deepseek-ai/deepseek-coder-1.3b-instruct` is the fifth causal LM in LM7's
-[tested model coverage](../README.md#tested-model-coverage), and the one taken
+[tested model coverage](../README.md#validated-models), and the one taken
 through the widest spread of backends rather than through Inductor alone. It
 needed no source changes: DeepSeek ships this checkpoint as a
 `LlamaForCausalLM`, so `AutoModelForCausalLM.from_pretrained` loads it with no

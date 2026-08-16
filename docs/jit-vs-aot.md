@@ -202,6 +202,6 @@ Two caveats either way:
 
 ## Related
 
-- [Backends table](../README.md#backends) — which backends are JIT and which are AOT
+- [Backends table](../README.md#compiler-and-backend-overview) — which backends are JIT and which are AOT
 - [What LM7 replaces](what-this-replaces.md) — the lazy-compilation traps LM7 handles
 - [Architecture](architecture.md) — the compile flow end to end

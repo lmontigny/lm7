@@ -190,7 +190,7 @@ Same M3 Pro, float16, batch 1. Every arm compiles through Inductor with
 Ratios are computed within each process, where the arms run seconds apart, and
 the parenthesised spread is across whole runs.
 
-The [figure in the README](../README.md#and-what-does-the-layer-itself-cost)
+The [figure in the README](../README.md#what-the-layer-costs)
 draws two of these arms as bars — `torch-compile` and `inductor-placed` — each
 carrying the range across the same runs. That range is the part that matters: it
 is wider than the distance between the bars, which is what "below the noise
@@ -250,7 +250,7 @@ does and what any code already holding device tensors would do.
 
 ## Hugging Face models
 
-The [Hugging Face causal-LM path](../README.md#4-run-a-hugging-face-model) runs on
+The [Hugging Face causal-LM path](../README.md#common-workflows) runs on
 Apple Silicon through `target="auto"` or `target="apple"`:
 
 ```bash
