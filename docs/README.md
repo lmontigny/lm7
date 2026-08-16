@@ -61,6 +61,8 @@ This index covers everything else.
 - [Artifact inspection](artifact-inspection.md) -- verify payload integrity,
   portability, delegate coverage, and deployment requirements without loading
   an optional runtime.
+- [IR inspection](ir-inspection.md) -- retain and read exported graphs,
+  Inductor IR, generated host code, and target-specific device code.
 - [AOTInductor artifact compatibility](aot-artifact-compatibility.md) -- what a
   packaged artifact costs to reload in a process that never compiled it, what it
   refuses to load on, and which PyTorch differences it survives.

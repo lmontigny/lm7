@@ -315,7 +315,7 @@ for path in artifact.debug_files():
 
 Use this when two backends behave differently and you need to see the exported
 graph, generated code, or vendor payload. See
-[compiler IR and generated code](docs/development.md#compiler-ir-and-generated-code).
+[IR inspection](docs/ir-inspection.md).
 
 **Quantization**
 
