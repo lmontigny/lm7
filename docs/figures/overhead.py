@@ -63,20 +63,23 @@ SANS = (
 )
 MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
-WIDTH, HEIGHT = 900, 296
-PLOT = {"x": 268, "y": 92, "w": 470, "h": 132}
+WIDTH, HEIGHT = 900, 258
+PLOT = {"x": 268, "y": 92, "w": 470, "h": 94}
 BAR_H = 26
 X_MAX = 10.0  # milliseconds; the axis starts at zero, because a bar chart must
 
 # The arms, in the order they are drawn, with the label each gets on the left.
-# The third label names what it does rather than the setting that does it:
-# `transfers="automatic"` is LM7's default and copies the caller's inputs to the
-# device on every call, and "+ transfers" read as jargon to the first person who
-# saw this figure. What the setting is called belongs in the prose around it.
+#
+# Two bars, not three. The `inductor` arm -- LM7's default, which copies the
+# caller's inputs to the device on every call -- is deliberately not drawn here:
+# it is a third bar about a setting, and the figure is answering a question about
+# a layer. It costs about 0.21 ms more, and because that is the arm a reader gets
+# without passing anything, the README says so in prose beside the figure and
+# keeps all three in its table. Dropping it from the picture is only honest while
+# that stays true.
 ARMS = {
     "torch-compile": ("torch.compile", REFERENCE),
     "inductor-placed": ("lm7.compile", LM7),
-    "inductor": ("lm7.compile, copying inputs", LM7),
 }
 
 
@@ -127,8 +130,8 @@ def render(runs: dict[str, list[float]], context: dict[str, Any]) -> str:
         f'viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="Bar chart of median '
         f"forward-pass latency: torch.compile called directly at {baseline:.2f} "
         f"milliseconds, and the same model through lm7.compile at "
-        f"{medians['inductor-placed']:.2f} and {medians['inductor']:.2f} milliseconds, "
-        f'with the spread across runs wider than the gaps between them">'
+        f"{medians['inductor-placed']:.2f} milliseconds, with the spread across runs "
+        f'wider than the gap between them">'
     )
     surface = (
         f'<rect x="16" y="16" width="{WIDTH - 32}" height="{HEIGHT - 32}" rx="10" '

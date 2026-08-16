@@ -191,10 +191,13 @@ Ratios are computed within each process, where the arms run seconds apart, and
 the parenthesised spread is across whole runs.
 
 The [figure in the README](../README.md#and-what-does-the-layer-itself-cost)
-draws these three arms as bars, each carrying the range across the same runs.
-That range is the part that matters: it is wider than the distance between the
-bars, which is what "below the noise floor" looks like when it is drawn rather
-than asserted. Regenerate it from fresh runs with:
+draws two of these arms as bars — `torch-compile` and `inductor-placed` — each
+carrying the range across the same runs. That range is the part that matters: it
+is wider than the distance between the bars, which is what "below the noise
+floor" looks like when it is drawn rather than asserted. The `inductor` arm is
+left off the figure and kept in the table above and in the README's prose,
+because it differs by a setting rather than by whether LM7 is in the path.
+Regenerate it from fresh runs with:
 
 ```bash
 for run in 1 2 3 4 5 6 7; do
