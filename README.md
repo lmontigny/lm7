@@ -124,9 +124,9 @@ workloads, and known gaps are recorded in
 
 Speed is evidence that the layer costs nothing, not the reason to reach for LM7:
 a dedicated single-target engine will beat it on that engine's own target. The
-first two sections were measured on an Apple M3 Pro (14-core GPU, macOS 26.5.2,
-torch 2.13.0, transformers 5.15.0, `apple:metal`, float16); the third on a
-rented NVIDIA Blackwell card, named in its own caption.
+first two sections below were measured on an Apple M3 Pro (14-core GPU, macOS
+26.5.2, torch 2.13.0, transformers 5.15.0, `apple:metal`, float16); the third on
+a rented NVIDIA RTX PRO 6000 Blackwell.
 
 ### What compiling through LM7 buys
 
@@ -176,21 +176,27 @@ Transformers 5.14.1 under WSL2, with 100 timed calls per arm in each run.
 
 ![Bar chart of speedup against a BF16 baseline for five quantization modes on Llama-3.1-8B. Dynamic NVFP4 is fastest at 1.86x, rowwise dynamic FP8 reaches 1.36x and per-tensor dynamic FP8 1.31x, while FP8 weight-only is slower than BF16 at 0.82x.](docs/figures/blackwell-quantization-speedup.png)
 
-**Rowwise dynamic FP8 is the only mode here that is both faster than BF16 and
-keeps every top-1 token** — 1.36x, and 1.54x smaller, on a rented RTX PRO 6000
-Blackwell.
+Quantizing Llama-3.1-8B to FP8 with per-row activation scaling **runs it 1.36x
+faster and stores it 1.54x smaller**, and it still predicts the same next token
+as the unquantized BF16 model on all four accuracy-check prompts:
 
-**The bars measure speed and nothing else**, and the longest one is not
-admitted. NVFP4 dynamic is the fastest thing measured, at 1.86x, and loses half
-its top-1 tokens against the BF16 baseline — a fast wrong answer, and the reason
-this figure is not the whole decision. FP8 weight-only goes the other way and
-lands at 0.82x: **compressing weights buys footprint, not arithmetic**, and only
-the dynamic modes reach the narrow kernels that make quantization faster rather
-than smaller.
+```bash
+lm7 model run hf://unsloth/Llama-3.1-8B-Instruct \
+  --target nvidia --quantize fp8-dynamic-rowwise
+```
 
-This is one model at one shape on one card, and the modes that win here are
-opt-in per (model, mode) pair rather than defaults. [Method, the storage and
-fidelity columns this figure leaves out, and what the gate does and does not
+The other two bars are why LM7 gates this per model and per mode instead of
+picking for you. **NVFP4 dynamic is faster still, at 1.86x, and LM7 refuses
+it**: it changes the predicted token on half those prompts, which makes it a
+fast wrong answer rather than a win. **FP8 weight-only is slower than not quantizing
+at all**, at 0.82x — storing weights in fewer bits saves memory, but the
+multiply still runs in BF16, so no arithmetic is saved to pay for unpacking
+them. Only the modes that narrow the activations too reach the hardware's
+low-precision math.
+
+One model, one shape (batch 8 × sequence 128), one card — and the answer moves
+with all three, which is why nothing here is on by default. [Full table, method,
+and what the accuracy check does and does not
 prove](docs/quantization.md#dynamic-modes-are-the-first-to-beat-bf16-on-this-model).
 
 ## Integrated targets
