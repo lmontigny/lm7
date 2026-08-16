@@ -35,12 +35,6 @@ class BenchmarkResult:
     repeats: int
     batch_size: int
     environment: Mapping[str, Any]
-    # Every per-call measurement the median and p95 above were computed from,
-    # and empty unless `record_latencies` asked for it -- a 300-repeat arm would
-    # otherwise put 300 floats in every report that is quoted in a doc. Recorded
-    # at all because a summary cannot show two arms' distributions *overlapping*,
-    # which is the only honest way to display an overhead too small to resolve.
-    latencies_ms: tuple[float, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,7 +50,6 @@ def benchmark(
     warmup: int = 5,
     repeats: int = 30,
     options: Mapping[str, Any] | None = None,
-    record_latencies: bool = False,
 ) -> BenchmarkResult:
     """Measure first-call cost and steady-state inference latency through LM7."""
     kwargs = dict(kwargs or {})
@@ -81,7 +74,6 @@ def benchmark(
         warmup=warmup,
         repeats=repeats,
         batch_size=_batch_size((args, kwargs)),
-        record_latencies=record_latencies,
     )
 
     assert wrapped.target is not None
@@ -105,7 +97,6 @@ def benchmark_callable(
     warmup: int = 5,
     repeats: int = 30,
     batch_size: int = 1,
-    record_latencies: bool = False,
 ) -> BenchmarkResult:
     """Time an arbitrary callable the way :func:`benchmark` times an LM7 one.
 
@@ -161,7 +152,6 @@ def benchmark_callable(
         repeats=repeats,
         batch_size=batch_size,
         environment=_environment(target, backend),
-        latencies_ms=tuple(latencies_ms) if record_latencies else (),
     )
 
 

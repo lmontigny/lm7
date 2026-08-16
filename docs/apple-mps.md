@@ -190,23 +190,24 @@ Same M3 Pro, float16, batch 1. Every arm compiles through Inductor with
 Ratios are computed within each process, where the arms run seconds apart, and
 the parenthesised spread is across whole runs.
 
-The [figure in the README](../README.md#and-what-does-the-layer-itself-cost) plots
-one of those runs at 300 repeats rather than summarizing it, because whether the
-two distributions overlap is the actual question and a pair of medians cannot
-answer it. Regenerate it from a fresh run with:
+The [figure in the README](../README.md#and-what-does-the-layer-itself-cost)
+draws these three arms as bars, each carrying the range across the same runs.
+That range is the part that matters: it is wider than the distance between the
+bars, which is what "below the noise floor" looks like when it is drawn rather
+than asserted. Regenerate it from fresh runs with:
 
 ```bash
-python benchmarks/gpu.py --target apple --model smollm2 --dtype float16 \
-  --backend torch-compile inductor-placed inductor \
-  --repeats 300 --record-latencies --output artifacts/overhead-hist-smollm2.json
+for run in 1 2 3 4 5 6 7; do
+  python benchmarks/gpu.py --target apple --model smollm2 --dtype float16 \
+    --backend torch-compile inductor-placed inductor --repeats 100 \
+    --output artifacts/overhead-smollm2-run$run.json
+done
 python docs/figures/overhead.py
 ```
 
-`--record-latencies` keeps every per-call measurement in the report instead of
-only the median and p95; it is off by default so that a 300-repeat arm does not
-put 300 floats into every JSON that gets quoted in a doc. That single run has the
-two medians 0.21 ms apart (2.6%), which is inside the run-to-run spread above —
-so read the figure as "these overlap", not as a measurement of 2.6%. **On the real model both ranges
+`docs/figures/overhead.py` reads every report matching that name and skips any
+run that does not carry all three arms, so each bar rests on exactly the same set
+of runs. **On the real model both ranges
 contain 1.0**: LM7's overhead there is smaller than what this machine can
 resolve, and individual runs put LM7 ahead of the direct call as often as a few
 percent behind.

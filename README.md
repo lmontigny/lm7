@@ -188,22 +188,19 @@ currently fails on:
 The other direction: LM7 against the toolchain it orchestrates, both compiling
 through Inductor, on the same machine.
 
-![Two overlapping histograms of per-call latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly and the same model through lm7.compile. The distributions sit on top of each other, with medians 7.86 ms and 8.07 ms.](docs/figures/lm7-overhead.png)
+![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms, the same model through lm7.compile at 7.91 ms, and through lm7.compile with its default per-call input transfer at 8.30 ms. The range across runs on each bar is wider than the gaps between the bars.](docs/figures/lm7-overhead.png)
 
-That is 300 consecutive forward passes through each path, plotted rather than
-summarized, because "these two are the same" is a claim about *distributions* and
-a pair of bars cannot show overlap. The medians differ by 0.21 ms.
-
-Across 7 separate runs of the same comparison — a forward pass of SmolLM2-135M,
-batch 1, float16:
+The line through each bar is the spread across 7 runs, and it is wider than the
+distance between the bars — which is the whole finding. The same numbers, with
+the ratios computed within each process, where the arms run seconds apart:
 
 | `torch.compile` called directly | LM7, inputs placed | LM7, default transfers |
 | --- | --- | --- |
 | 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
 
 Both ranges contain 1.0, so on a model doing real work the overhead is below what
-this machine can resolve — individual runs land on either side, and the figure
-above is one of them. The cost is **fixed per call, not proportional**: about
+this machine can resolve — individual runs land on either side. The cost is
+**fixed per call, not proportional**: about
 0.03 ms of dispatch plus about 0.21 ms of input transfer, the latter only because
 `transfers="automatic"` is the default and opt-out. On a microbenchmark small
 enough for that to dominate — a 0.44 ms MLP — the same fixed cost reads as 1.44x,
