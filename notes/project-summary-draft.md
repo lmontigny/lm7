@@ -121,10 +121,11 @@ fastest way to be believed about everything else.
 >
 > Where it honestly stands: early, inference-only, and model coverage is not
 > stable. Hardware it has actually run on is RTX 4070 SUPER, H100, RTX PRO 6000
-> Blackwell, AMD EPYC 7B13, Apple M3 Pro/M4/M4 Pro, TPU v6e (one chip), and a
-> Snapdragon 8 Elite. AMD ROCm GPUs, Intel XPU, the Intel NPU, Tenstorrent and
-> AWS Trainium have adapters unit-tested against mocks that have never touched
-> real hardware — those say "implemented", not "validated". There is no serving
+> Blackwell, AMD EPYC 7B13, AMD Instinct MI300X, Apple M3 Pro/M4/M4 Pro, TPU v6e
+> (one chip), and a Snapdragon 8 Elite. AMD ROCm has one rented MI300X validation
+> point, not broad AMD coverage. Intel XPU, the Intel NPU, Tenstorrent and AWS
+> Trainium have adapters unit-tested against mocks that have never touched real
+> hardware — those say "implemented", not "validated". There is no serving
 > benchmark in the repo, so please don't read a latency claim into the server.
 > `docs/limitations.md` lists everything unproven and is maintained as carefully
 > as the README.
@@ -142,8 +143,8 @@ fastest way to be believed about everything else.
 | phone deployment, no Python on the device | [docs/android-device-testing.md](../docs/android-device-testing.md), [docs/executorch.md](../docs/executorch.md) |
 | multi-target bundles | [docs/jit-vs-aot.md](../docs/jit-vs-aot.md) |
 | 13.72 → 4.45 → 1.77 ms/token, 7.75x, 1.86x at 8192/batch 8 | [docs/kv-cache-decode.md](../docs/kv-cache-decode.md#at-one-shape) |
-| hardware actually run on | [docs/tested-hardware.md](../docs/tested-hardware.md) |
-| ROCm/XPU/NPU/Tenstorrent/Trainium are mock-tested only | [docs/limitations.md](../docs/limitations.md) |
+| hardware actually run on | [docs/tested-hardware.md](../docs/tested-hardware.md), [docs/amd-mi300x.md](../docs/amd-mi300x.md) |
+| XPU/NPU/Tenstorrent/Trainium are mock-tested only; ROCm has one MI300X validation point | [docs/limitations.md](../docs/limitations.md), [docs/amd-mi300x.md](../docs/amd-mi300x.md) |
 | the server is single-user and unbenchmarked | [docs/serving.md](../docs/serving.md), [limitations](../docs/limitations.md#serving) |
 | quantization modes and their hardware gates | [docs/quantization.md](../docs/quantization.md) |
 
