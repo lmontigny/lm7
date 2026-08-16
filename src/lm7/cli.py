@@ -544,6 +544,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(
             "none",
             "int8",
+            "int8-dynamic",
             "fp8",
             "nvfp4",
             "fp8-dynamic",
@@ -566,12 +567,14 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(
             "none",
             "int8",
+            "int8-dynamic",
             "fp8",
             "nvfp4",
             "fp8-dynamic",
             "fp8-dynamic-rowwise",
             "nvfp4-dynamic",
             "int8-weight-only",
+            "int8-dynamic-activation-int8-weight",
             "fp8-weight-only",
             "nvfp4-weight-only",
         ),
