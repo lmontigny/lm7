@@ -8,7 +8,7 @@ of its kind, unless its row says otherwise.
 
 | Target | Hardware | Exercised |
 | --- | --- | --- |
-| `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. See [TensorRT](nvidia-tensorrt-evaluation.md). |
+| `nvidia:sm89` | RTX 4070 SUPER (Ada, 12 GiB) | Primary dev GPU — Inductor, TensorRT, ONNX Runtime, IREE Vulkan, StableHLO, quantization. Also the CUDA half of the IR/generated-code comparison against a CPU export from the same box, which is where AOTInductor was found to package CUBIN but not PTX. See [TensorRT](nvidia-tensorrt-evaluation.md) and [IR inspection](ir-inspection.md#the-same-run-on-nvidia). |
 | `nvidia:sm90` | H100 80GB HBM3 (Hopper), single card, cloud-rented | The first datacenter part, and the first NVIDIA GPU here that is neither a gaming nor a workstation card. Detection and backend selection unmodified; Inductor measured against eager on two causal LMs across batch 1–4096, plus vision/encoder/hand-written workloads. Peak VRAM never exceeds 4.8% of the card, and the Inductor speedup inverts past batch 1024. Also carries the FP8 per-row activation quantization measurements. See [NVIDIA H100](nvidia-h100.md) and [quantization](quantization.md#fp8-granularity-on-h100). |
 | `nvidia:sm120` | RTX PRO 6000 Blackwell Server Edition (96 GiB) | All three NVIDIA compile backends, unmodified, plus a 106-cell TensorRT sweep across four model families, precisions, batch sizes and dynamic shapes. See [NVIDIA Blackwell](nvidia-blackwell.md) and [TensorRT validation](tensorrt-validation.md). |
 | `cpu` (Intel) | Intel Coffee Lake (x86-64, AVX2) | Inductor, OpenVINO, StableHLO/PJRT, quantization, and `lm7 model serve`. |

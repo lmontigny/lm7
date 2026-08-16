@@ -340,9 +340,10 @@ for path in artifact.debug_files():
 
 LM7 requests exported graphs, FX graphs, pre/post-fusion Inductor IR, generated
 source, and lower-level PTX, assembly, CUBIN, or HSACO when the selected
-toolchain emits them. Debug output can reveal model structure and generated
-code; treat it as sensitive development data. See
-[IR inspection](ir-inspection.md) for a layer-by-layer example.
+toolchain packages them — AOTInductor on CUDA packages CUBIN but not PTX. Debug
+output can reveal model structure and generated code; treat it as sensitive
+development data. See [IR inspection](ir-inspection.md) for a layer-by-layer
+example and a measured CPU/NVIDIA comparison.
 
 For NVIDIA JIT compilation:
 

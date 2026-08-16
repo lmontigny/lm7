@@ -62,7 +62,8 @@ This index covers everything else.
   portability, delegate coverage, and deployment requirements without loading
   an optional runtime.
 - [IR inspection](ir-inspection.md) -- retain and read exported graphs,
-  Inductor IR, generated host code, and target-specific device code.
+  Inductor IR, generated host code, and target-specific device code, with a
+  measured CPU/NVIDIA `sm89` comparison of where the two stacks diverge.
 - [AOTInductor artifact compatibility](aot-artifact-compatibility.md) -- what a
   packaged artifact costs to reload in a process that never compiled it, what it
   refuses to load on, and which PyTorch differences it survives.
