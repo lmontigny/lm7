@@ -713,11 +713,27 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Inductor preset for both graphs, for example reduce-overhead (default: none)",
     )
+    # The prompt pass is left eager by default here, and compiled by default in
+    # `lm7.compile_generation`. A server sees a new prompt length on nearly every
+    # request -- a chat client resends its transcript, so every turn is a new
+    # shape and a fresh compile -- which is the workload a per-shape compile is
+    # worst for. See ServeConfig for the measurement.
+    serve_parser.add_argument(
+        "--compile-prefill",
+        dest="compile_prefill",
+        action="store_true",
+        default=False,
+        help=(
+            "compile the prompt pass as well as the decode step. Worth it only when "
+            "prompt lengths repeat: it is compiled once per distinct length "
+            "(default: eager prefill, compiled decode)"
+        ),
+    )
     serve_parser.add_argument(
         "--no-compile-prefill",
         dest="compile_prefill",
         action="store_false",
-        help="leave the prompt pass in eager, so a new prompt length does not recompile",
+        help="the default since the prefill compile became opt-in; kept so older scripts parse",
     )
     serve_parser.add_argument(
         "--dry-run",

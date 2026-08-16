@@ -188,7 +188,16 @@ class MetricsResponse(BaseModel):
     # False until the first request has compiled the graphs, which is why that
     # request is slow. A client can say "compiling" instead of looking hung.
     warm: bool
-    # How many distinct prompt lengths the prefill graph has compiled for.
+    # Whether the prompt pass is compiled at all. Off by default, because it is
+    # compiled once per distinct prompt length and a chat client supplies a new
+    # one every turn; `--compile-prefill` turns it on. It is reported because it
+    # is what disambiguates the next field: `prefill_lengths` counts distinct
+    # prompt lengths either way, and only when this is true is each of them a
+    # compile that a request waited for.
+    compile_prefill: bool = False
+    # How many distinct prompt lengths the prefill graph has run at -- one
+    # compile each when `compile_prefill`, and merely a count of shapes seen
+    # when it is off.
     prefill_lengths: int
     # Compiles triggered *after* warmup. Must stay 0: anything else means a
     # token caused a recompile, which is the regression the prefill/decode

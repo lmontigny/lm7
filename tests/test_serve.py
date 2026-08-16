@@ -953,6 +953,40 @@ def test_the_cache_default_is_reported_by_the_parser_not_only_the_dataclass() ->
     assert args.max_model_len == ServeConfig(model="x").max_model_len == 4096
 
 
+def test_the_prompt_pass_is_left_eager_unless_asked_for() -> None:
+    """The one default that disagrees with ``compile_generation``'s, on purpose.
+
+    A compiled prefill is compiled per prompt length, and a chat client resends
+    its transcript, so a server sees an unseen length on nearly every turn --
+    ~80 s of Inductor each time on an RTX 4070 SUPER against a warm 0.13-0.45 s.
+    The library keeps the fixed-shape default; the server does not.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(["model", "serve", "hf://owner/model"])
+    assert args.compile_prefill is ServeConfig(model="x").compile_prefill is False
+
+    opted_in = parser.parse_args(["model", "serve", "hf://owner/model", "--compile-prefill"])
+    assert opted_in.compile_prefill is True
+
+
+def test_the_old_spelling_of_the_prefill_default_still_parses() -> None:
+    # `--no-compile-prefill` was how this was reached when compiling was the
+    # default. It is a no-op now, but a script that passes it asked for exactly
+    # what it gets, so it parses rather than erroring.
+    parser = _build_parser()
+    args = parser.parse_args(["model", "serve", "hf://owner/model", "--no-compile-prefill"])
+    assert args.compile_prefill is False
+
+
+def test_the_plan_says_whether_the_prompt_pass_is_compiled() -> None:
+    # --dry-run is the cheap place to notice that an unseen prompt length will
+    # cost a compile rather than milliseconds.
+    eager = serve_plan(ServeConfig(model="hf://owner/model", target="cpu"))
+    compiled = serve_plan(ServeConfig(model="hf://owner/model", target="cpu", compile_prefill=True))
+    assert eager["compile_prefill"] is False
+    assert compiled["compile_prefill"] is True
+
+
 def test_cors_origins_are_split_and_stripped() -> None:
     assert _cors_origins("*") == ("*",)
     assert _cors_origins("http://localhost:3000, http://localhost:8080") == (
@@ -1286,6 +1320,19 @@ def test_the_metrics_snapshot_carries_all_of_it() -> None:
     snapshot = _engine_with(WeightedRunner([1])).metrics_snapshot()
     for field in ("dtype", "weights_bytes", "memory_kind", "memory_bytes"):
         assert field in snapshot
+
+
+def test_metrics_say_whether_prefill_lengths_are_compiles_or_only_shapes() -> None:
+    # `prefill_lengths` climbs with distinct prompt lengths whether or not the
+    # prompt pass is compiled, so on its own it does not say whether anyone
+    # waited for a compile. This field is what separates the two, and the chat
+    # page reads it to decide whether an unseen length is about to stall.
+    snapshot = _engine_with(WeightedRunner([1])).metrics_snapshot()
+    assert snapshot["compile_prefill"] is False
+
+    from lm7.serve.ui import PAGE
+
+    assert "compile_prefill" in PAGE
 
 
 def test_the_page_labels_device_memory_apart_from_process_memory() -> None:

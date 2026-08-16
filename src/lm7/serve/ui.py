@@ -342,10 +342,22 @@ form.addEventListener("submit", async (event) => {
   bubble("user", content);
 
   setBusy(true);
-  // A cold server is about to compile; a warm one is only running prefill.
-  // Saying which is the difference between "slow" and "hung".
+  // A cold server is about to compile; a warm one is usually only running
+  // prefill. Saying which is the difference between "slow" and "hung" -- and
+  // which graphs are involved depends on --compile-prefill, because a warm
+  // server that compiles its prompt pass stalls again on every unseen prompt
+  // length, which for a chat transcript is every single turn.
   const cold = !latest || !latest.warm;
-  setStatus(cold ? "compiling prefill and decode graphs…" : "prefill…", "busy");
+  const compiledPrefill = Boolean(latest && latest.compile_prefill);
+  let waiting;
+  if (cold) {
+    waiting = compiledPrefill
+      ? "compiling prefill and decode graphs…"
+      : "compiling the decode graph…";
+  } else {
+    waiting = compiledPrefill ? "prefill — an unseen length compiles again…" : "prefill…";
+  }
+  setStatus(waiting, "busy");
 
   const before = latest;
   const target = bubble("assistant", "");
@@ -398,7 +410,13 @@ async function summarize(before) {
   if (decodeSeconds > 0 && tokens > 1) {
     parts.push(`${((tokens - 1) / decodeSeconds).toFixed(1)} tok/s`);
   }
-  parts.push(`${latest.prefill_lengths} prefill graph(s)`);
+  // The count climbs with distinct prompt lengths either way, but it is only a
+  // count of *compiles* -- of stalls someone waited through -- when the prompt
+  // pass is compiled. Left eager, reporting the number would invite reading a
+  // cost that was never paid.
+  parts.push(
+    latest.compile_prefill ? `${latest.prefill_lengths} prefill graph(s)` : "eager prefill"
+  );
   parts.push(latest.steady_frames === 0 ? "0 decode recompiles" : "RECOMPILED");
   setStatus(parts.join(" · "), latest.steady_frames === 0 ? "idle" : "warn");
 }

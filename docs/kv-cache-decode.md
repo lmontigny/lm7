@@ -185,6 +185,13 @@ at 8192×8, matching the eager arm's 392.0) with the compiled decode step
 prefill alone** — which is the boundary Transformers' own compiled generation
 draws, now with a number attached rather than a convention.
 
+`lm7.compile_generation` nonetheless still defaults to `compile_prefill=True`,
+because its caller is usually a harness sending one prompt shape repeatedly,
+which is the case the table above says compiling wins. [`lm7 model
+serve`](serving.md#why-the-prompt-pass-is-eager-here) defaults to `False`, because
+its caller is usually a chat client that resends a transcript and so supplies a
+prompt length the graph has never seen on nearly every turn.
+
 ### Cold start
 
 What a serving process pays before its first token, measured after CUDA
@@ -439,7 +446,9 @@ equal `model.generate`'s for both an unpadded and a left-padded batch, under
 - **Prefill is compiled per prompt length.** That is the point of the split — the
   decode graph is insulated from it — but a workload with many distinct prompt
   lengths pays a compile for each. `compile_prefill=False` leaves the prompt pass
-  eager, which is the boundary Transformers' own compiled generation draws.
+  eager, which is the boundary Transformers' own compiled generation draws, and
+  which is what [`lm7 model serve`](serving.md#why-the-prompt-pass-is-eager-here)
+  defaults to — a server is the workload that pays this most.
 - **`backend` accepts `eager` and `inductor` only.** Not an oversight: a stateful
   decode loop is a different problem from a forward pass, and
   [the TensorRT measurement](huggingface-generation.md#why-tensorrt-is-not-offered-here)
