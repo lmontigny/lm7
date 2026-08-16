@@ -120,13 +120,16 @@ part** — as validated as the TPU row and no more. Exact parts, backends,
 workloads, and known gaps are recorded in
 [tested hardware](docs/tested-hardware.md).
 
-## What compiling through LM7 buys
+## Benchmarks
 
-Speed is evidence that the orchestration layer costs you nothing, not the reason
-to reach for LM7 — a dedicated single-target engine will beat it on that
-engine's own target. Generating the same 64 tokens on an Apple M3 Pro (14-core
-GPU, macOS 26.5.2, torch 2.13.0, transformers 5.15.0, `apple:metal`, float16,
-median of 3):
+Both measured on an Apple M3 Pro (14-core GPU, macOS 26.5.2, torch 2.13.0,
+transformers 5.15.0, `apple:metal`, float16). Speed is evidence that the layer
+costs nothing, not the reason to reach for LM7: a dedicated single-target engine
+will beat it on that engine's own target.
+
+### What compiling through LM7 buys
+
+Generating the same 64 tokens, median of 3:
 
 | | SmolLM2-135M | Llama-3.2-1B |
 | --- | --- | --- |
@@ -134,51 +137,32 @@ median of 3):
 | `+ StaticCache + CompileConfig` — Transformers' compiled generation | 18.21 ms/token (1.04x) | 29.51 ms/token (0.91x) |
 | `lm7.compile_generation()` | **7.08 ms/token (2.69x)** | **21.90 ms/token (1.23x)** |
 
-The middle row is the interesting one. Transformers gates compiled generation on
-a hardcoded device allowlist — `cuda`, `xpu`, `neuron`, `tpu` — so on Apple
+The middle row is the interesting one: Transformers gates compiled generation on
+a hardcoded device allowlist (`cuda`, `xpu`, `neuron`, `tpu`), so on Apple
 Silicon it logs "unable to meet the criteria for compilation" and decodes
-eagerly. The GPU was capable the whole time: forcing the private escape hatch
-open reaches 1.87x on SmolLM2. That is an orchestration gap rather than a kernel
-one, which is the kind LM7 exists to close.
+eagerly. Forcing its private escape hatch open reaches 1.87x — the GPU was
+capable all along. That is an orchestration gap rather than a kernel one.
 
-**The speedup does not transfer upward.** 2.69x is what a launch-bound 135M
-model gets; at 1B, where GEMM time dominates, it is 1.23x. Every arm produced
-byte-identical text. Method, the full four-arm table, and the model this path
-currently fails on:
-[Apple Silicon](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
+**The speedup does not transfer upward**: 2.69x is what a launch-bound 135M model
+gets, and 1.23x is the same measurement at 1B, where GEMM time dominates. Every
+arm produced byte-identical text.
+[Method and full table](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
-### And what does the layer itself cost?
-
-The other direction: **LM7 adds no measurable time to the compiler it calls.**
-All three bars below compile the same model through TorchInductor; what differs
-is how much of LM7 is in the call path.
+### What the layer costs
 
 ![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms and the same model through lm7.compile at 7.91 ms, with the range across runs on each bar wider than the gap between the bars.](docs/figures/lm7-overhead.png)
 
-Each bar is the median of 7 runs, and the line through it is the spread across
-those runs. **That spread is wider than the gap between the bars**, which is the
-whole finding: the difference the layer makes is smaller than the difference
-between two runs of the same thing.
+Both bars compile the same model through TorchInductor; only one has LM7 in the
+call path. Each is the median of 7 runs, and the line through it is the spread
+across those runs — **wider than the gap between the bars**, which is the whole
+finding.
 
-Both bars hand their inputs to the compiled model already on the device. LM7's
-default does one more thing — `transfers="automatic"` copies your inputs to the
-device on every call, so that a caller holding CPU tensors does not have to think
-about it — and that costs about **0.21 ms** more per call. Pass
-`transfers="explicit"` and place inputs yourself to get the bar above. All three,
-with each ratio computed inside its own process where the arms run seconds apart:
-
-| `torch.compile` called directly | LM7, inputs placed | LM7, copying inputs |
-| --- | --- | --- |
-| 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
-
-Every range contains 1.0, so on a model doing real work the overhead is below
-what this machine can resolve — individual runs land on either side. The cost is
-**fixed per call, not proportional**: about 0.03 ms of dispatch plus that 0.21 ms
-of copying. On a microbenchmark small enough for the fixed part to dominate — a
-0.44 ms MLP — it reads as 1.44x, which is a fact about the microbenchmark rather
-than about the layer. See [what LM7 costs over calling `torch.compile`
-yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself)
-for the method and the caveats.
+LM7's default also copies your inputs to the device on every call
+(`transfers="automatic"`), which costs about 0.21 ms more; the bar above is
+`transfers="explicit"` with inputs already placed. That cost is fixed per call
+rather than proportional, so on a 0.44 ms MLP it reads as 1.44x — a fact about
+the microbenchmark. [Method and
+caveats](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself).
 
 ## Integrated targets
 
