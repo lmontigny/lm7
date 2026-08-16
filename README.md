@@ -349,6 +349,12 @@ lm7 model run hf://HuggingFaceTB/SmolLM2-135M-Instruct \
   --target cpu --quantize int8
 ```
 
+![Horizontal bar chart comparing BF16 and quantized Llama-3.1-8B throughput on RTX PRO 6000 Blackwell. Dynamic FP8 passes the fidelity gate and reaches 1.31-1.36x the BF16 throughput.](docs/figures/blackwell-quantization.png)
+
+Dynamic FP8 is the measured win: 1.31-1.36x BF16 throughput while preserving
+all four top-1 outputs. Faster NVFP4 dynamic is rejected by the fidelity gate;
+weight-only INT8 is excluded because its nightly-stack path regressed.
+
 See [quantization](docs/quantization.md) for supported modes, measurements, and
 accuracy checks.
 

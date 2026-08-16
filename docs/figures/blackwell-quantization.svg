@@ -1,62 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="540" viewBox="0 0 1000 540">
-<rect width="1000" height="540" fill="#f7f9fc"/>
-<rect x="16" y="16" width="968" height="508" rx="10" fill="#fff" stroke="#dde4ec"/>
-<text x="42" y="50" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1a2532" text-anchor="start">Validated quantization on Blackwell</text>
-<text x="42" y="72" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#68788a" text-anchor="start">Llama-3.1-8B · BF16 baseline · batch 8 × sequence 128 · TorchInductor</text>
-<text x="365" y="105" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1a2532" text-anchor="middle">Throughput vs BF16</text>
-<text x="785" y="105" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1a2532" text-anchor="middle">Model storage reduction</text>
-<line x1="255.0" y1="120" x2="255.0" y2="455" stroke="#e8edf3"/>
-<text x="255.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.0×</text>
-<line x1="680.0" y1="120" x2="680.0" y2="455" stroke="#e8edf3"/>
-<text x="680.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.0×</text>
-<line x1="322.5" y1="120" x2="322.5" y2="455" stroke="#e8edf3"/>
-<text x="322.5" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.5×</text>
-<line x1="747.5" y1="120" x2="747.5" y2="455" stroke="#e8edf3"/>
-<text x="747.5" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">0.5×</text>
-<line x1="390.0" y1="120" x2="390.0" y2="455" stroke="#e8edf3"/>
-<text x="390.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.0×</text>
-<line x1="815.0" y1="120" x2="815.0" y2="455" stroke="#e8edf3"/>
-<text x="815.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.0×</text>
-<line x1="457.5" y1="120" x2="457.5" y2="455" stroke="#e8edf3"/>
-<text x="457.5" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.5×</text>
-<line x1="882.5" y1="120" x2="882.5" y2="455" stroke="#e8edf3"/>
-<text x="882.5" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">1.5×</text>
-<line x1="525.0" y1="120" x2="525.0" y2="455" stroke="#e8edf3"/>
-<text x="525.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">2.0×</text>
-<line x1="950.0" y1="120" x2="950.0" y2="455" stroke="#e8edf3"/>
-<text x="950.0" y="474" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#68788a" text-anchor="middle">2.0×</text>
-<text x="235" y="145" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">BF16</text>
-<rect x="255" y="128" width="135.0" height="24" rx="4" fill="#8d99a6"/>
-<rect x="680" y="128" width="135.0" height="24" rx="4" fill="#8d99a6"/>
-<text x="398.0" y="145" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.00×</text>
-<text x="823.0" y="145" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.00×</text>
-<text x="235" y="190" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 weight-only</text>
-<rect x="255" y="173" width="110.9" height="24" rx="4" fill="#c44b4b"/>
-<rect x="680" y="173" width="207.9" height="24" rx="4" fill="#c44b4b"/>
-<text x="373.92472373267844" y="190" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">0.82×</text>
-<text x="895.9258410372473" y="190" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.54×</text>
-<text x="962" y="190" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#c44b4b" text-anchor="end">rejected</text>
-<text x="235" y="235" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic</text>
-<rect x="255" y="218" width="176.4" height="24" rx="4" fill="#2a78d6"/>
-<rect x="680" y="218" width="208.0" height="24" rx="4" fill="#2a78d6"/>
-<text x="439.38086697979537" y="235" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.31×</text>
-<text x="896.0096225799643" y="235" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.54×</text>
-<text x="235" y="280" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic rowwise</text>
-<rect x="255" y="263" width="183.5" height="24" rx="4" fill="#2a78d6"/>
-<rect x="680" y="263" width="207.9" height="24" rx="4" fill="#2a78d6"/>
-<text x="446.4554228821082" y="280" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.36×</text>
-<text x="895.9258410372473" y="280" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.54×</text>
-<text x="235" y="325" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">NVFP4 weight-only</text>
-<rect x="255" y="308" width="109.6" height="24" rx="4" fill="#c44b4b"/>
-<rect x="680" y="308" width="359.7" height="24" rx="4" fill="#c44b4b"/>
-<text x="372.645177398297" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">0.81×</text>
-<text x="1047.7006320818887" y="325" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">2.66×</text>
-<text x="962" y="325" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#c44b4b" text-anchor="end">rejected</text>
-<text x="235" y="370" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">NVFP4 dynamic</text>
-<rect x="255" y="353" width="250.6" height="24" rx="4" fill="#c44b4b"/>
-<rect x="680" y="353" width="359.7" height="24" rx="4" fill="#c44b4b"/>
-<text x="513.6001062029666" y="370" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">1.86×</text>
-<text x="1047.7006320818887" y="370" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600" fill="#1a2532" text-anchor="start">2.66×</text>
-<text x="962" y="370" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#c44b4b" text-anchor="end">rejected</text>
-<text x="42" y="505" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#68788a" text-anchor="start">Blue: passes 4/4 top-1 fidelity gate · Red: rejected · INT8 weight-only excluded (nightly regression)</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="410" viewBox="0 0 900 410" role="img" aria-label="Horizontal bar chart comparing quantization throughput with BF16 on RTX PRO 6000 Blackwell">
+<rect width="900" height="410" fill="#f7f9fc"/>
+<rect x="16" y="16" width="868" height="378" rx="10" fill="#ffffff" stroke="#dde4ec"/>
+<text x="44.0" y="50.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="17" font-weight="650" fill="#1a2532" text-anchor="start">Quantization speedup on Blackwell</text>
+<text x="44.0" y="72.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#68788a" text-anchor="start">Llama-3.1-8B · batch 8 × sequence 128 · RTX PRO 6000 Blackwell (sm120) · TorchInductor</text>
+<text x="820.0" y="98.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">fidelity</text>
+<line x1="290.0" y1="112" x2="290.0" y2="330" stroke="#eef2f7" stroke-width="1"/>
+<text x="290.0" y="350.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">0.0×</text>
+<line x1="400.0" y1="112" x2="400.0" y2="330" stroke="#eef2f7" stroke-width="1"/>
+<text x="400.0" y="350.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">0.5×</text>
+<line x1="510.0" y1="112" x2="510.0" y2="330" stroke="#eef2f7" stroke-width="1"/>
+<text x="510.0" y="350.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">1.0×</text>
+<line x1="620.0" y1="112" x2="620.0" y2="330" stroke="#eef2f7" stroke-width="1"/>
+<text x="620.0" y="350.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">1.5×</text>
+<line x1="730.0" y1="112" x2="730.0" y2="330" stroke="#eef2f7" stroke-width="1"/>
+<text x="730.0" y="350.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#68788a" text-anchor="middle">2.0×</text>
+<text x="272.0" y="135.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">BF16</text>
+<rect x="290" y="117.0" width="220.0" height="26" rx="4" fill="#8d99a6"/>
+<text x="522.0" y="135.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.00×</text>
+<text x="820.0" y="135.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">baseline</text>
+<text x="272.0" y="180.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 weight-only</text>
+<rect x="290" y="162.0" width="180.4" height="26" rx="4" fill="#2a78d6"/>
+<text x="482.4" y="180.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">0.82×</text>
+<text x="820.0" y="180.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">3/4 · rejected</text>
+<text x="272.0" y="225.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic</text>
+<rect x="290" y="207.0" width="288.2" height="26" rx="4" fill="#2a78d6"/>
+<text x="590.2" y="225.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.31×</text>
+<text x="820.0" y="225.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">4/4</text>
+<text x="272.0" y="270.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">FP8 dynamic rowwise</text>
+<rect x="290" y="252.0" width="299.2" height="26" rx="4" fill="#2a78d6"/>
+<text x="601.2" y="270.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.36×</text>
+<text x="820.0" y="270.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">4/4</text>
+<text x="272.0" y="315.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#1a2532" text-anchor="end">NVFP4 dynamic</text>
+<rect x="290" y="297.0" width="409.2" height="26" rx="4" fill="#2a78d6"/>
+<text x="711.2" y="315.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#1a2532" text-anchor="start">1.86×</text>
+<text x="820.0" y="315.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#68788a" text-anchor="end">2/4 · rejected</text>
+<text x="44.0" y="384.0" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#68788a" text-anchor="start">Median of 30+ synchronized forwards; higher is better. Fidelity is top-1 agreement with BF16.</text>
 </svg>
