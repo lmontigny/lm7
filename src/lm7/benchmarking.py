@@ -6,14 +6,19 @@ import os
 import platform
 import statistics
 import time
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import torch
 
 from .api import compile
-from .detection import intel_npu_device_nodes, synchronize, tpu_accelerator_type
+from .detection import (
+    intel_npu_device_nodes,
+    resolve_target,
+    synchronize,
+    tpu_accelerator_type,
+)
 from .targets import TargetSpec
 
 
@@ -47,10 +52,6 @@ def benchmark(
     options: Mapping[str, Any] | None = None,
 ) -> BenchmarkResult:
     """Measure first-call cost and steady-state inference latency through LM7."""
-    if warmup < 0:
-        raise ValueError("warmup cannot be negative.")
-    if repeats < 1:
-        raise ValueError("repeats must be at least 1.")
     kwargs = dict(kwargs or {})
     wrapped = compile(
         model,
@@ -61,43 +62,96 @@ def benchmark(
         cache=False,
         options=options,
     )
+    # Resolved here rather than read off `wrapped` afterwards because the timing
+    # loop has to synchronize the right device from the first call onwards, and
+    # `compile` does not resolve until that call happens. Detection is
+    # deterministic, so this is the same answer `wrapped.target` reports below.
+    resolved = target if isinstance(target, TargetSpec) else resolve_target(target)
+    result = benchmark_callable(
+        lambda: wrapped(*args, **kwargs),
+        target=resolved,
+        backend=backend,
+        warmup=warmup,
+        repeats=repeats,
+        batch_size=_batch_size((args, kwargs)),
+    )
+
+    assert wrapped.target is not None
+    assert wrapped.selected_backend is not None
+    # The backend that was *selected* rather than the one that was asked for --
+    # `backend="auto"` is a request, not an answer.
+    return replace(
+        result,
+        target=str(wrapped.target),
+        backend=wrapped.selected_backend,
+        peak_memory_bytes=_peak_memory(wrapped.target),
+        environment=_environment(wrapped.target, wrapped.selected_backend),
+    )
+
+
+def benchmark_callable(
+    call: Callable[[], Any],
+    *,
+    target: TargetSpec,
+    backend: str,
+    warmup: int = 5,
+    repeats: int = 30,
+    batch_size: int = 1,
+) -> BenchmarkResult:
+    """Time an arbitrary callable the way :func:`benchmark` times an LM7 one.
+
+    Exists so that a baseline which deliberately does *not* go through LM7 --
+    a direct ``torch.compile``, say, which is what a user writing against one
+    vendor's stack would call -- can be compared against one that does, without
+    the two being timed by different code. Two harnesses in this repo already
+    disagree by 2.3x on the same card purely from building inputs differently,
+    and "how much does LM7 cost over the toolchain underneath it" is a question
+    where that much drift is the whole answer.
+
+    The caller owns everything outside the timing: this moves no tensors, sets
+    no inference mode, and compiles nothing. A baseline that means anything has
+    to place its own model and inputs, because doing that per call is one of the
+    things being measured.
+    """
+    if warmup < 0:
+        raise ValueError("warmup cannot be negative.")
+    if repeats < 1:
+        raise ValueError("repeats must be at least 1.")
     if _uses_cuda_runtime(target) and torch.cuda.is_available():
         torch.cuda.init()
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
+
     started = time.perf_counter()
-    wrapped(*args, **kwargs)
-    synchronize(wrapped.target)
+    call()
+    synchronize(target)
     first_call_ms = (time.perf_counter() - started) * 1000
 
     for _ in range(warmup):
-        wrapped(*args, **kwargs)
-    synchronize(wrapped.target)
+        call()
+    synchronize(target)
 
     latencies_ms = []
     for _ in range(repeats):
-        synchronize(wrapped.target)
+        synchronize(target)
         started = time.perf_counter()
-        wrapped(*args, **kwargs)
-        synchronize(wrapped.target)
+        call()
+        synchronize(target)
         latencies_ms.append((time.perf_counter() - started) * 1000)
 
-    assert wrapped.target is not None
-    assert wrapped.selected_backend is not None
     median_ms = statistics.median(latencies_ms)
-    batch_size = _batch_size((args, kwargs))
     return BenchmarkResult(
-        target=str(wrapped.target),
-        backend=wrapped.selected_backend,
+        target=str(target),
+        backend=backend,
         first_call_ms=first_call_ms,
         latency_median_ms=median_ms,
         latency_p95_ms=_percentile(latencies_ms, 0.95),
         samples_per_second=batch_size / (median_ms / 1000),
-        peak_memory_bytes=_peak_memory(wrapped.target),
+        peak_memory_bytes=_peak_memory(target),
         warmup=warmup,
         repeats=repeats,
         batch_size=batch_size,
-        environment=_environment(wrapped.target, wrapped.selected_backend),
+        environment=_environment(target, backend),
     )
 
 

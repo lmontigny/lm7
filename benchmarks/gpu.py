@@ -58,6 +58,94 @@ def _workload(
     return model, (), {**inputs, "use_cache": False}
 
 
+# Arms whose inputs are placed on the device once, up front, rather than on
+# every call. They exist to answer "what does the orchestration layer cost over
+# the toolchain underneath it", and they are timed by `benchmark_callable` --
+# the same loop, warmup, synchronization and statistics the ordinary arms get --
+# so that what differs between them is what happens per call and nothing else.
+#
+#   torch-eager / torch-compile   PyTorch called directly, no LM7 in the path
+#   eager-placed / inductor-placed  LM7 with transfers="explicit"
+#
+# The pair matters more than either arm alone. LM7's ordinary arms use
+# `transfers="automatic"` and so copy their inputs to the device on every call,
+# which is a real cost but a *chosen* one -- the placed arms hold everything
+# else equal and isolate what dispatch itself costs. Comparing `inductor`
+# against `torch-compile` without `inductor-placed` in between charges LM7 for
+# a host-to-device copy the vendor arm never makes.
+VENDOR_ARMS = ("torch-eager", "torch-compile")
+PLACED_ARMS = ("eager-placed", "inductor-placed")
+DIRECT_ARMS = VENDOR_ARMS + PLACED_ARMS
+
+
+def _direct_arm(
+    arm: str,
+    model: torch.nn.Module,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    target: str,
+    warmup: int,
+    repeats: int,
+    compile_mode: str | None,
+) -> Any:
+    """Time an arm whose model and inputs are already on the device."""
+    import lm7
+    from lm7.benchmarking import benchmark_callable
+    from lm7.detection import inference_context, resolve_target, torch_device
+    from lm7.module import _map_tensors
+
+    resolved = resolve_target(target)
+    device = torch_device(resolved)
+    # Moved here for every arm in this function, including the LM7 ones:
+    # `transfers="explicit"` is a promise the caller places its own tensors, and
+    # LM7's backends only move a model when transfers are automatic.
+    model = model.to(device)
+    args = _map_tensors(args, lambda tensor: tensor.to(device))
+    kwargs = _map_tensors(kwargs, lambda tensor: tensor.to(device))
+
+    if arm in PLACED_ARMS:
+        compiled = lm7.compile(
+            model,
+            target=target,
+            backend=arm.removesuffix("-placed"),
+            transfers="explicit",
+            fallback="error",
+            cache=False,
+        )
+
+        # No inference context here: LM7 enters its own, and wrapping it twice
+        # would time a context this arm does not actually pay for.
+        def run() -> Any:
+            return compiled(*args, **kwargs)
+
+    else:
+        # `mode=None` unless --compile-mode says otherwise, which is exactly what
+        # LM7's Inductor backend passes, so the two compile the same way and the
+        # difference between them is dispatch rather than codegen.
+        call = model if arm == "torch-eager" else torch.compile(model, mode=compile_mode)
+
+        def run() -> Any:
+            with inference_context(resolved):
+                return call(*args, **kwargs)
+
+    return benchmark_callable(
+        run,
+        target=resolved,
+        backend=arm,
+        warmup=warmup,
+        repeats=repeats,
+        batch_size=_batch_size(args, kwargs),
+    )
+
+
+def _batch_size(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int:
+    for value in (*args, *kwargs.values()):
+        if isinstance(value, torch.Tensor) and value.dim() > 0:
+            return int(value.shape[0])
+    return 1
+
+
 def _target_available(target: str) -> bool:
     if target == "apple":
         return torch.backends.mps.is_available()
@@ -74,7 +162,18 @@ def main() -> None:
         default="mlp",
         help="Workload to benchmark.",
     )
-    parser.add_argument("--backend", nargs="+", default=["eager", "inductor"])
+    parser.add_argument(
+        "--backend",
+        nargs="+",
+        default=["eager", "inductor"],
+        help=(
+            "LM7 backend names, plus the arms that place their inputs up front "
+            f"instead of per call: {', '.join(VENDOR_ARMS)} bypass LM7 entirely, "
+            f"and {', '.join(PLACED_ARMS)} are LM7 with transfers='explicit'. "
+            "Run a vendor arm and its placed counterpart together to separate "
+            "dispatch cost from input-transfer cost"
+        ),
+    )
     parser.add_argument(
         "--target",
         choices=("auto", "nvidia", "amd", "apple"),
@@ -112,20 +211,32 @@ def main() -> None:
             dtype=_dtype(arguments.dtype),
             prompt=arguments.prompt,
         )
-        result = lm7.benchmark(
-            model,
-            args=args,
-            kwargs=kwargs,
-            target=arguments.target,
-            backend=backend,
-            warmup=arguments.warmup,
-            repeats=arguments.repeats,
-            options=(
-                {"compile_mode": arguments.compile_mode}
-                if backend == "inductor" and arguments.compile_mode
-                else None
-            ),
-        )
+        if backend in DIRECT_ARMS:
+            result = _direct_arm(
+                backend,
+                model,
+                args,
+                kwargs,
+                target=arguments.target,
+                warmup=arguments.warmup,
+                repeats=arguments.repeats,
+                compile_mode=arguments.compile_mode,
+            )
+        else:
+            result = lm7.benchmark(
+                model,
+                args=args,
+                kwargs=kwargs,
+                target=arguments.target,
+                backend=backend,
+                warmup=arguments.warmup,
+                repeats=arguments.repeats,
+                options=(
+                    {"compile_mode": arguments.compile_mode}
+                    if backend == "inductor" and arguments.compile_mode
+                    else None
+                ),
+            )
         results.append(result.to_dict())
         peak = (
             f"{result.peak_memory_bytes / 1024**2:8.1f} MiB"

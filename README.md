@@ -147,6 +147,39 @@ byte-identical text. Method, the full four-arm table, and the model this path
 currently fails on:
 [Apple Silicon](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
+### And what does the layer itself cost?
+
+The other direction: **LM7 adds no measurable time to the compiler it calls.**
+All three bars below compile the same model through TorchInductor; what differs
+is how much of LM7 is in the call path.
+
+![Bar chart of median forward-pass latency for SmolLM2-135M on an Apple M3 Pro: torch.compile called directly at 7.88 ms and the same model through lm7.compile at 7.91 ms, with the range across runs on each bar wider than the gap between the bars.](docs/figures/lm7-overhead.png)
+
+Each bar is the median of 7 runs, and the line through it is the spread across
+those runs. **That spread is wider than the gap between the bars**, which is the
+whole finding: the difference the layer makes is smaller than the difference
+between two runs of the same thing.
+
+Both bars hand their inputs to the compiled model already on the device. LM7's
+default does one more thing — `transfers="automatic"` copies your inputs to the
+device on every call, so that a caller holding CPU tensors does not have to think
+about it — and that costs about **0.21 ms** more per call. Pass
+`transfers="explicit"` and place inputs yourself to get the bar above. All three,
+with each ratio computed inside its own process where the arms run seconds apart:
+
+| `torch.compile` called directly | LM7, inputs placed | LM7, copying inputs |
+| --- | --- | --- |
+| 7.88 ms | 7.91 ms — **1.03x** (0.90–1.11) | 8.30 ms — **1.07x** (0.97–1.15) |
+
+Every range contains 1.0, so on a model doing real work the overhead is below
+what this machine can resolve — individual runs land on either side. The cost is
+**fixed per call, not proportional**: about 0.03 ms of dispatch plus that 0.21 ms
+of copying. On a microbenchmark small enough for the fixed part to dominate — a
+0.44 ms MLP — it reads as 1.44x, which is a fact about the microbenchmark rather
+than about the layer. See [what LM7 costs over calling `torch.compile`
+yourself](docs/apple-mps.md#what-lm7-costs-over-calling-torchcompile-yourself)
+for the method and the caveats.
+
 ## Integrated targets
 
 Integration means that LM7 has target and backend code for a toolchain. It does

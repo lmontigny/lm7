@@ -76,6 +76,7 @@ file stays a index rather than a second, drifting description.
 | [#178](https://github.com/lmontigny/lm7/pull/178) | Give the lifecycle benchmark the import LM7 already has |
 | [#182](https://github.com/lmontigny/lm7/pull/182) | Stop telling an AMD artifact to find a CUDA runtime |
 | [#187](https://github.com/lmontigny/lm7/pull/187) | Drive both AMD servers with the client the other rows used |
+| [#190](https://github.com/lmontigny/lm7/pull/190) | Leave the prompt pass eager in the server that a chat client talks to |
 
 ## On-device validation
 
@@ -114,6 +115,7 @@ file stays a index rather than a second, drifting description.
 | [#172](https://github.com/lmontigny/lm7/pull/172) | Let the GPU matrix describe a GPU that is not NVIDIA |
 | [#180](https://github.com/lmontigny/lm7/pull/180) | Answer the three questions the first MI300X session left open |
 | [#183](https://github.com/lmontigny/lm7/pull/183) | Measure the memory-bound half of generation on the MI300X |
+| [#193](https://github.com/lmontigny/lm7/pull/193) | Measure what compiling through LM7 buys on an Apple M3 Pro |
 
 ## Detection and diagnostics
 
