@@ -12,6 +12,7 @@ from lm7.huggingface import (
     FP8_DYNAMIC,
     FP8_DYNAMIC_ROWWISE,
     INT8,
+    INT8_DYNAMIC,
     NVFP4,
     NVFP4_DYNAMIC,
     VALIDATED_ACTIVATION,
@@ -113,7 +114,9 @@ def test_unknown_quantization_lists_the_short_names():
     """The list names both families, so a reader sees that activation modes exist."""
     with pytest.raises(
         UnsupportedModelError,
-        match="none, fp8, fp8-dynamic, fp8-dynamic-rowwise, int8, nvfp4, nvfp4-dynamic",
+        match=(
+            "none, fp8, fp8-dynamic, fp8-dynamic-rowwise, int8, int8-dynamic, nvfp4, nvfp4-dynamic"
+        ),
     ):
         validate("HuggingFaceTB/SmolLM2-135M-Instruct", "int4")
 
@@ -184,13 +187,15 @@ def test_dynamic_modes_are_separate_from_weight_only_ones():
     assert NVFP4 in WEIGHT_ONLY_QUANTIZATIONS
     assert NVFP4 not in DYNAMIC_ACTIVATION_QUANTIZATIONS
     assert DYNAMIC_ACTIVATION_QUANTIZATIONS == frozenset(
-        {FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC}
+        {INT8_DYNAMIC, FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC}
     )
     # The same rule applied again: adding per-row scaling under the existing
     # `fp8-dynamic` name would have changed what that command computes, so it is
     # a mode of its own and `fp8-dynamic` still means per-tensor.
     assert FP8 in WEIGHT_ONLY_QUANTIZATIONS
     assert FP8_DYNAMIC_ROWWISE not in WEIGHT_ONLY_QUANTIZATIONS
+    assert INT8 in WEIGHT_ONLY_QUANTIZATIONS
+    assert INT8_DYNAMIC not in WEIGHT_ONLY_QUANTIZATIONS
 
 
 def test_nvfp4_dynamic_needs_blackwell_but_weight_only_does_not():
@@ -263,6 +268,26 @@ def test_fp8_granularity_is_reported_per_mode():
     assert fp8_scale_granularity(FP8_DYNAMIC_ROWWISE) == "per-row"
     assert fp8_scale_granularity(FP8) is None
     assert fp8_scale_granularity(INT8) is None
+
+
+def test_int8_dynamic_requests_native_int8_matmul_config():
+    """INT8 dynamic quantizes both operands; the old int8 mode remains weight-only."""
+    from lm7.huggingface import _quantization_config
+
+    class _Recorder:
+        def Int8DynamicActivationInt8WeightConfig(self, **kwargs: object):
+            return ("dynamic-int8", kwargs)
+
+    assert _quantization_config(_Recorder(), INT8_DYNAMIC) == (
+        "dynamic-int8",
+        {"version": 2},
+    )
+
+
+def test_int8_dynamic_is_not_admitted_without_hardware_fidelity_evidence():
+    assert all(INT8_DYNAMIC not in modes for modes in VALIDATED_ACTIVATION.values())
+    with pytest.raises(UnsupportedModelError, match="not validated"):
+        validate("unsloth/Llama-3.1-8B-Instruct", INT8_DYNAMIC)
 
 
 def test_fp8_dynamic_rowwise_requests_per_row_granularity():

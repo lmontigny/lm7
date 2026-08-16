@@ -65,6 +65,7 @@ DEFAULT_DECODE_SHAPE = "dynamic"
 _MINIMUM_DYNAMIC_CACHE_LEN = 4
 
 INT8 = "int8"
+INT8_DYNAMIC = "int8-dynamic"
 FP8 = "fp8"
 NVFP4 = "nvfp4"
 WEIGHT_ONLY_QUANTIZATIONS = frozenset({INT8, FP8, NVFP4})
@@ -87,7 +88,9 @@ NVFP4_DYNAMIC = "nvfp4-dynamic"
 # aliases below record: an existing command must keep doing what it did. Which
 # one is better is a measurement, not a default -- see docs/quantization.md.
 FP8_DYNAMIC_ROWWISE = "fp8-dynamic-rowwise"
-DYNAMIC_ACTIVATION_QUANTIZATIONS = frozenset({FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC})
+DYNAMIC_ACTIVATION_QUANTIZATIONS = frozenset(
+    {INT8_DYNAMIC, FP8_DYNAMIC, FP8_DYNAMIC_ROWWISE, NVFP4_DYNAMIC}
+)
 NO_QUANTIZATION = "none"
 
 # The pre-0.2 spellings, plus explicit long forms for the weight-only modes. The
@@ -96,12 +99,14 @@ NO_QUANTIZATION = "none"
 # change what an existing command does.
 QUANTIZATION_ALIASES: dict[str, str] = {
     "int8-weight-only": INT8,
+    "int8-dynamic-activation-int8-weight": INT8_DYNAMIC,
     "fp8-weight-only": FP8,
     "nvfp4-weight-only": NVFP4,
 }
 
 _QUANTIZATION_LABELS = {
-    INT8: "INT8",
+    INT8: "INT8 weight-only",
+    INT8_DYNAMIC: "INT8 dynamic activation + INT8 weight",
     FP8: "FP8",
     NVFP4: "NVFP4",
     FP8_DYNAMIC: "FP8 dynamic activation + FP8 weight, per-tensor scales",
@@ -132,6 +137,7 @@ _QUANTIZATION_LABELS = {
 # See docs/amd-mi300x.md.
 _QUANTIZATION_VENDORS = {
     INT8: frozenset({"nvidia", "cpu"}),
+    INT8_DYNAMIC: frozenset({"nvidia"}),
     FP8: frozenset({"nvidia", "amd"}),
     NVFP4: frozenset({"nvidia"}),
     FP8_DYNAMIC: frozenset({"nvidia", "amd"}),
@@ -141,6 +147,7 @@ _QUANTIZATION_VENDORS = {
 
 _QUANTIZATION_VENDOR_TEXT = {
     INT8: "detected NVIDIA GPUs and CPU targets",
+    INT8_DYNAMIC: "detected NVIDIA GPUs",
     FP8: "detected NVIDIA and AMD GPUs",
     NVFP4: "detected NVIDIA GPUs",
     FP8_DYNAMIC: "detected NVIDIA and AMD GPUs",
@@ -1309,6 +1316,8 @@ def _apply_quantization(
 def _quantization_config(torchao_quantization: ModuleType, quantization: str) -> Any:
     if quantization == FP8:
         return torchao_quantization.Float8WeightOnlyConfig(version=2)
+    if quantization == INT8_DYNAMIC:
+        return torchao_quantization.Int8DynamicActivationInt8WeightConfig(version=2)
     if quantization == NVFP4:
         return _load_torchao_nvfp4().NVFP4WeightOnlyConfig()
     if quantization == FP8_DYNAMIC:
@@ -1378,6 +1387,7 @@ def _is_nvfp4_quantizable_linear(module: torch.nn.Module, fqn: str) -> bool:
 # pair incomparable, and the comparison is the point.
 _QUANTIZATION_FILTERS = {
     INT8: _is_quantizable_linear,
+    INT8_DYNAMIC: _is_quantizable_linear,
     FP8: _is_fp8_quantizable_linear,
     NVFP4: _is_nvfp4_quantizable_linear,
     FP8_DYNAMIC: _is_fp8_quantizable_linear,
@@ -1387,6 +1397,7 @@ _QUANTIZATION_FILTERS = {
 
 _QUANTIZATION_SELECTS = {
     INT8: "every linear except lm_head",
+    INT8_DYNAMIC: "every linear except lm_head",
     FP8: "linears whose module path contains '.mlp.'",
     NVFP4: "every linear except lm_head whose last two dimensions are multiples of 16",
     FP8_DYNAMIC: "linears whose module path contains '.mlp.'",
