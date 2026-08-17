@@ -29,6 +29,36 @@ PyTorch module
 The Core ML path is the one to validate first for an iPhone support claim. The
 XNNPACK path is the CPU fallback.
 
+## How users use LM7 on iPhone
+
+LM7 is not installed by end users on the phone. It is a developer-side export
+tool. The phone only sees the exported model artifact and the iOS runtime that
+loads it:
+
+```text
+Developer trains or builds a PyTorch model
+  -> developer runs lm7.export(..., target="apple", backend="coreml")
+  -> LM7 writes an ExecuTorch/Core ML compiled_model.pte
+  -> iOS developer bundles compiled_model.pte in the app
+  -> user installs and opens the app
+  -> app runs local inference through ExecuTorch and Core ML
+```
+
+From the user's point of view there is no Python, no LM7 CLI, and no model
+conversion on device. If the app bundles the `.pte`, inference can run locally
+without a network request.
+
+The iOS app side is intentionally small:
+
+```swift
+let module = Module(filePath: compiledModelPath)
+try module.load("forward")
+let output = try module.forward(input)
+```
+
+ExecuTorch loads the `.pte`, dispatches the delegated segment to Core ML, and
+Core ML chooses the actual iPhone compute plan.
+
 ## Support tiers
 
 Keep the claim tied to the tier that has actually run.
@@ -109,6 +139,14 @@ artifacts/ios/coreml-mlp.lm7/compiled_model.pte
 
 The `golden.pt` file is a host-side convenience. The app reads `golden.json`
 instead, so it needs no torch reader on device.
+
+`compute_unit="all"` means LM7 asks the Core ML path to allow every available
+Core ML compute unit: CPU, GPU, and Apple Neural Engine where available. It
+does not force a Neural Engine-only run. On a physical iPhone, Core ML decides
+how to place the graph across CPU, GPU, and ANE based on the model, operators,
+shapes, precision, hardware, and iOS version. On the simulator, the same setting
+exercises the Core ML software path on the Mac and does not prove iPhone ANE
+usage.
 
 ## The harness
 
