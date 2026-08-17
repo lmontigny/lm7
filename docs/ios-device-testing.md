@@ -107,8 +107,38 @@ The file the iOS app needs is:
 artifacts/ios/coreml-mlp.lm7/compiled_model.pte
 ```
 
-The `golden.pt` file is a host-side convenience. For the app, convert the input
-and expected tensors to a simple JSON, binary float array, or XCTest fixture.
+The `golden.pt` file is a host-side convenience. The app reads `golden.json`
+instead, so it needs no torch reader on device.
+
+## The harness
+
+`tools/ios_runner` is a minimal SwiftUI app that bundles the `.pte` and
+`golden.json`, runs `forward` at launch, and reports `max_abs_diff` against the
+golden output both on screen and through `NSLog` with an `LM7VALIDATOR` prefix.
+It links ExecuTorch `executorch`, `backend_coreml`, and `kernels_optimized`
+under `-all_load`, without which the backend and kernel registrations are
+stripped from the static libraries.
+
+```bash
+./tools/ios_runner/build.sh project   # generate the Xcode project
+./tools/ios_runner/build.sh ipa       # unsigned .ipa for a device cloud
+```
+
+The SPM branch must match the `executorch` pip version used to export the
+artifact (`swiftpm-1.3.1` against 1.3.1); resolution pulls about 1.5 GB.
+
+Two build notes that are not obvious:
+
+- **No signing identity is needed for a device-cloud `.ipa`.** `build.sh ipa`
+  builds with `CODE_SIGNING_ALLOWED=NO` and zips the `.app` under `Payload/`.
+  AWS Device Farm re-signs apps for its public fleet and accepts the upload.
+  Opening the generated project in Xcode is unaffected, so local device runs
+  still use ordinary automatic signing.
+- **`build.sh ipa` uses `-target`, not `-scheme`.** A machine with Xcode but
+  without the downloaded iOS platform has no build destinations and fails with
+  "iOS `<ver>` is not installed" even though the SDK is present. `-target`
+  skips destination resolution. Local Xcode use — simulator or a connected
+  iPhone — does need the platform: `xcodebuild -downloadPlatform iOS`.
 
 ## Simulator smoke
 
@@ -139,6 +169,28 @@ Tighten it after the first real output is known. The existing macOS Core ML
 integration tests saw much smaller differences on simple models, but an iPhone
 run should record its own number.
 
+### Result, 2026-08-17
+
+`tools/ios_runner` on the iPhone 17 Pro simulator, iOS 26.5, hosted on an Apple
+Silicon Mac:
+
+```text
+Artifact: coreml-mlp.lm7/compiled_model.pte
+Backend: ExecuTorch Core ML
+Input: float32[3, 4]
+Output: float32[3, 2]
+Max abs diff vs host eager: 3.051162e-04
+Result: PASS
+```
+
+Host eager against the same artifact through `lm7.export`'s reloaded module was
+`2.967e-04`, so the simulator agrees with the host to within the float16
+rounding the Core ML path already introduces.
+
+This clears the **Simulator smoke** tier and nothing above it. The simulator
+executes Core ML against the *Mac's* hardware, so this says nothing about an
+iPhone's Neural Engine, an A-series part, or latency.
+
 ## AWS Device Farm run
 
 AWS Device Farm is the first real-device target for this repo. Select the device
@@ -152,26 +204,61 @@ Record the exact values in the PR or follow-up doc:
 
 | Field | Value |
 | --- | --- |
-| Provider | AWS Device Farm |
-| Device name | Apple iPhone 12 |
-| iOS version | TODO |
+| Provider | AWS Device Farm, `us-west-2`, public fleet |
+| Device name | Apple iPhone 12, `iPhone13,2`, `D53gAP` |
+| SoC | chip id `0x8101` (A14), `arm64e`, `ProductionSOC: true` |
+| iOS version | 26.6, build `23G71` |
 | Minimum OS expectation | iOS 16 or newer for the ExecuTorch Core ML backend |
-| App build | TODO |
-| ExecuTorch version | TODO |
+| App build | `tools/ios_runner`, unsigned `.ipa`, `com.lm7.validator` |
+| ExecuTorch version | 1.3.1 (pip and `swiftpm-1.3.1`) |
 | Backend | `coreml` first; optionally `executorch` / XNNPACK fallback |
-| LM7 commit | TODO |
+| LM7 commit | `53eb6cf` |
 | Model | tiny MLP fixture first |
 | Input shape | `3x4` |
 | Compute options | `compute_unit=all`, `compute_precision=float16` |
-| Max abs diff vs host | TODO |
+| Max abs diff vs host | TODO — never read back off the device |
 | Latency | Optional; record only if measured inside the app |
 | Result | TODO |
 
-For the first pass, use an interactive remote access session if that is faster
-than wiring full XCTest automation. Device Farm supports installing an uploaded
-`.ipa` in a remote session, which is enough for a manual validation screenshot
-and device log. The stronger follow-up is an automated XCTest that exits
-non-zero when the diff exceeds tolerance.
+Device identity above was read from the device itself over Appium
+(`mobile: deviceInfo`), not from the console label.
+
+Prefer a scheduled run over an interactive remote access session. Remote access
+sessions expire on their own (about 40 minutes, observed) and meter while idle,
+and their only programmatic control channel is
+`endpoints.remoteDriverEndpoint`, a WebDriver URL — there is no SSH and no adb
+into a Device Farm device. A scheduled run instead leaves device logs and video
+as durable artifacts:
+
+```bash
+aws devicefarm create-device-pool --project-arn <proj> --name lm7-iphone12 \
+  --rules '[{"attribute":"ARN","operator":"IN","value":"[\"<device-arn>\"]"}]'
+aws devicefarm schedule-run --project-arn <proj> --app-arn <app> \
+  --device-pool-arn <pool> --name lm7-coreml-mlp-validation \
+  --test 'type=BUILTIN_FUZZ,parameters={event_count=200,throttle=200}'
+```
+
+Pin the pool to a single device ARN so a rerun cannot silently land on a
+different phone.
+
+**A `PASSED` run does not mean the model ran.** `BUILTIN_FUZZ` reports `PASSED`
+whenever nothing crashed, and it does not report whether it ever launched the
+app under test. A first attempt here used `event_count=1`, on the reasoning
+that the harness does its work at launch — the run passed, and the syslog shows
+the app installed at 13:05:57 and uninstalled at 13:08:50 with no launch event
+and no `LM7Validator` process in between. Nothing was validated.
+
+So always confirm from the device log, never from the run result:
+
+```bash
+./tools/ios_runner/fetch_devicefarm_result.sh <run-arn>
+```
+
+Absence of `LM7VALIDATOR` lines means no result, whatever the run says. Because
+a fuzz run cannot be told to launch a specific app deterministically, the
+reliable options are an Appium session that launches the bundle id explicitly,
+or an XCTest target that exits non-zero when the diff exceeds tolerance. The
+latter is the right end state.
 
 Minimum successful evidence:
 
@@ -215,10 +302,15 @@ device-side method.
 
 ## Current gaps
 
-- **No checked-in iOS app harness yet.** The repo has Android device testing
-  docs, but not the equivalent iOS XCTest app.
 - **No physical iPhone result yet.** Core ML export/reload has been validated on
-  macOS; iPhone execution needs the AWS Device Farm run.
+  macOS; iPhone execution needs the AWS Device Farm run. The app has been built,
+  uploaded, and launched on an iPhone 12 through Device Farm, but no
+  `max_abs_diff` has been read back off the device, so nothing here is a device
+  result.
+- **The harness is a launch-time check, not an XCTest.** `tools/ios_runner`
+  reports its verdict through `NSLog` and the screen. It cannot fail a CI job;
+  an XCTest target that exits non-zero above tolerance is the stronger
+  follow-up.
 - **`minimum_deployment_target` is not wired through LM7's Core ML options.**
   Core ML supports deployment targets, and this should be exposed before making
   broad iOS-version compatibility claims.
