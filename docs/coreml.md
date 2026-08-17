@@ -101,6 +101,11 @@ coremltools, not wired up here), and `minimum_deployment_target` (the export
 warns that the default spec version "will not run on all versions of
 iOS/macOS" without it).
 
+For physical iPhone validation, use the staged runbook in
+[iOS device testing](ios-device-testing.md). The first target is an AWS Device
+Farm run on the device AWS lists as "Apple iPhone 12", using a tiny deterministic
+Core ML `.pte` before moving to language models.
+
 ## References
 
 - [ExecuTorch Core ML backend](https://docs.pytorch.org/executorch/stable/backends-coreml.html)
