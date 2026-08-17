@@ -181,7 +181,8 @@ Integration means that LM7 has target and backend code for a toolchain. It does
 | Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | Inductor, AOTInductor, OpenVINO, ONNX Runtime, eager; explicit/export integrations |
 | NVIDIA | GPU | `nvidia` | Inductor, AOTInductor, TensorRT, ONNX Runtime, eager, IREE Vulkan export |
 | AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, AOTInductor, eager, IREE Vulkan export |
-| Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager, Core ML export |
+| Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager |
+| Apple | Core ML devices (Mac/iOS CPU, GPU, ANE) | `apple` | Core ML export; iOS simulator validated, physical iPhone pending |
 | Intel | GPU (XPU/Vulkan) | `intel` | Inductor, eager, IREE Vulkan export |
 | Arm | GPU (Mali/Vulkan) | `arm`, `arm:mali-g715` | IREE Vulkan export; never executed on device |
 | Intel | NPU | `intel:npu` | OpenVINO; mock-tested |
