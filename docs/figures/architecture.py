@@ -206,7 +206,7 @@ COLUMNS = [
                 [("inductor", "JIT"), ("aot_inductor", "AOT")],
             ),
             Silicon(
-                "Core ML",
+                "SoC",
                 "Mac / iOS · CPU/GPU/ANE",
                 "apple",
                 [("coreml", "EXPORT")],
@@ -214,7 +214,7 @@ COLUMNS = [
         ],
         runtime=["CPU: C++ / OpenMP", "GPU: Metal / MPS", "iOS: Core ML runtime"],
         hardware="Apple Mac + iPhone",
-        hardware_detail="Core ML: CPU/GPU/ANE",
+        hardware_detail="CPU/GPU/ANE via Core ML",
     ),
     Column(
         vendor="Google",
