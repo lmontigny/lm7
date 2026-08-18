@@ -154,9 +154,31 @@ runs. See the official [execution-provider overview](https://onnxruntime.ai/docs
   come back on the device that produced them, because the adapter binds torch
   storage through ONNX Runtime's I/O binding rather than feeding NumPy. Checked
   on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) through `CUDAExecutionProvider` with
-  CPU fallback disabled, for FP32 and bfloat16. **This is not a throughput
-  measurement.** What was verified is that the tensors stay put and still match
-  eager; how much time the removed copies were costing has not been measured.
+  CPU fallback disabled, for FP32 and bfloat16.
+- **What the binding is worth depends on the size of the fetch, and it is not
+  always positive.** [`benchmarks/onnx_io_binding.py`](../benchmarks/onnx_io_binding.py)
+  runs both strategies against the same `InferenceSession`, so the only
+  difference is how tensors reach and leave it. On the same 4070 SUPER, batch 8:
+
+  | output | NumPy feeds | I/O binding | |
+  | --- | --- | --- | --- |
+  | 10 features (0.3 KiB) | **0.333 ms** | 0.410 ms | 0.81x |
+  | 1000 features (31 KiB) | **0.346 ms** | 0.475 ms | 0.73x |
+  | 32000 features (1000 KiB) | 0.679 ms | **0.568 ms** | 1.19x |
+  | 128000 features (4000 KiB) | 1.976 ms | **1.043 ms** | 1.89x |
+
+  The crossover sits between 31 KiB and 1000 KiB of output, and the direction
+  holds at p10, the median and p90 rather than only on average. Below it the
+  binding's fixed setup costs more than the copies it removes, so a small
+  classifier is measurably *worse* off — the reason to keep the binding anyway is
+  that it is what makes outputs stay on the device at all, which is a
+  correctness property rather than a speed one.
+- **The same measurement on SmolLM2-135M is inconclusive**, and is recorded that
+  way rather than rounded into the table above. Its run-to-run spread on this box
+  is much wider than the difference being measured — p10 to p90 covers roughly
+  19–46 ms against a median gap near 10 ms — and I/O binding wins at p10 while
+  losing at the median. A real causal LM needs a quieter machine or far more
+  samples before anything can be claimed about it.
 - Weights move to a `compiled_model.onnx.data` sidecar when they approach
   protobuf's 2 GiB message ceiling, and the artifact carries it as a second
   payload with its own checksum. `external_data="auto"` decides by measuring the
