@@ -195,6 +195,20 @@ def _validate_artifact_payloads(path: Path, manifest: ArtifactManifest) -> None:
             or _file_sha256(compiled_path) != manifest.compiled_sha256
         ):
             raise ArtifactLoadError(f"Artifact {path} has an invalid compiled payload.")
+    # The weights sibling some backends carry beside the graph: OpenVINO's .bin,
+    # and ONNX Runtime's sidecar once the weights outgrow protobuf's 2 GiB
+    # ceiling. `load_artifact` checks it too, but only when the artifact is
+    # finally loaded -- by which point a corrupt payload has already been copied
+    # into a bundle and shipped. Catching it here fails on the machine that can
+    # still re-export.
+    if manifest.compiled_weights_file:
+        weights_path = path / manifest.compiled_weights_file
+        if (
+            not manifest.compiled_weights_sha256
+            or not weights_path.is_file()
+            or _file_sha256(weights_path) != manifest.compiled_weights_sha256
+        ):
+            raise ArtifactLoadError(f"Artifact {path} has an invalid compiled weights payload.")
 
 
 def _entry_key(manifest: ArtifactManifest) -> str:

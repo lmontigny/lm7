@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 
@@ -146,3 +147,62 @@ def test_bundle_does_not_overwrite_existing_output(tmp_path):
 
     with pytest.raises(FileExistsError, match="already exists"):
         lm7.create_bundle([artifact.path], output=output)
+
+
+def _with_weights_payload(artifact_path, *, contents: bytes = b"weights"):
+    """Give an artifact the weights sibling some backends carry beside the graph.
+
+    Written by hand rather than exported through OpenVINO or ONNX Runtime, so the
+    check stays covered in the portable suite where neither extra is installed.
+    """
+    weights_path = artifact_path / "compiled_model.bin"
+    weights_path.write_bytes(contents)
+    manifest_path = artifact_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["compiled_weights_file"] = weights_path.name
+    manifest["compiled_weights_sha256"] = hashlib.sha256(contents).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return weights_path
+
+
+def test_bundle_carries_a_matching_compiled_weights_payload(tmp_path):
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(1, 4),),
+        target="cpu",
+        output=tmp_path / "model.lm7",
+    )
+    _with_weights_payload(artifact.path)
+
+    bundle = lm7.create_bundle([artifact.path], output=tmp_path / "bundle.lm7")
+
+    entry = bundle.manifest.entries[0]
+    assert (bundle.path / entry["path"] / "compiled_model.bin").read_bytes() == b"weights"
+
+
+def test_bundle_rejects_a_corrupt_compiled_weights_payload(tmp_path):
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(1, 4),),
+        target="cpu",
+        output=tmp_path / "model.lm7",
+    )
+    # Corrupted after the manifest recorded its checksum, which is the case the
+    # bundle build has to catch: copytree would otherwise carry it in unnoticed.
+    _with_weights_payload(artifact.path).write_bytes(b"corrupted")
+
+    with pytest.raises(ArtifactLoadError, match="compiled weights payload"):
+        lm7.create_bundle([artifact.path], output=tmp_path / "bundle.lm7")
+
+
+def test_bundle_rejects_a_missing_compiled_weights_payload(tmp_path):
+    artifact = lm7.export(
+        model(),
+        args=(torch.randn(1, 4),),
+        target="cpu",
+        output=tmp_path / "model.lm7",
+    )
+    _with_weights_payload(artifact.path).unlink()
+
+    with pytest.raises(ArtifactLoadError, match="compiled weights payload"):
+        lm7.create_bundle([artifact.path], output=tmp_path / "bundle.lm7")
