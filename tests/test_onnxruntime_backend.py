@@ -33,6 +33,18 @@ def available_probe() -> BackendInfo:
     return BackendInfo("onnxruntime", "1.28.0", True, "available")
 
 
+def _fake_load(locations: tuple[str, ...]):
+    """Stand in for onnx.load, reporting which sidecars the graph references."""
+
+    def load(path, load_external_data: bool = True):
+        initializer = SimpleNamespace(
+            external_data=[SimpleNamespace(key="location", value=name) for name in locations]
+        )
+        return SimpleNamespace(graph=SimpleNamespace(initializer=[initializer]))
+
+    return load
+
+
 def test_backend_is_registered_and_cpu_support_is_below_openvino(monkeypatch):
     backend = registry.get("onnxruntime")
     assert isinstance(backend, ONNXRuntimeBackend)
@@ -101,7 +113,11 @@ def test_parse_options_accepts_provider_configuration():
     assert settings.provider == "AzureExecutionProvider"
     assert settings.provider_options == {"endpoint": "local"}
     assert settings.disable_cpu_fallback is True
-    assert settings.compiler_options == {"opset_version": 20, "optimize": False}
+    assert settings.compiler_options == {
+        "opset_version": 20,
+        "optimize": False,
+        "external_data": "auto",
+    }
 
 
 def test_parse_options_rejects_unknown_values():
@@ -122,7 +138,7 @@ def test_compile_exported_writes_and_validates_onnx(monkeypatch, tmp_path):
         def check_model(value):
             calls["checked"] = value
 
-    fake_onnx = SimpleNamespace(load=lambda path: ("model", path), checker=Checker())
+    fake_onnx = SimpleNamespace(load=_fake_load(()), checker=Checker())
     backend = ONNXRuntimeBackend()
     monkeypatch.setattr(backend, "probe", available_probe)
     monkeypatch.setattr(
@@ -152,7 +168,7 @@ def test_compile_exported_writes_and_validates_onnx(monkeypatch, tmp_path):
     assert calls["export"]["opset_version"] == 20
     assert calls["export"]["optimize"] is False
     assert calls["save"] == (output, False)
-    assert calls["checked"] == ("model", str(output))
+    assert calls["checked"] == str(output)
 
 
 def test_load_onnx_uses_requested_provider_and_disables_fallback(monkeypatch, tmp_path):
@@ -169,6 +185,11 @@ def test_load_onnx_uses_requested_provider_and_disables_fallback(monkeypatch, tm
         @staticmethod
         def get_inputs():
             return (SimpleNamespace(name="input"),)
+
+        @staticmethod
+        def get_outputs():
+            # Read at construction now: the callable binds outputs by name.
+            return (SimpleNamespace(name="logits"),)
 
         @staticmethod
         def get_providers():
@@ -252,7 +273,11 @@ def test_export_packages_onnx_and_reloads(monkeypatch, tmp_path):
     assert requirements["disable_cpu_fallback"] is False
     assert requirements["provider_options"] == {"arena_extend_strategy": "kSameAsRequested"}
     assert (artifact.path / "compiled_model.onnx").read_bytes() == b"onnx"
-    assert compile_calls[0][2] == {"opset_version": None, "optimize": True}
+    assert compile_calls[0][2] == {
+        "opset_version": None,
+        "optimize": True,
+        "external_data": "auto",
+    }
     torch.testing.assert_close(artifact(example), expected)
 
     loaded = lm7.load_artifact(output)
@@ -266,7 +291,7 @@ def test_corrupt_onnx_fails_checksum_validation(monkeypatch, tmp_path):
     assert isinstance(backend, ONNXRuntimeBackend)
 
     def compile_exported(_program, path, *, options):
-        assert options == {"opset_version": None, "optimize": True}
+        assert options == {"opset_version": None, "optimize": True, "external_data": "auto"}
         Path(path).write_bytes(b"onnx")
         return Path(path)
 
@@ -299,25 +324,143 @@ def test_export_rejects_unvalidated_targets(target, tmp_path):
         )
 
 
-def test_callable_binds_keyword_tensors_by_name_not_call_order():
-    pytest.importorskip("numpy")
-
-    class Session:
-        @staticmethod
-        def get_inputs():
-            # Capture order deliberately differs from the model signature.
-            return (SimpleNamespace(name="y"), SimpleNamespace(name="x"))
-
-        @staticmethod
-        def run(_outputs, feeds):
-            return (feeds["x"] + 10 * feeds["y"],)
-
-    compiled = ort_backend._ONNXRuntimeCallable(Session())
+def test_order_feeds_binds_keyword_tensors_by_name_not_call_order():
+    # Capture order deliberately differs from the caller's.
+    names = ("y", "x")
     x = torch.tensor([1.0])
     y = torch.tensor([2.0])
 
-    signature_order = compiled(x=x, y=y)
-    capture_order = compiled(y=y, x=x)
+    assert ort_backend.order_feeds(names, (), {"x": x, "y": y}) == {"x": x, "y": y}
+    assert ort_backend.order_feeds(names, (), {"y": y, "x": x}) == {"x": x, "y": y}
 
-    torch.testing.assert_close(signature_order, torch.tensor([21.0]))
-    torch.testing.assert_close(capture_order, torch.tensor([21.0]))
+
+def test_order_feeds_fills_unnamed_inputs_left_to_right():
+    x = torch.tensor([1.0])
+    y = torch.tensor([2.0])
+
+    # "y" is named, so the positional tensor can only be "x" -- whichever side of
+    # the capture order it sits on.
+    assert ort_backend.order_feeds(("y", "x"), (x,), {"y": y}) == {"x": x, "y": y}
+    assert ort_backend.order_feeds(("x", "y"), (x, y), {}) == {"x": x, "y": y}
+
+
+def test_order_feeds_rejects_an_argument_count_the_graph_cannot_take():
+    with pytest.raises(ValueError, match="expects 2 tensor inputs, got 1"):
+        ort_backend.order_feeds(("x", "y"), (torch.tensor([1.0]),), {})
+
+
+def test_parse_options_defaults_external_data_to_auto():
+    settings = parse_options(parse_target("cpu"), None)
+
+    assert settings.external_data == "auto"
+    assert settings.compiler_options["external_data"] == "auto"
+
+
+@pytest.mark.parametrize("value", [True, False, "auto"])
+def test_parse_options_accepts_every_external_data_setting(value):
+    settings = parse_options(parse_target("cpu"), {"external_data": value})
+
+    assert settings.external_data == value
+
+
+def test_parse_options_rejects_a_non_boolean_external_data():
+    with pytest.raises(CompilationError, match="external_data must be True, False, or 'auto'"):
+        parse_options(parse_target("cpu"), {"external_data": "yes"})
+
+
+def test_weight_bytes_counts_a_tied_weight_once():
+    tied = torch.nn.Linear(4, 4, bias=False)
+
+    class Tied(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first = tied
+            self.second = tied
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.second(self.first(x))
+
+    exported = torch.export.export(Tied().eval(), (torch.randn(1, 4),))
+
+    # 4x4 float32 once, not twice.
+    assert ort_backend._weight_bytes(exported) == 4 * 4 * 4
+
+
+def test_compile_exported_switches_to_external_data_above_the_limit(monkeypatch, tmp_path):
+    calls = {}
+    output = tmp_path / "model.onnx"
+
+    class ONNXProgram:
+        def save(self, path, *, external_data):
+            calls["save"] = (Path(path), external_data)
+            Path(path).write_bytes(b"onnx")
+            if external_data:
+                ort_backend.external_data_path(Path(path)).write_bytes(b"weights")
+
+    fake_onnx = SimpleNamespace(
+        load=_fake_load((output.name + ".data",)),
+        checker=SimpleNamespace(check_model=lambda value: calls.__setitem__("checked", value)),
+    )
+    backend = ONNXRuntimeBackend()
+    monkeypatch.setattr(backend, "probe", available_probe)
+    monkeypatch.setattr(
+        ort_backend, "_import_module", lambda name: fake_onnx if name == "onnx" else None
+    )
+    monkeypatch.setattr(torch.onnx, "export", lambda program, **kwargs: ONNXProgram())
+    # Any real model is above a zero-byte budget, so "auto" has to choose the sidecar.
+    monkeypatch.setattr(ort_backend, "EMBEDDED_WEIGHT_LIMIT", 0)
+    exported = torch.export.export(model(), (torch.randn(2, 4),))
+
+    backend.compile_exported(exported, output)
+
+    assert calls["save"] == (output, True)
+    assert ort_backend.external_data_path(output).read_bytes() == b"weights"
+
+
+def test_compile_exported_drops_a_sidecar_the_graph_never_references(monkeypatch, tmp_path):
+    # Below roughly a kilobyte the exporter keeps tensors inline whatever it was
+    # asked for, and leaves an empty sidecar behind.
+    output = tmp_path / "model.onnx"
+
+    class ONNXProgram:
+        def save(self, path, *, external_data):
+            Path(path).write_bytes(b"onnx")
+            ort_backend.external_data_path(Path(path)).write_bytes(b"")
+
+    fake_onnx = SimpleNamespace(
+        load=_fake_load(()), checker=SimpleNamespace(check_model=lambda value: None)
+    )
+    backend = ONNXRuntimeBackend()
+    monkeypatch.setattr(backend, "probe", available_probe)
+    monkeypatch.setattr(
+        ort_backend, "_import_module", lambda name: fake_onnx if name == "onnx" else None
+    )
+    monkeypatch.setattr(torch.onnx, "export", lambda program, **kwargs: ONNXProgram())
+    exported = torch.export.export(model(), (torch.randn(2, 4),))
+
+    backend.compile_exported(exported, output, options={"external_data": True})
+
+    assert not ort_backend.external_data_path(output).exists()
+
+
+def test_compile_exported_refuses_a_sidecar_name_it_cannot_package(monkeypatch, tmp_path):
+    output = tmp_path / "model.onnx"
+
+    class ONNXProgram:
+        def save(self, path, *, external_data):
+            Path(path).write_bytes(b"onnx")
+
+    fake_onnx = SimpleNamespace(
+        load=_fake_load(("somewhere-else.bin",)),
+        checker=SimpleNamespace(check_model=lambda value: None),
+    )
+    backend = ONNXRuntimeBackend()
+    monkeypatch.setattr(backend, "probe", available_probe)
+    monkeypatch.setattr(
+        ort_backend, "_import_module", lambda name: fake_onnx if name == "onnx" else None
+    )
+    monkeypatch.setattr(torch.onnx, "export", lambda program, **kwargs: ONNXProgram())
+    exported = torch.export.export(model(), (torch.randn(2, 4),))
+
+    with pytest.raises(CompilationError, match="somewhere-else.bin"):
+        backend.compile_exported(exported, output, options={"external_data": True})

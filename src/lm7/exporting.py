@@ -30,6 +30,7 @@ from .backends.iree_vulkan import IREEVulkanBackend
 from .backends.litert import LiteRTBackend
 from .backends.litert import parse_options as parse_litert_options
 from .backends.onnxruntime import ONNXRuntimeBackend
+from .backends.onnxruntime import external_data_path as onnx_external_data_path
 from .backends.onnxruntime import parse_options as parse_onnxruntime_options
 from .backends.openvino import OpenVINOBackend
 from .backends.openvino import device_for_target as openvino_device_for_target
@@ -583,6 +584,14 @@ def export(
             )
             compiled_file = COMPILED_ONNX_NAME
             compiled_sha256 = _file_sha256(compiled_path)
+            # Weights land in a sidecar once they outgrow protobuf's 2 GiB
+            # message ceiling. It is referenced relatively by the graph, so the
+            # directory rename below carries it without any path rewriting --
+            # but it still needs its own checksum, the same as OpenVINO's .bin.
+            onnx_weights_path = onnx_external_data_path(compiled_path)
+            if onnx_weights_path.is_file():
+                compiled_weights_file = onnx_weights_path.name
+                compiled_weights_sha256 = _file_sha256(onnx_weights_path)
         if backend == "litert":
             litert_backend = _litert_backend()
             probe = litert_backend.probe()
@@ -973,6 +982,13 @@ def load_artifact(path: str | os.PathLike[str]) -> ExportArtifact:
         compiled_path = _verify_payload(
             artifact_path, manifest.compiled_file, manifest.compiled_sha256
         )
+        # Only present for an external-data export. Verified for the same reason
+        # OpenVINO's weights sibling is: ORT reads it implicitly while building
+        # the session, so corruption there would otherwise go unnoticed.
+        if manifest.compiled_weights_file:
+            _verify_payload(
+                artifact_path, manifest.compiled_weights_file, manifest.compiled_weights_sha256
+            )
         requirements = manifest.runtime_requirements or {}
         compiled_callable = _onnxruntime_backend().load_onnx(
             compiled_path,

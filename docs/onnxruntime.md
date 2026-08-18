@@ -88,6 +88,15 @@ The artifact contains `compiled_model.onnx`, its checksum, the source `.pt2`
 program, and runtime settings in the manifest. Loading verifies both payloads
 before creating the session.
 
+A model whose weights approach protobuf's 2 GiB message ceiling gets them in a
+`compiled_model.onnx.data` sidecar instead, carried as a second payload with its
+own checksum — the same shape as the OpenVINO backend's `.bin`. The graph
+references the sidecar by relative name, so it has to stay beside the `.onnx`,
+which is what an artifact directory gives it. It is verified on load for the
+reason OpenVINO's is: ONNX Runtime reads it implicitly while building the
+session, so corruption there would otherwise surface as wrong numbers rather
+than as an error.
+
 Bounded dynamic shapes captured through `ShapeProfile` are retained by the ONNX
 exporter. The integration suite exercises one artifact at batch sizes 1, 5, and
 8 after a batch range of 1–8 was captured.
@@ -105,6 +114,7 @@ compiled = lm7.compile(
         "disable_cpu_fallback": True,
         "opset_version": 20,
         "optimize": True,
+        "external_data": "auto",
     },
 )
 ```
@@ -117,6 +127,13 @@ compiled = lm7.compile(
 - `opset_version` selects the ONNX opset; the default lets the installed PyTorch
   exporter choose.
 - `optimize` controls the PyTorch ONNX exporter's graph optimization pass.
+- `external_data` decides whether weights are written beside the graph rather
+  than embedded in it. `"auto"`, the default, embeds them until they approach
+  protobuf's 2 GiB ceiling. `True` and `False` ask for one or the other, and are
+  requests rather than instructions: the exporter keeps tensors under roughly a
+  kilobyte inline whatever it was told, and writes a sidecar above the ceiling
+  whatever it was told. The manifest and `compiled.artifact.metadata` record
+  what happened, not what was asked for.
 
 ONNX Runtime execution providers are ordered and can normally partition a graph
 across providers. LM7 intentionally configures one requested provider and uses
@@ -126,19 +143,32 @@ runs. See the official [execution-provider overview](https://onnxruntime.ai/docs
 ## Validated coverage and limitations
 
 - FP32 MLP execution is validated on CPU and an NVIDIA GeForce RTX 4070 SUPER.
-- CUDA validation used ONNX Runtime GPU 1.27 with PyTorch 2.13 CUDA 13 and CPU
-  fallback disabled.
+- CUDA validation used ONNX Runtime GPU 1.27 or newer with PyTorch 2.13 CUDA 13
+  and CPU fallback disabled. The I/O binding below was run on 1.29.
 - A fixed-shape SmolLM2-135M logits graph exported to a 542 MB embedded-weight
   ONNX file. ONNX Runtime CPU matched the eager next-token result and had maximum
   full-logit error below `6e-5`.
 - Bounded dynamic batch execution is validated for a small MLP. Dynamic causal-
   LM sequence lengths and KV-cache decode graphs are not yet claimed.
-- Inputs must be tensors. Outputs are returned as a tensor or a flat tuple of
-  tensors on the CPU, even when the execution provider is CUDA; this initial
-  adapter uses NumPy feeds and outputs rather than ORT I/O binding.
-- Weights are embedded in one ONNX file so LM7 can checksum one payload. Models
-  whose serialized ONNX protobuf exceeds the 2 GiB limit need external-data
-  packaging, which is future work.
+- Inputs must be tensors, and may already sit on the session's device. Outputs
+  come back on the device that produced them, because the adapter binds torch
+  storage through ONNX Runtime's I/O binding rather than feeding NumPy. Checked
+  on an RTX 4070 SUPER (Ada `sm89`, 12 GiB) through `CUDAExecutionProvider` with
+  CPU fallback disabled, for FP32 and bfloat16. **This is not a throughput
+  measurement.** What was verified is that the tensors stay put and still match
+  eager; how much time the removed copies were costing has not been measured.
+- Weights move to a `compiled_model.onnx.data` sidecar when they approach
+  protobuf's 2 GiB message ceiling, and the artifact carries it as a second
+  payload with its own checksum. `external_data="auto"` decides by measuring the
+  exported program's weights, counting a tied weight once.
+- The largest export run is **Llama-3.2-1B-Instruct at FP32**, 4.60 GiB of
+  weights, as a fixed-shape logits graph on an x86-64 host: a 2.04 MiB graph
+  beside a 4.60 GiB sidecar, 66 s to convert, 11.2 GiB peak RSS. Reloaded through
+  `CPUExecutionProvider` it matched eager to a maximum full-logit error of
+  `2.1e-5` and produced the same next token. Before the sidecar existed the same
+  export failed in the ONNX checker with protobuf's `Failed to serialize proto` —
+  the checker is now handed the path rather than a resolved in-memory model, so
+  it never has to hold one.
 - Operator coverage is bounded by both PyTorch's ONNX exporter and the selected
   ONNX Runtime execution provider. `fallback="error"` exposes failures directly.
 
