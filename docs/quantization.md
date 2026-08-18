@@ -257,8 +257,9 @@ is long-lived or the artifact is reused.
 ## Activation quantization
 
 The dynamic modes quantize activations at runtime alongside the weights, so the
-matmul executes in the narrow format. They need `sm89` (FP8) or `sm100` (NVFP4),
-and they are the only modes here that have ever beaten their BF16 baseline.
+matmul executes in the narrow format. INT8 needs `sm80`, FP8 needs `sm89`, and
+NVFP4 needs `sm100`. They are the only modes here that have ever beaten their
+BF16 baseline.
 
 ```bash
 lm7 model run hf://unsloth/Llama-3.2-1B-Instruct \
@@ -297,6 +298,44 @@ arithmetic to pay for quantizing the activations on every call.
 worse than the 6.2x the same mode costs on a whole model. Something about the
 Blackwell INT8 dequantization path is badly served at these shapes. Recorded
 rather than explained; it has not been investigated.
+
+### INT8 on RTX 4070 SUPER: the two modes answer different questions
+
+The same linear benchmark on Ada `sm89`, `torch 2.13.0+cu130`, TorchAO 0.17.0,
+median of 30 after 5 warmup calls:
+
+| M × K × N | BF16 | `int8` | `int8-dynamic` |
+| --- | --- | --- | --- |
+| 128 × 4096 × 4096 | 0.730 ms | 12.61x | **0.33x** |
+| 256 × 4096 × 4096 | 0.290 ms | 56.97x | **0.88x** |
+| 1024 × 4096 × 4096 | 0.591 ms | 109.87x | **0.60x** |
+| 128 × 8192 × 8192 | 0.855 ms | 38.37x | **0.90x** |
+
+The absolute baseline timings vary with shape and compilation choice; the ratio
+within each row is the comparison to read. Weight-only INT8 loses everywhere,
+while activation-plus-weight INT8 wins everywhere measured. At
+128 × 4096 × 4096 it emits native `_int_mm` and is 3.05x faster than BF16.
+Relative error against the BF16 output is 0.95–1.08% for `int8-dynamic`.
+
+That does **not** make `int8-dynamic` ready for language-model serving. The CUDA
+`_int_mm` selected by this PyTorch stack requires flattened M > 16. The
+Llama-3.2-1B benchmark uses a six-token prompt, emits `_int_mm` with a
+`(6, 2048)` activation, and fails with `self.size(0) needs to be greater than 16`.
+Single-token decode is smaller still. TorchAO 0.17's version-2 INT8 tensor path
+does not honor its older `weight_only_decode` fallback, so LM7 cannot safely
+switch kernels for those calls from configuration alone.
+
+Making M larger removes the kernel failure but does not make the whole model
+faster. Repeating the latency prompt to 83 tokens gave 10.219 ms for BF16 and
+16.185 ms for `int8-dynamic` — a 1.58x regression — on the same RTX 4070 SUPER.
+The isolated GEMMs win, but activation quantization and the rest of the model
+cost more than they save at this sequence length.
+
+For that reason `int8-dynamic` remains outside the validated-model allowlist.
+It is a useful isolated GEMM for M > 16, not currently a drop-in replacement
+for BF16 across prefill and decode. Weight-only `int8` remains the memory-saving
+mode; its poor latency is real rather than a benchmark accidentally quantizing
+activations.
 
 ### On a real model, where the shape is small
 
