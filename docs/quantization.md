@@ -1,8 +1,9 @@
 # Quantization
 
 Quantization stores or computes a tensor in fewer bits than the model was trained
-in. There are two halves to it, and **LM7 implements both** — the second only
-recently, and only on NVIDIA.
+in. There are two halves to it, and **LM7 implements both**. Dynamic activation
+quantization is newer and target-specific: INT8 is NVIDIA-only, FP8 reaches
+NVIDIA and AMD, and dynamic NVFP4 requires NVIDIA Blackwell.
 
 ## Weight versus activation quantization
 
@@ -18,11 +19,14 @@ come from, because it cuts arithmetic work rather than just bytes moved. The cos
 is that activation ranges depend on the input, so the scales have to be chosen at
 runtime or from calibration data, and accuracy degrades more readily.
 
-The distinction is not cosmetic, and it is the reason every weight-only mode in
-this document is *slower* than its BF16 baseline while the activation modes are
-the only ones that have ever been faster. A weight-only kernel still issues a
-BF16 matmul; it just reads narrower bytes on the way in. Only an activation mode
-asks the tensor cores to multiply in the narrow format. This was
+The distinction is not cosmetic. Almost every weight-only result in this
+document is slower than its unquantized baseline, while activation modes are the
+only family that repeatedly wins. The small weight-only exceptions are FP8 at
+0.97x on one H100 model and INT8 at 0.89x on Emerald Rapids under a newer
+TorchAO; neither establishes a general speedup. A weight-only kernel still issues
+a higher-precision matmul; it just reads narrower
+bytes on the way in. Only an activation mode asks the tensor cores to multiply in
+the narrow format. This was
 [verified at kernel level](#verifying-that-the-narrow-kernel-actually-ran) rather
 than assumed.
 
@@ -35,17 +39,18 @@ Bare names are weight-only. The `-dynamic` names quantize activations too.
 | `none` (default) | as loaded | — | all | FP32 / FP16 / BF16 |
 | `int8` | INT8 | BF16 | NVIDIA Ampere (`sm80`) or newer, **CPU** | BF16 on NVIDIA, FP32 on CPU |
 | `int8-dynamic` | INT8 | **INT8, quantized per call** | NVIDIA Ampere (`sm80`) or newer | BF16 accumulate |
-| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`), Hopper (`sm90`), or newer | BF16 |
+| `fp8` | FP8 | BF16 | NVIDIA Ada (`sm89`) or newer; AMD with native FP8 (measured `gfx942`) | BF16 |
 | `nvfp4` | NVFP4 — 4-bit, one FP8 scale per 16 values | BF16 | NVIDIA Ampere (`sm80`) or newer | BF16 |
-| `fp8-dynamic` | FP8 | **FP8, quantized per call**, one scale per tensor | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
-| `fp8-dynamic-rowwise` | FP8 | **FP8, quantized per call**, one scale per row | NVIDIA Ada (`sm89`) or newer | BF16 accumulate |
+| `fp8-dynamic` | FP8 | **FP8, quantized per call**, one scale per tensor | NVIDIA Ada (`sm89`) or newer; AMD with native FP8 (measured `gfx942`) | BF16 accumulate |
+| `fp8-dynamic-rowwise` | FP8 | **FP8, quantized per call**, one scale per row | NVIDIA Ada (`sm89`) or newer; AMD with native FP8 (measured `gfx942`) | BF16 accumulate |
 | `nvfp4-dynamic` | NVFP4 | **NVFP4, quantized per call** | NVIDIA **Blackwell** (`sm100`, `sm120`) | BF16 accumulate |
 
-`int8-dynamic` fixes the operand mismatch in the weight-only path: it uses
-TorchAO's `Int8DynamicActivationInt8WeightConfig(version=2)` so the compiled
-matmul receives INT8 activations and INT8 weights. It remains outside the
-validated-model allowlist until its fidelity and generated kernels are measured
-on real hardware.
+`int8-dynamic` is the native-arithmetic counterpart to weight-only `int8`: it
+uses TorchAO's `Int8DynamicActivationInt8WeightConfig(version=2)` so the compiled
+matmul receives INT8 activations and INT8 weights. Real RTX 4070 measurements
+confirm that `_int_mm` runs and isolated GEMMs can win, but short-M calls fail and
+an 83-token Llama prefill is slower end to end. It therefore remains outside the
+validated-model allowlist; see [the Ada results](#int8-on-rtx-4070-super-the-two-modes-answer-different-questions).
 
 The two FP8 dynamic rows differ only in scale granularity, and the difference is
 worth a mode of its own because it is not visible from the call site: TorchAO's
@@ -71,11 +76,11 @@ only on Blackwell.
 > `fp8-weight-only`.
 
 Quantization pins the compute dtype so measurements stay comparable, and the
-dtype is target-specific: BF16 on NVIDIA, FP32 on CPU. `--dtype` must be `auto`
+dtype is target-specific: BF16 on NVIDIA and AMD, FP32 on CPU. `--dtype` must be `auto`
 or that target's dtype, and `auto` resolves to it. For the TorchAO path
 `--backend` must be `auto` or `inductor`. Anything else raises
 `UnsupportedModelError` rather than silently degrading — including a mode on a
-target it was not measured on, an FP8 request on pre-Ada hardware, and any
+target it was not measured on, an FP8 request without native FP8 hardware, and any
 (model, mode) pair outside the validated list.
 
 **`--backend openvino --quantize int8` is a second, faster route on Intel CPU**,
@@ -90,8 +95,8 @@ path, so forcing BF16 there would measure emulation rather than the format.
 
 ## Why weight-only quantization needs Ampere or newer
 
-The same emulation argument rules out pre-Ampere NVIDIA, which is why every mode
-above requires at least `sm80`. Measured on a Tesla T4 (Turing, `sm75`) with
+The same emulation argument rules out pre-Ampere NVIDIA, which is why every
+NVIDIA mode above requires at least `sm80`. Measured on a Tesla T4 (Turing, `sm75`) with
 SmolLM2-135M at sequence length 16, against an unquantized baseline in the same
 compute dtype:
 
@@ -99,8 +104,8 @@ compute dtype:
 | --- | --- | --- | --- |
 | unquantized FP16 | **17.5 ms** | 4/4 | the baseline to beat |
 | unquantized BF16 | 60.3 ms | 4/4 | 3.4x slower — BF16 is emulated on `sm75` |
-| INT8 + BF16 | 58.0 ms | **3/4** | 3.3x slower than not quantizing |
-| INT8 + FP16 | 13.5 ms | **0/4** | **NaN logits** |
+| weight-only INT8 + BF16 | 58.0 ms | **3/4** | 3.3x slower than not quantizing |
+| weight-only INT8 + FP16 | 13.5 ms | **0/4** | **NaN logits** |
 
 Neither compute dtype works. BF16 is the numerically sound choice but Turing fakes
 it, so INT8 ends up 3.3x *slower* than simply running FP16 — and it drops a top-1
@@ -119,8 +124,9 @@ had only ever been exercised against a synthetic `TargetSpec`.
 > [!NOTE]
 > `lm7 model export --quantize int8` is a **different mechanism**: calibrated
 > XNNPACK post-training quantization inside the ExecuTorch backend, which
-> quantizes activations too. Everything on this page is the TorchAO weight-only
-> path used by `lm7 model run`. See the [ExecuTorch guide](executorch.md).
+> quantizes activations too. The eager/Inductor run modes on this page use
+> TorchAO; the bare names are weight-only and the `-dynamic` names also quantize
+> activations. See the [ExecuTorch guide](executorch.md).
 
 `--quantize` replaced `--quantization`, and the long-form values it took
 (`int8-weight-only`, `fp8-weight-only`) are still accepted and normalized onto
@@ -128,7 +134,9 @@ the short names.
 
 ## Which layers are converted
 
-This differs between modes, and it changes the memory saving you should expect:
+This differs between format families, and it changes the memory saving you
+should expect. Each dynamic mode selects the same layers as its weight-only
+counterpart:
 
 - `int8` converts **every `nn.Linear` except `lm_head`** — attention projections
   included.
@@ -147,13 +155,17 @@ lands directly on the token distribution.
 ## TorchAO
 
 The conversion itself is [TorchAO](https://github.com/pytorch/ao)'s, not LM7's.
-LM7 pins `torchao==0.17.0` and calls `torchao.quantization.quantize_()` with
-`Int8WeightOnlyConfig`, `Float8WeightOnlyConfig`, or `NVFP4WeightOnlyConfig`,
-passing a module filter that selects the layers above.
+LM7 pins `torchao==0.17.0` and calls `torchao.quantization.quantize_()` with the
+weight-only configs (`Int8WeightOnlyConfig`, `Float8WeightOnlyConfig`, and
+`NVFP4WeightOnlyConfig`) or their dynamic-activation counterparts
+(`Int8DynamicActivationInt8WeightConfig`,
+`Float8DynamicActivationFloat8WeightConfig`, and
+`NVFP4DynamicActivationNVFP4WeightConfig`), passing a module filter that selects
+the layers above.
 
 > [!NOTE]
-> `NVFP4WeightOnlyConfig` lives in `torchao.prototype.mx_formats`. Prototype
-> carries no API stability promise, and the symbol has moved between releases,
+> The two NVFP4 configs live in `torchao.prototype.mx_formats`. Prototype
+> carries no API stability promise, and the symbols have moved between releases,
 > which is why LM7 pins TorchAO exactly and reports a pin-specific error rather
 > than letting an `ImportError` escape.
 
@@ -198,15 +210,19 @@ The Blackwell column reproduces with:
 
 ```bash
 python benchmarks/quantization.py --model llama32-1b --dtype bfloat16 \
+  --mode none int8 fp8 nvfp4 \
   --output artifacts/quantization.json
 ```
 
-That harness sweeps every mode against one baseline in a single process and
+That harness sweeps the requested weight-only modes against one baseline and
 reports footprint, accuracy, and latency together. It measures accuracy eagerly
 and latency compiled, on the reasoning that weight-only error belongs to the
 weights while the latency anyone cares about belongs to the compiled path.
 Before it existed these numbers were collected one `lm7 model run` at a time,
-which is why the Ada column cannot be reproduced prompt-for-prompt.
+which is why the Ada column cannot be reproduced prompt-for-prompt. Treat its
+7.30x INT8 ratio as a historical stack result: the current Torch 2.13/TorchAO
+0.17 run measured 9.197 ms BF16 and 38.392 ms weight-only INT8, a 4.17x
+regression. The magnitude changed; the conclusion did not.
 
 The Blackwell stack was `torch 2.13.0+cu130`, `torchao 0.17.0+cu130`,
 `transformers 5.14.1`, driver 580.126.20. PyTorch ships `sm_120` kernels, so no
@@ -540,8 +556,9 @@ latency**; only rowwise-on-1B is faster than not quantizing at all.
 
 ## INT8 on CPU
 
-INT8 is the only mode measured off NVIDIA. It converts the same layers, keeps
-the same 4/4 top-1 agreement, and gives a slightly *better* footprint ratio than
+INT8 is the only TorchAO mode admitted on CPU. (FP8 has also been measured off
+NVIDIA, on AMD.) Weight-only INT8 converts the same layers, keeps the same 4/4
+top-1 agreement in this table, and gives a slightly *better* footprint ratio than
 on GPU, because the CPU baseline is FP32 rather than BF16:
 
 | model | top-1 | max logit diff | storage | FP32 | INT8 |
@@ -569,7 +586,7 @@ is `" a"`, not the `" Paris"` the smaller models produce. That is the instruct
 checkpoint continuing raw text without its chat template, and it is not a
 quantization artifact: FP32 and INT8 agree on it, which is all this check asks.
 
-### Size makes INT8 more accurate and no faster
+### On the original CPU runs, size makes INT8 more accurate and no faster
 
 The 8B row was run to test an obvious hypothesis: that weight-only INT8 should
 pay off at scale, where a decode step is more bandwidth-bound and the
@@ -581,11 +598,12 @@ dequantization overhead is amortized over more arithmetic. **It does not.**
 | Llama-3.2-1B | 1.24B | 0.76 | 2.26x slower |
 | Llama-3.1-8B | 8.03B | 0.50 | 2.66x slower |
 
-Across a 60x range of model size the regression gets *worse*, not better, though
-the growth is flattening. It never reverses. The explanation in the VNNI section
-below is size-independent — an FP32 GEMM against a dequantize-then-FP32-GEMM is
-strictly more work at any scale — so there is no model size at which this path
-becomes a speedup on CPU.
+Across this three-row comparison the regression gets *worse*, not better, though
+the growth is flattening. That is a result for these hosts and this TorchAO
+version, not a universal CPU rule: the later Emerald Rapids run under TorchAO
+0.18 records a 1.12x weight-only win whose cause is not established. Narrow
+weight reads can save bandwidth even though the GEMM itself remains FP32, so
+latency has to be measured rather than inferred from arithmetic alone.
 
 Accuracy moves the other way, and cleanly: the maximum logit difference falls
 monotonically as the model grows, and 8B is the tightest INT8 result measured
@@ -594,10 +612,10 @@ weight redundancy rising with scale, and it is the part of the "quantization
 works better on big models" intuition that survives contact with these
 measurements.
 
-The practical read: on CPU, INT8 weight-only buys footprint — 32.1 GB down to
-11.2 GB, which is the difference between a model fitting in RAM and not — at a
-cost of roughly 2.7x latency. That is a good trade when the alternative is not
-running the model at all, and a bad one otherwise.
+The practical read for the 8B EPYC row: INT8 weight-only buys footprint — 32.1
+GB down to 11.2 GB, which is the difference between a model fitting in RAM and
+not — at a cost of roughly 2.7x latency. That is a good trade when the
+alternative is not running the model at all, and a bad one otherwise.
 
 > [!NOTE]
 > An earlier revision of this table reported SmolLM2-135M INT8 at `~50 ms`, i.e.
@@ -625,7 +643,7 @@ Cascade Lake Xeon with `avx512f` **and** `avx512_vnni`:
 The 1B regression survives VNNI intact — 2.3–2.7x on AVX2 against 1.9–3.4x on
 VNNI, ranges that overlap completely.
 
-**Why the hardware cannot help.** TorchAO's `Int8WeightOnlyConfig` is
+**Why VNNI does not help this path.** TorchAO's `Int8WeightOnlyConfig` is
 *weight-only*: activations stay FP32, so the kernel dequantizes the weights and
 runs an **FP32** GEMM. `vpdpbusd` computes INT8×INT8→INT32 and therefore needs
 quantized *activations* to be reachable at all. There is no INT8 GEMM in this path
@@ -685,26 +703,19 @@ declined in *both* runs for `unsupported datatype combination` — they are neve
 offered INT8 operands to work on, because weight-only quantization dequantizes
 before the GEMM.
 
-So the VNNI explanation above was right, and it was never about VNNI. Weight-only
-INT8 issues no INT8 GEMM on any of the three ISAs measured, which is why no
-INT8 hardware — `vpdpbusd`, `i8mm`, or presumably `amx_int8` — can reach it. The
-extra 35% is dequantization bolted onto a matmul that was going to run in FP32
-regardless.
+So the kernel evidence agrees across AVX2, VNNI, and Arm `i8mm`: weight-only
+INT8 issues no INT8 GEMM on those hosts. Their INT8 dot-product instructions
+cannot accelerate a path that presents the library with FP32 operands; the extra
+time is dequantization around a matmul that was going to run in FP32 regardless.
 
-Untested, and therefore still unclaimed: AMX (`amx_int8`), which neither that
-Xeon nor this Arm part has. It is now the only INT8 hardware in this table
-without a measurement, and the mechanism above predicts it will not help either
-— but that is a prediction, not a result.
+AMX is measured later on Emerald Rapids, where the TorchAO row becomes 1.12x
+faster. No oneDNN primitive log is available there, and that run also changes
+TorchAO from 0.17 to 0.18, so it does not establish that AMX-INT8 caused the win;
+see [the Emerald Rapids result](#the-torchao-row-inverts-on-emerald-rapids-and-the-reason-is-not-established).
 
 What is reliable on CPU is the footprint: **2.44x smaller, at no measured
 accuracy cost**, which is the difference between a 513 MiB and a 210 MiB
 SmolLM2.
-
-> [!WARNING]
-> An earlier draft of this page reported INT8 on CPU as 4.5x slower. That number
-> came from a harness that built six quantization configs in one process, and it
-> did not reproduce: measured one configuration per process, INT8 is at parity
-> for SmolLM2. The table above is the isolated measurement.
 
 ## INT8 through OpenVINO, for an artifact rather than a process
 
@@ -1053,18 +1064,20 @@ unmeasured here.
   through the same dequantization path, but it kept only 2 of 4 top-1 tokens
   there and ran 8.5x slower than compiled FP32, so it stays NVIDIA-only. No
   Apple, Intel XPU, or TPU path exists.
-- **It can be slower.** Weight-only quantization trades arithmetic for
-  bandwidth. At small batch sizes, where a decode step is already
+- **It can be slower.** Weight-only quantization trades extra unpack or
+  dequantization work for lower weight bandwidth. At small batch sizes, where a decode step is already
   memory-bound per token but the dequantization overhead is paid on every
   matmul, the net can go the wrong way. This is why it is opt-in rather than a
   default, and why the run reports latency alongside footprint. Compiled,
-  **every mode was slower than the BF16 baseline on both GPUs measured** — by
-  1.6x (`fp8`), 2.5x (`nvfp4`) and 7.3x (`int8`) on sm89, and by 1.17x, 1.24x
-  and 6.0x on sm120. Newer silicon shrinks the penalty substantially without
-  removing it. CPU is the one place where a mode came out even: INT8 is at
-  parity for SmolLM2-135M and 2.6x slower for Llama-3.2-1B. Treat the footprint
-  saving as the reliable benefit and latency as something to measure per model
-  *and* per target.
+  **every weight-only mode was slower in the Ada/Blackwell comparison** — by
+  1.6x (`fp8`), 2.5x (`nvfp4`) and 7.3x (`int8`) on sm89, and by 1.17x,
+  1.24x and 6.0x on sm120. A separate H100 run has one marginal exception:
+  weight-only FP8 at 0.97x on Llama-3.2-1B, which does not repeat on the 8B.
+  Newer silicon therefore changes the penalty but does not guarantee removing
+  it. CPU results span a 1.12x win on Emerald Rapids, an ambiguous
+  noisy VNNI result, and 1.35–2.66x regressions on the other measured hosts.
+  Treat the footprint saving as the reliable benefit and latency as something
+  to measure per model, target, and toolchain.
 - **A validated pair is not a general guarantee.** It means those prompts
   agreed on that GPU or CPU. It does not establish behaviour across long
   contexts, batch sizes, or downstream task accuracy, none of which are
@@ -1074,12 +1087,14 @@ unmeasured here.
   embeddings, norms, `lm_head`, and (for FP8) attention all stay in BF16. A
   single NVFP4 linear is 3.56x smaller than its BF16 original, but Llama-3.2-1B
   as a whole is only 2.30x smaller.
-- **Activation quantization is NVIDIA-only and dynamic-only.** `fp8-dynamic`,
-  `fp8-dynamic-rowwise` and `nvfp4-dynamic` quantize activations at runtime;
-  static calibrated scaling, INT8 dynamic activations, and mixed pairings such as
-  FP8 activations with INT4 weights are not wired up. Four pairs are admitted:
-  Llama-3.2-1B and Llama-3.1-8B, each with `fp8-dynamic` and
-  `fp8-dynamic-rowwise`. `nvfp4-dynamic` is admitted for nothing.
+- **Activation quantization is dynamic-only and target-specific.** INT8 dynamic
+  activations are wired up on NVIDIA but have no admitted model pair because the
+  current kernel fails at short M and loses end to end at 83 tokens. The two FP8
+  dynamic modes reach NVIDIA and AMD; dynamic NVFP4 requires NVIDIA Blackwell.
+  Static calibrated scaling and mixed pairings such as FP8 activations with INT4
+  weights are not wired up. Four pairs are admitted: Llama-3.2-1B and
+  Llama-3.1-8B, each with `fp8-dynamic` and `fp8-dynamic-rowwise`.
+  `nvfp4-dynamic` is admitted for nothing.
 - **Per-row scaling is measured on one card.** The `fp8-dynamic-rowwise` numbers
   are all `sm90`. The mode's `sm89` floor is a capability gate, not a
   measurement — it has never been run on Ada, and the `sm120` tables above
