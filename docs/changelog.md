@@ -24,6 +24,7 @@ file stays a index rather than a second, drifting description.
 | [#44](https://github.com/lmontigny/lm7/pull/44) | Add zentorch, AMD's ZenDNN compiler, as a CPU backend |
 | [#51](https://github.com/lmontigny/lm7/pull/51) | Add ExecuTorch QNN backend |
 | [#126](https://github.com/lmontigny/lm7/pull/126) | Make Arm Mali expressible as a target, without pretending it runs |
+| [#217](https://github.com/lmontigny/lm7/pull/217) | Bind ONNX Runtime I/O and package weights over 2 GiB |
 
 ## Quantization
 
