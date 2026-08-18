@@ -106,7 +106,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 >
 > **Arm:** Neoverse N2/N3 CPU
 >
-> **Apple:** M3 Pro · M4 · M4 Pro
+> **Apple:** M3 Pro · M4 · M4 Pro· iPhone
 >
 > **Google:** TPU v6e
 >
