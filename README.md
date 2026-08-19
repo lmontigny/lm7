@@ -18,6 +18,17 @@ compiled = lm7.compile(model.eval(), target="auto")
 output = compiled(example_input)
 ```
 
+**See what this machine can actually run before touching your model:**
+
+```bash
+lm7 doctor          # human-readable capability report
+lm7 doctor --json   # the same data for CI and fleet inventory
+```
+
+`lm7 doctor` reports Python and PyTorch versions, detected hardware, native and
+emulated precision, available backends, missing dependencies, and visible
+Vulkan devices.
+
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
 > compiled-artifact compatibility are not stable. See
@@ -252,10 +263,18 @@ LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
 does **not** install GPU drivers, CUDA or ROCm, Xcode, PyTorch/XLA, or vendor
 toolchains.
 
+Install uv once inside Linux, macOS, or WSL:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+```
+
 ```bash
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
 uv venv --python 3.12
+source .venv/bin/activate
 uv pip install torch --torch-backend=auto
 uv pip install -e .
 ```
