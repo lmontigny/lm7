@@ -21,8 +21,8 @@ output = compiled(example_input)
 **See what this machine can actually run before touching your model:**
 
 ```bash
-uv run --no-sync lm7 doctor          # human-readable capability report
-uv run --no-sync lm7 doctor --json   # the same data for CI and fleet inventory
+lm7 doctor          # human-readable capability report
+lm7 doctor --json   # the same data for CI and fleet inventory
 ```
 
 `lm7 doctor` reports Python and PyTorch versions, detected hardware, native and
@@ -272,23 +272,20 @@ source "$HOME/.local/bin/env"
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
 uv venv --python 3.12
+source .venv/bin/activate
 uv pip install torch --torch-backend=auto
 uv pip install -e .
 ```
-
-`uv run --no-sync` executes the editable install already in `.venv` without
-asking uv to resolve every hardware-specific optional backend or replace the
-chosen PyTorch build. Activating the virtual environment is optional.
 
 You still install the driver and compiler/runtime required by your hardware.
 LM7 removes the per-vendor application glue and tells you what is missing
 through `lm7 doctor`.
 
 ```bash
-uv run --no-sync lm7 doctor
-uv run --no-sync lm7 targets
-uv run --no-sync lm7 backends
-uv run --no-sync lm7 explain --target auto
+lm7 doctor
+lm7 targets
+lm7 backends
+lm7 explain --target auto
 ```
 
 Then compile a model without hard-coding its device:
