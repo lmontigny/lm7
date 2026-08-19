@@ -144,6 +144,30 @@ gets, and 1.23x is the same measurement at 1B, where GEMM time dominates. Every
 arm produced byte-identical text.
 [Method and full table](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
+### What `torch.compile` buys on RTX
+
+Direct PyTorch, with no LM7 in either arm, on the local RTX 4070 SUPER. FP16,
+batch 1, `mode="reduce-overhead"`, median of 100 forward calls after 5 warmups:
+
+| model | eager | `torch.compile` | speedup | compiled first call |
+| --- | ---: | ---: | ---: | ---: |
+| SmolLM2-135M | 70.867 ms | **4.455 ms** | **15.91x** | 63.95 s |
+| LFM2.5-230M | 27.972 ms | **2.492 ms** | **11.22x** | 26.73 s |
+| Qwen3.5-0.8B* | 445.972 ms | **18.259 ms** | **24.42x** | 399.70 s |
+| Llama-3.2-1B | 38.721 ms | **17.982 ms** | **2.15x** | 35.07 s |
+| DeepSeek-Coder-1.3B | 51.035 ms | **8.297 ms** | **6.15x** | 37.59 s |
+
+The ratio does not follow parameter count. These short batch-1 forwards launch
+many small kernels, so layer structure and CUDA Graph eligibility matter more
+than model size alone. Compilation is also paid up front: these are steady-state
+numbers for repeated fixed-shape inference, not startup latency or
+autoregressive decode.
+
+\* Qwen used Transformers' pure-PyTorch fallback because the optional
+`flash-linear-attention` and `causal-conv1d` kernels were absent. Its 24.42x
+speedup and 399.70 s first call describe that fallback, not a fully optimized
+Qwen installation. [Method, memory, and environment](docs/inductor-options.md#rtx-4070-super-eager-versus-reduce-overhead); [H100 rerun command](docs/development.md#gpu-benchmarks).
+
 ### What the layer costs
 
 ![Grouped bar chart comparing direct torch.compile with lm7.compile for SmolLM2-135M on an Apple M3 Pro and RTX 4070 SUPER. Both seven-run ranges overlap within each platform.](docs/figures/lm7-overhead-platforms.png)

@@ -229,6 +229,42 @@ python benchmarks/gpu.py --target nvidia --model smollm2 \
 Run each configuration in a fresh process. Inductor caches compiled code, and a
 warm cache can otherwise make the second configuration appear to compile faster.
 
+### RTX 4070 SUPER: eager versus `reduce-overhead`
+
+The direct PyTorch arms in `benchmarks/gpu.py` implement the synchronized
+eager-versus-compiled comparison above without putting LM7 in either timed call.
+On the local RTX 4070 SUPER (`sm89`, 12 GiB), PyTorch 2.13.0+cu130,
+Transformers 5.14.1, FP16, batch 1, five warmups and 100 measured forward calls:
+
+| model | eager median | `torch.compile` median | speedup | eager / compiled peak | compiled first call |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SmolLM2-135M | 70.867 ms | **4.455 ms** | **15.91x** | 265.2 / 265.5 MiB | 63.95 s |
+| LFM2.5-230M | 27.972 ms | **2.492 ms** | **11.22x** | 450.0 / 628.1 MiB | 26.73 s |
+| Qwen3.5-0.8B* | 445.972 ms | **18.259 ms** | **24.42x** | 1477.1 / 2005.9 MiB | 399.70 s |
+| Llama-3.2-1B | 38.721 ms | **17.982 ms** | **2.15x** | 2367.7 / 2918.3 MiB | 35.07 s |
+| DeepSeek-Coder-1.3B | 51.035 ms | **8.297 ms** | **6.15x** | 2612.6 / 2786.9 MiB | 37.59 s |
+
+The 135M number is a launch-overhead result, not a general model-speedup claim.
+It has 30 small decoder layers, and `reduce-overhead` requests CUDA Graph replay;
+a separate matrix cell on the same host recorded capture active with zero skips
+and reproduced the compiled latency at 4.348 ms. Across the model ladder the
+speedup is not monotonic with parameter count: layer count, kernel size, graph
+eligibility and model implementation all affect how much launch overhead remains.
+The first compiled calls also make the amortization trade visible. Use the
+default mode or a larger batch when startup cost or CUDA Graph memory is a worse
+trade for the workload.
+
+\* Qwen printed that its optional `flash-linear-attention` and
+`causal-conv1d` implementations were unavailable and ran Transformers' pure
+PyTorch fallback. Its 24.42x ratio and 399.70 s first call are useful evidence
+that Inductor can collapse that fallback, but they are not representative of a
+Qwen installation with the fast kernels. Keep that dependency state identical
+when comparing GPUs.
+
+These are full forward passes over the short prompt `The capital of France is`,
+whose token count varies by tokenizer, not autoregressive decode timings. Decode
+has a different cache shape and is measured by `benchmarks/decode.py`.
+
 A short fresh-process smoke check on this project's RTX 4070, PyTorch 2.13.0
 with CUDA 13.0, used the FP16 MLP at batch size 8 with one warmup and three
 measured calls:

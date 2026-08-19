@@ -378,5 +378,33 @@ slower than the steady-state latency. Add `tensorrt` to `--backend` in a
 Torch-TensorRT environment. Use `--compile-mode reduce-overhead` or
 `--compile-mode max-autotune` for Inductor.
 
+When both sides of a comparable pair are present, the harness prints their
+median-latency speedup and writes it to the JSON report under `comparisons`.
+Use the direct PyTorch pair to answer whether compiling itself helps, without
+including LM7 in either arm:
+
+```bash
+python benchmarks/gpu.py --target nvidia --model smollm2 \
+  --backend torch-eager torch-compile --compile-mode reduce-overhead \
+  --dtype float16 --batch-size 1 --warmup 5 --repeats 100
+```
+
+For a directly comparable GPU sweep, including a later H100 run, launch every
+model in a fresh process and change only the result label:
+
+```bash
+label=h100
+for model in smollm2 lfm25 llama32-1b deepseek-coder-1.3b; do
+  python benchmarks/gpu.py --target nvidia --model "$model" \
+    --backend torch-eager torch-compile --compile-mode reduce-overhead \
+    --dtype float16 --batch-size 1 --warmup 5 --repeats 100 \
+    --output "artifacts/benchmarks/${label}-${model}-eager-vs-compile.json"
+done
+```
+
+Each JSON file records the GPU name, architecture, PyTorch and CUDA versions.
+Keep optional model kernels identical across hosts; Qwen3.5 is deliberately not
+in this default sweep because its fallback path changes when those are absent.
+
 Benchmark results are descriptive for the current machine. Portable CI does
 not enforce hardware-specific timing thresholds.
