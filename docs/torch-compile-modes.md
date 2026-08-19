@@ -12,6 +12,14 @@ four Inductor presets *are* and how LM7 forwards them, see
 [TorchInductor options](inductor-options.md); this page is only about how much
 they are worth here and how easily the measurement misreports it.
 
+Like the [short-prompt forward
+diagnostic](inductor-options.md#rtx-4070-super-short-prompt-forward-diagnostic),
+the large ratios below come from a microbenchmark and are not a serving claim.
+The serving-shaped answer is the [KV-cache generation
+sweep](kv-cache-decode.md#measured-on-rtx-4070-super). What this page adds is
+*why* the two regimes differ, measured: the same three arms at growing context,
+plus the two ways the measurement itself can misreport the gap.
+
 ## Three arms
 
 The script times three arms, none of which put LM7 in the timed call:
@@ -75,6 +83,41 @@ ratio loosely: every MLP arm is under half a millisecond, and shortening the
 warmup moves it as far as 0.30x. That compiling loses here is reproducible; the
 size of the loss is not.
 
+## The win decays with context, and then reverses
+
+Tiling the prompt to a real length with `--prompt-tokens`, batch 1, batched
+policy (`inductor` and `reduce-overhead` in ms, speedup against that row's eager):
+
+| model | prompt | eager | `inductor` | `reduce-overhead` | best |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SmolLM2-135M | 5 | 57.530 ms | 19.665 ms | **1.918 ms** | **30.00x** |
+| | 512 | 52.050 ms | 17.096 ms | **5.902 ms** | **8.82x** |
+| | 2,048 | 49.315 ms | 21.611 ms | 21.508 ms | **2.29x** |
+| Llama-3.2-1B | 6 | 45.666 ms | 17.615 ms | **7.051 ms** | **6.48x** |
+| | 512 | 35.918 ms | **21.409 ms** | 22.322 ms | **1.68x** |
+| | 2,048 | 93.924 ms | **92.512 ms** | 100.469 ms | **1.02x** |
+
+The CUDA Graph share is what disappears. At 2,048 tokens `reduce-overhead` and
+`inductor` are indistinguishable for SmolLM2 (21.508 against 21.611 ms) — the
+same collapse ResNet-18 shows at batch 64, reached by making each kernel bigger
+instead of by batching. For Llama at 2,048 it does not merely stop paying, it
+costs: 100.469 ms against 93.924 ms eager, a 0.93x result. Replay overhead is
+not free, and there is no longer any launch gap for it to hide.
+
+The fusion share behaves differently by model. SmolLM2 keeps 2.28x from
+`inductor` alone at 2,048 tokens, because 30 narrow layers leave real fusion
+opportunities at any length. Llama-3.2-1B keeps 1.02x — at that context a 1B
+model is running GEMMs large enough that Inductor has nothing on cuBLAS.
+
+This is the same direction as the merged [KV-cache generation
+sweep](kv-cache-decode.md#measured-on-rtx-4070-super), which decays from 6.14x
+at 512 tokens and batch 1 to 1.10x at 8,192 and batch 4. The two are **not the
+same workload** and should not be read as one series: this table is a full
+forward pass with `use_cache=False`, which is prefill-shaped and compute-bound,
+while that one is autoregressive decode against a static KV cache, which is
+memory-bound per step. They agree that the compile win is a small-work
+phenomenon, and they get there by different routes.
+
 ## The timing loop moves the answer by 2x
 
 The two policies disagree, and they disagree most exactly where the win is
@@ -112,41 +155,42 @@ utilization, because a launch-bound model genuinely cannot keep it busy — that
 is a real property of the workload, not an artifact, and it is why the eager
 figures carry the clock they do.
 
-## Reconciling with the measurement in #219
+## Reconciling with the short-prompt diagnostic
 
-[PR #219](https://github.com/lmontigny/lm7/pull/219) measures the same card with
-the same question, through `benchmarks/gpu.py`'s direct PyTorch arms, and was
-open at the same time as this page. It is not merged, so nothing below edits it
-— but two of its rows overlap this one, and one of them does not reproduce.
-Re-running `gpu.py` unchanged on this box, alongside this page's per-call arm:
+The [short-prompt forward
+diagnostic](inductor-options.md#rtx-4070-super-short-prompt-forward-diagnostic)
+measures the same card and the same question through `benchmarks/gpu.py`'s
+direct PyTorch arms. Two of its rows overlap this page. Re-running `gpu.py`
+unchanged on this box, alongside this page's per-call arm:
 
 | model | source | eager | compiled | speedup |
 | --- | --- | ---: | ---: | ---: |
-| SmolLM2-135M | measured in #219 | 70.867 ms | 4.455 ms | 15.91x |
+| SmolLM2-135M | `inductor-options.md` | 70.867 ms | 4.455 ms | 15.91x |
 | | `benchmarks/gpu.py` today | 51.981 ms | 3.453 ms | 15.06x |
 | | `compile_modes.py`, per-call | 61.178 ms | 3.487 ms | 17.55x |
-| Llama-3.2-1B | measured in #219 | 38.721 ms | **17.982 ms** | 2.15x |
+| Llama-3.2-1B | `inductor-options.md` | 38.721 ms | **17.982 ms** | 2.15x |
 | | `benchmarks/gpu.py` today | 30.848 ms | **7.907 ms** | 3.90x |
 | | `compile_modes.py`, per-call | 47.926 ms | **8.048 ms** | 5.96x |
 
 The SmolLM2 row reconciles: three harnesses land between 15.06x and 17.55x, and
-the two run today agree on compiled latency to within 0.04 ms. Its absolute
+the two run today agree on compiled latency to within 0.04 ms. Its recorded
 latencies sit about 30% above today's on *both* arms, which is what machine
 state looks like — it scales the arms together and leaves the ratio intact.
 
 The Llama row does not reconcile, and it is not a whole-run offset: the eager
 arms are within 1.26x while the compiled arms differ by 2.27x. Only the compiled
 arm moved. Note where 17.982 ms lands — on top of this page's `inductor` arm for
-Llama, 17.615 ms batched, which is the no-CUDA-Graph number.
+Llama at the same short prompt, 17.615 ms batched, which is the no-CUDA-Graph
+number.
 
 Capture is not the limitation. Compiling both models through LM7's Inductor
 backend at `reduce-overhead` on this box reports `cudagraphs=True`,
 `cudagraph_skips=0`, `cudagraphs_active=True` for SmolLM2 **and** for
 Llama-3.2-1B, so Llama captures cleanly here. The reading that fits is that the
-graph was not replaying in that particular run — which is exactly the confusion
-`cudagraphs_active` exists to settle, and #219 verified capture for SmolLM2 only.
-That is inference from where the number sits, not a diagnosis of a session that
-cannot be re-run.
+graph was not replaying in the run that produced that row — which is exactly the
+confusion `cudagraphs_active` exists to settle, and that table verified capture
+for SmolLM2 only. That is inference from where the number sits, not a diagnosis
+of a session that cannot be re-run, and the recorded row is left as it stands.
 
 The eager column is a separate, smaller disagreement: `compile_modes.py` builds
 its input as `input_ids` alone, while `gpu.py` passes the tokenizer's full
@@ -161,15 +205,14 @@ are each comparable within themselves and not across.
   Linux, which raises the eager baseline and therefore every multiple on this
   page. Nothing here was run on bare-metal Linux, so treat the small-batch
   numbers as an sm89-under-WSL2 result rather than an RTX 4070 result.
-- **Batch 1 at five tokens is not a serving shape.** With `use_cache=False`
-  these are full forward passes over `The capital of France is` — neither
-  autoregressive decode against a KV cache (see
-  [prefill and KV-cache decode](kv-cache-decode.md)) nor a realistic prefill
-  length. It is close to a lower bound on per-call work, which is why the
-  multiples are large.
-- **Only ResNet-18 was swept over batch size.** Both causal LMs were measured at
-  batch 1 only, so "the LMs are launch-bound" rests on the
-  `inductor → reduce-overhead` step, not on a measured batch curve for them.
+- **Every row is a forward pass, not decode.** With `use_cache=False` these are
+  full forward passes, which is prefill-shaped. Autoregressive decode against a
+  static KV cache is a different workload with a different curve, measured in
+  [prefill and KV-cache decode](kv-cache-decode.md#measured-on-rtx-4070-super).
+- **Only ResNet-18 was swept over batch size.** The causal LMs were swept over
+  context instead, all at batch 1, so the interaction of the two — long context
+  *and* a large batch, which is where a serving engine actually sits — is not
+  measured here.
 - **One card, one process each.** No `sm90`/`sm120` comparison, and no claim
   that these ratios transfer to another architecture.
 
@@ -180,9 +223,16 @@ python benchmarks/compile_modes.py --model smollm2 \
   --output artifacts/compile-modes-rtx4070-smollm2-b1.json
 ```
 
-`--model` takes `mlp`, `resnet18`, or any key from the shared `HF_MODELS` set;
-`--batch-size` is what produces the saturation control above. Run each
-configuration in a fresh process — Inductor caches compiled code, and a warm
+`--model` takes `mlp`, `resnet18`, or any key from the shared `HF_MODELS` set.
+`--batch-size` produces the saturation control, and `--prompt-tokens` tiles a
+causal LM's prompt to an exact length for the context sweep:
+
+```bash
+python benchmarks/compile_modes.py --model llama32-1b --prompt-tokens 2048 \
+  --output artifacts/compile-modes-rtx4070-llama32-1b-t2048.json
+```
+
+Run each configuration in a fresh process — Inductor caches compiled code, and a warm
 cache makes a later arm look cheaper than it is.
 
 `--output` writes the full result, including the host and PyTorch build, as

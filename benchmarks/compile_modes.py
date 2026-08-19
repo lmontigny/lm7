@@ -60,6 +60,14 @@ HF_MODELS = {
 ARMS = ("eager", "inductor", "reduce-overhead")
 PROMPT = "The capital of France is"
 
+# Tiled to reach `--prompt-tokens`, so a long context is real English rather
+# than a repeated single token, which would not exercise attention the same way.
+FILLER = (
+    "Paris is the capital and most populous city of France. It sits on the "
+    "river Seine in the north of the country, and has been a major settlement "
+    "for more than two thousand years. "
+)
+
 
 def _dtype(name: str) -> torch.dtype:
     return {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[name]
@@ -81,8 +89,23 @@ class _CausalLMForward(torch.nn.Module):
         return self.model(input_ids=input_ids, use_cache=False).logits
 
 
+def _prompt_ids(tokenizer: Any, *, batch_size: int, prompt_tokens: int | None) -> torch.Tensor:
+    """Token ids for the prompt, tiled to an exact length when one is asked for."""
+    if prompt_tokens is None:
+        return tokenizer([PROMPT] * batch_size, return_tensors="pt").input_ids
+    # Size the tiling from the filler's own token count, so the string handed to
+    # the tokenizer is not wildly longer than asked for -- overshooting trips the
+    # model's max-length warning even though the result is truncated below it.
+    per_repeat = max(1, tokenizer(FILLER, return_tensors="pt").input_ids.shape[1])
+    repeats = prompt_tokens // per_repeat + 2
+    ids = tokenizer(FILLER * repeats, return_tensors="pt").input_ids[0]
+    if ids.numel() < prompt_tokens:
+        raise SystemExit(f"Filler tokenized to {ids.numel()}, short of {prompt_tokens}.")
+    return ids[:prompt_tokens].unsqueeze(0).repeat(batch_size, 1)
+
+
 def _workload(
-    name: str, *, dtype: torch.dtype, batch_size: int
+    name: str, *, dtype: torch.dtype, batch_size: int, prompt_tokens: int | None
 ) -> tuple[torch.nn.Module, torch.Tensor]:
     model: torch.nn.Module
     if name == "mlp":
@@ -107,7 +130,7 @@ def _workload(
     model_id = HF_MODELS[name]
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype)
-    input_ids = tokenizer([PROMPT] * batch_size, return_tensors="pt").input_ids
+    input_ids = _prompt_ids(tokenizer, batch_size=batch_size, prompt_tokens=prompt_tokens)
     return _CausalLMForward(model), input_ids
 
 
@@ -140,6 +163,15 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("float32", "float16", "bfloat16"), default="float16")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument(
+        "--prompt-tokens",
+        type=int,
+        help=(
+            "Tile the prompt to exactly this many tokens. Causal LMs only; the "
+            "default is the short five-token prompt, which is a launch-overhead "
+            "diagnostic rather than a realistic context."
+        ),
+    )
+    parser.add_argument(
         "--warm-seconds",
         type=float,
         default=10.0,
@@ -153,7 +185,14 @@ def main() -> None:
         raise SystemExit("This benchmark needs a CUDA GPU.")
 
     dtype = _dtype(arguments.dtype)
-    model, example = _workload(arguments.model, dtype=dtype, batch_size=arguments.batch_size)
+    if arguments.prompt_tokens is not None and arguments.model in ("mlp", "resnet18"):
+        raise SystemExit("--prompt-tokens applies to the causal-LM workloads only.")
+    model, example = _workload(
+        arguments.model,
+        dtype=dtype,
+        batch_size=arguments.batch_size,
+        prompt_tokens=arguments.prompt_tokens,
+    )
     model = model.to("cuda").eval()
     example = example.to("cuda")
     target = resolve_target("nvidia")
@@ -199,7 +238,8 @@ def main() -> None:
     gpu = torch.cuda.get_device_name(0)
     base_batched = rows[0]["batched_mean_ms"]
     base_per_call = rows[0]["per_call_median_ms"]
-    print(f"\n{arguments.model} | {arguments.dtype} | batch {arguments.batch_size} | {gpu}")
+    shape = "x".join(str(dim) for dim in example.shape)
+    print(f"\n{arguments.model} | {arguments.dtype} | input {shape} | {gpu}")
     print(f"{'arm':<17}{'batched ms':>12}{'speedup':>9}{'per-call ms':>13}{'speedup':>9}")
     for row in rows:
         print(
@@ -215,6 +255,8 @@ def main() -> None:
             "model_id": HF_MODELS.get(arguments.model),
             "dtype": arguments.dtype,
             "batch_size": arguments.batch_size,
+            "prompt_tokens": arguments.prompt_tokens,
+            "input_shape": list(example.shape),
             "gpu": gpu,
             "capability": ".".join(str(part) for part in torch.cuda.get_device_capability(0)),
             "torch": torch.__version__,
