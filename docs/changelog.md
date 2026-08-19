@@ -117,6 +117,7 @@ file stays a index rather than a second, drifting description.
 | [#180](https://github.com/lmontigny/lm7/pull/180) | Answer the three questions the first MI300X session left open |
 | [#183](https://github.com/lmontigny/lm7/pull/183) | Measure the memory-bound half of generation on the MI300X |
 | [#193](https://github.com/lmontigny/lm7/pull/193) | Measure what compiling through LM7 buys on an Apple M3 Pro |
+| [#220](https://github.com/lmontigny/lm7/pull/220) | Separate what torch.compile wins from how the timing loop measures it |
 
 ## Detection and diagnostics
 
