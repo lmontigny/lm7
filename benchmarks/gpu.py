@@ -77,6 +77,43 @@ VENDOR_ARMS = ("torch-eager", "torch-compile")
 PLACED_ARMS = ("eager-placed", "inductor-placed")
 DIRECT_ARMS = VENDOR_ARMS + PLACED_ARMS
 
+# These are the pairs for which only the execution path changes. Keeping the
+# comparison explicit prevents the report from silently dividing unrelated
+# rows (for example, an automatically transferred LM7 arm by a direct PyTorch
+# arm whose inputs were placed once).
+COMPARISON_PAIRS = (
+    ("torch-eager", "torch-compile"),
+    ("eager-placed", "inductor-placed"),
+    ("eager", "inductor"),
+)
+
+
+def _comparisons(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_backend = {result["backend"]: result for result in results}
+    comparisons = []
+    for baseline, optimized in COMPARISON_PAIRS:
+        if baseline not in by_backend or optimized not in by_backend:
+            continue
+        baseline_ms = float(by_backend[baseline]["latency_median_ms"])
+        optimized_ms = float(by_backend[optimized]["latency_median_ms"])
+        comparisons.append(
+            {
+                "baseline": baseline,
+                "optimized": optimized,
+                "latency_speedup": baseline_ms / optimized_ms,
+            }
+        )
+    return comparisons
+
+
+def _comparison_summary(comparison: dict[str, Any]) -> str:
+    ratio = float(comparison["latency_speedup"])
+    change = f"{ratio:.2f}x speedup" if ratio >= 1.0 else f"{1.0 / ratio:.2f}x slowdown"
+    return (
+        f"{comparison['optimized']} vs {comparison['baseline']}: {change} "
+        "(median steady-state latency)"
+    )
+
 
 def _direct_arm(
     arm: str,
@@ -257,6 +294,10 @@ def main() -> None:
         elif resolved_vendor in {"nvidia", "amd"}:
             torch.cuda.empty_cache()
 
+    comparisons = _comparisons(results)
+    for comparison in comparisons:
+        print(_comparison_summary(comparison))
+
     report = {
         "schema_version": 1,
         "workload": {
@@ -269,6 +310,7 @@ def main() -> None:
             "target": arguments.target,
         },
         "results": results,
+        "comparisons": comparisons,
     }
     if arguments.output is not None:
         output = arguments.output.expanduser().resolve()

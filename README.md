@@ -144,6 +144,34 @@ gets, and 1.23x is the same measurement at 1B, where GEMM time dominates. Every
 arm produced byte-identical text.
 [Method and full table](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
+### What compiled generation buys on RTX
+
+Llama-3.2-1B, BF16, an English prompt, and 100 generated tokens on the local RTX
+4070 SUPER. Both arms use the same static KV cache and eager prompt prefill; only
+the repeated decode step changes from eager to
+`torch.compile(mode="reduce-overhead")`. Each cell is the median of three full
+generations. The table reports **end-to-end speedup**, prefill included:
+
+| prompt tokens | batch 1 | batch 4 | batch 8 |
+| ---: | ---: | ---: | ---: |
+| 512 | **5.93x** | **4.25x** | **3.42x** |
+| 1,024 | **4.55x** | **3.35x** | **3.01x** |
+| 2,048 | **3.76x** | **2.50x** | **1.55x** |
+| 4,096 | **2.71x** | **1.51x** | 1.08x† |
+| 8,192 | **1.94x**† | 1.06x† | did not complete |
+
+This is the shape that transfers to serving: compilation matters at small batch
+and moderate context, then approaches a tie as attention and GEMMs dominate. At
+2,048 tokens and batch 1, total generation time falls from 3.36 s to 0.89 s; at
+batch 8 it falls from 4.20 s to 2.71 s. No steady call recompiled, and CUDA Graph
+capture was active in every compiled cell. Building the decode graph still cost
+18–27 s once per shape, outside the steady timings.
+
+† The first sixteen greedy tokens diverged from eager in BF16 at these
+long-context shapes; they remain performance observations, not correctness
+claims. The 8,192 × 8 process did not finish on the 12 GiB card. [Full method,
+per-token latency, memory, and H100 rerun](docs/kv-cache-decode.md#measured-on-rtx-4070-super).
+
 ### What the layer costs
 
 ![Grouped bar chart comparing direct torch.compile with lm7.compile for SmolLM2-135M on an Apple M3 Pro and RTX 4070 SUPER. Both seven-run ranges overlap within each platform.](docs/figures/lm7-overhead-platforms.png)

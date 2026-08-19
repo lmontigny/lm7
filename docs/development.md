@@ -378,5 +378,31 @@ slower than the steady-state latency. Add `tensorrt` to `--backend` in a
 Torch-TensorRT environment. Use `--compile-mode reduce-overhead` or
 `--compile-mode max-autotune` for Inductor.
 
+When both sides of a comparable pair are present, the harness prints their
+median-latency speedup and writes it to the JSON report under `comparisons`.
+Use the direct PyTorch pair to answer whether compiling itself helps, without
+including LM7 in either arm:
+
+```bash
+python benchmarks/gpu.py --target nvidia --model smollm2 \
+  --backend torch-eager torch-compile --compile-mode reduce-overhead \
+  --dtype float16 --batch-size 1 --warmup 5 --repeats 100
+```
+
+For a realistic comparison on another GPU, including a later H100 run, repeat
+the same prefill and KV-cache decode grid:
+
+```bash
+python benchmarks/decode.py --target nvidia \
+  --model unsloth/Llama-3.2-1B-Instruct --arm eager decode-only \
+  --sequence-length 512 1024 2048 4096 8192 --batch-size 1 4 8 \
+  --decode-steps 100 --warmup-steps 4 --repeats 3 --prompt-source text \
+  --output artifacts/benchmarks/h100-realistic-decode.json
+```
+
+The report records GPU, target, PyTorch and Transformers versions, separated
+prefill/decode latency, throughput, memory, graph capture, recompilation and
+token agreement. Keep that environment identical when comparing hosts.
+
 Benchmark results are descriptive for the current machine. Portable CI does
 not enforce hardware-specific timing thresholds.
