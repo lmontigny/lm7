@@ -59,6 +59,7 @@ multi-node
 inference benchmarks -> show perf vs w/o lm7
 intel Arc gpu
 multimodal
+lm7 serving not throughput-benchmarked
 
 ### Done ###
 test on saturnCloud, AWS, lightningAI
