@@ -389,22 +389,20 @@ python benchmarks/gpu.py --target nvidia --model smollm2 \
   --dtype float16 --batch-size 1 --warmup 5 --repeats 100
 ```
 
-For a directly comparable GPU sweep, including a later H100 run, launch every
-model in a fresh process and change only the result label:
+For a realistic comparison on another GPU, including a later H100 run, repeat
+the same prefill and KV-cache decode grid:
 
 ```bash
-label=h100
-for model in smollm2 lfm25 llama32-1b deepseek-coder-1.3b; do
-  python benchmarks/gpu.py --target nvidia --model "$model" \
-    --backend torch-eager torch-compile --compile-mode reduce-overhead \
-    --dtype float16 --batch-size 1 --warmup 5 --repeats 100 \
-    --output "artifacts/benchmarks/${label}-${model}-eager-vs-compile.json"
-done
+python benchmarks/decode.py --target nvidia \
+  --model unsloth/Llama-3.2-1B-Instruct --arm eager decode-only \
+  --sequence-length 512 1024 2048 4096 8192 --batch-size 1 4 8 \
+  --decode-steps 100 --warmup-steps 4 --repeats 3 --prompt-source text \
+  --output artifacts/benchmarks/h100-realistic-decode.json
 ```
 
-Each JSON file records the GPU name, architecture, PyTorch and CUDA versions.
-Keep optional model kernels identical across hosts; Qwen3.5 is deliberately not
-in this default sweep because its fallback path changes when those are absent.
+The report records GPU, target, PyTorch and Transformers versions, separated
+prefill/decode latency, throughput, memory, graph capture, recompilation and
+token agreement. Keep that environment identical when comparing hosts.
 
 Benchmark results are descriptive for the current machine. Portable CI does
 not enforce hardware-specific timing thresholds.

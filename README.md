@@ -144,29 +144,33 @@ gets, and 1.23x is the same measurement at 1B, where GEMM time dominates. Every
 arm produced byte-identical text.
 [Method and full table](docs/apple-mps.md#what-compiling-buys-measured-on-an-m3-pro).
 
-### What `torch.compile` buys on RTX
+### What compiled generation buys on RTX
 
-Direct PyTorch, with no LM7 in either arm, on the local RTX 4070 SUPER. FP16,
-batch 1, `mode="reduce-overhead"`, median of 100 forward calls after 5 warmups:
+Llama-3.2-1B, BF16, an English prompt, and 100 generated tokens on the local RTX
+4070 SUPER. Both arms use the same static KV cache and eager prompt prefill; only
+the repeated decode step changes from eager to
+`torch.compile(mode="reduce-overhead")`. Each cell is the median of three full
+generations. The table reports **end-to-end speedup**, prefill included:
 
-| model | eager | `torch.compile` | speedup | compiled first call |
-| --- | ---: | ---: | ---: | ---: |
-| SmolLM2-135M | 70.867 ms | **4.455 ms** | **15.91x** | 63.95 s |
-| LFM2.5-230M | 27.972 ms | **2.492 ms** | **11.22x** | 26.73 s |
-| Qwen3.5-0.8B* | 445.972 ms | **18.259 ms** | **24.42x** | 399.70 s |
-| Llama-3.2-1B | 38.721 ms | **17.982 ms** | **2.15x** | 35.07 s |
-| DeepSeek-Coder-1.3B | 51.035 ms | **8.297 ms** | **6.15x** | 37.59 s |
+| prompt tokens | batch 1 | batch 4 | batch 8 |
+| ---: | ---: | ---: | ---: |
+| 512 | **5.93x** | **4.25x** | **3.42x** |
+| 1,024 | **4.55x** | **3.35x** | **3.01x** |
+| 2,048 | **3.76x** | **2.50x** | **1.55x** |
+| 4,096 | **2.71x** | **1.51x** | 1.08x† |
+| 8,192 | **1.94x**† | 1.06x† | did not complete |
 
-The ratio does not follow parameter count. These short batch-1 forwards launch
-many small kernels, so layer structure and CUDA Graph eligibility matter more
-than model size alone. Compilation is also paid up front: these are steady-state
-numbers for repeated fixed-shape inference, not startup latency or
-autoregressive decode.
+This is the shape that transfers to serving: compilation matters at small batch
+and moderate context, then approaches a tie as attention and GEMMs dominate. At
+2,048 tokens and batch 1, total generation time falls from 3.36 s to 0.89 s; at
+batch 8 it falls from 4.20 s to 2.71 s. No steady call recompiled, and CUDA Graph
+capture was active in every compiled cell. Building the decode graph still cost
+18–27 s once per shape, outside the steady timings.
 
-\* Qwen used Transformers' pure-PyTorch fallback because the optional
-`flash-linear-attention` and `causal-conv1d` kernels were absent. Its 24.42x
-speedup and 399.70 s first call describe that fallback, not a fully optimized
-Qwen installation. [Method, memory, and environment](docs/inductor-options.md#rtx-4070-super-eager-versus-reduce-overhead); [H100 rerun command](docs/development.md#gpu-benchmarks).
+† The first sixteen greedy tokens diverged from eager in BF16 at these
+long-context shapes; they remain performance observations, not correctness
+claims. The 8,192 × 8 process did not finish on the 12 GiB card. [Full method,
+per-token latency, memory, and H100 rerun](docs/kv-cache-decode.md#measured-on-rtx-4070-super).
 
 ### What the layer costs
 

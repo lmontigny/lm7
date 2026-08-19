@@ -229,7 +229,13 @@ python benchmarks/gpu.py --target nvidia --model smollm2 \
 Run each configuration in a fresh process. Inductor caches compiled code, and a
 warm cache can otherwise make the second configuration appear to compile faster.
 
-### RTX 4070 SUPER: eager versus `reduce-overhead`
+### RTX 4070 SUPER: short-prompt forward diagnostic
+
+This is deliberately a diagnostic microbenchmark, not the serving result quoted
+in the README: it repeatedly evaluates one very short prompt with no KV cache.
+That isolates launch overhead and produces 10–24x ratios that do not survive
+realistic context, batching, or autoregressive decode. See the [KV-cache
+generation sweep](kv-cache-decode.md#measured-on-rtx-4070-super) for that result.
 
 The direct PyTorch arms in `benchmarks/gpu.py` implement the synchronized
 eager-versus-compiled comparison above without putting LM7 in either timed call.

@@ -252,7 +252,46 @@ So the per-token cost tracks how much context there is, which is the arithmetic,
 rather than creeping upward with how long the loop has been running, which would
 be a leak.
 
-### What "the same tokens" means in bfloat16
+## Measured on RTX 4070 SUPER
+
+The audience-facing RTX result uses the serving boundary rather than a tiny
+forward pass: Llama-3.2-1B, BF16, tiled English prompts, 100 decoded tokens, and
+the `eager` and `decode-only` arms. Both prefill eagerly into the same static KV
+cache; `decode-only` compiles only the step repeated for every output token.
+Each steady result is the median of three full generations.
+
+| prompt | batch | eager decode | compiled decode | decode speedup | end-to-end speedup | same first 16 tokens? |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 512 | 1 | 41.689 ms/tok | 6.793 ms/tok | 6.14x | **5.93x** | yes |
+| 512 | 4 | 37.590 | 8.218 | 4.57x | **4.25x** | yes |
+| 512 | 8 | 36.064 | 9.348 | 3.86x | **3.42x** | yes |
+| 1,024 | 1 | 36.080 | 7.526 | 4.79x | **4.55x** | yes |
+| 1,024 | 4 | 36.367 | 9.534 | 3.81x | **3.35x** | yes |
+| 1,024 | 8 | 45.363 | 12.752 | 3.56x | **3.01x** | yes |
+| 2,048 | 1 | 32.757 | 8.081 | 4.05x | **3.76x** | yes |
+| 2,048 | 4 | 35.743 | 12.167 | 2.94x | **2.50x** | yes |
+| 2,048 | 8 | 34.941 | 20.049 | 1.74x | **1.55x** | yes |
+| 4,096 | 1 | 28.781 | 9.563 | 3.01x | **2.71x** | yes |
+| 4,096 | 4 | 30.553 | 17.769 | 1.72x | **1.51x** | yes |
+| 4,096 | 8 | 35.765 | 32.147 | 1.11x | 1.08x | no — BF16 near-tie |
+| 8,192 | 1 | 32.152 | 14.681 | 2.19x | **1.94x** | no — BF16 near-tie |
+| 8,192 | 4 | 32.684 | 29.760 | 1.10x | 1.06x | no — BF16 near-tie |
+| 8,192 | 8 | — | — | — | — | process did not complete |
+
+End to end means eager prefill plus all 100 decode steps. At a 2,048-token
+prompt and batch 1 that is 3.36 s eager against 0.89 s compiled; at batch 8 it
+is 4.20 s against 2.71 s. The result approaches a tie as context and batch grow,
+because launch overhead becomes a smaller fraction of each attention step.
+
+Every completed compiled cell captured its decode graph, and none recompiled in
+steady state. The first decode paid 18.4–26.5 s to build that graph; those cold
+starts are excluded from the table. The final 8,192 × 8 process ended before it
+could write a result on the 12 GiB card, while the incremental report preserved
+the other 28 arm records. Use the [same command on an
+H100](development.md#gpu-benchmarks) rather than comparing this with a different
+harness.
+
+## What "the same tokens" means in bfloat16
 
 49 of the 60 configurations produced the same first sixteen tokens as the eager
 arm. The other eleven are all `inductor`, `cudagraphs` or `decode-only` at 4096
