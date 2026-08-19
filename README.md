@@ -213,24 +213,26 @@ Transformers 5.14.1 under WSL2, with 100 timed calls per arm in each run.
 Integration means that LM7 has target and backend code for a toolchain. It does
 **not** mean every row has run on physical hardware.
 
-| Vendor | Hardware | `target` | Integrated backends |
-| --- | --- | --- | --- |
-| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | Inductor, AOTInductor, OpenVINO, ONNX Runtime, eager; explicit/export integrations |
-| NVIDIA | GPU | `nvidia` | Inductor, AOTInductor, TensorRT, ONNX Runtime, eager, IREE Vulkan export |
-| AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, AOTInductor, eager, IREE Vulkan export |
-| Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager |
-| Apple | SoC (Mac/iOS CPU, GPU, ANE) | `apple` | Core ML export/runtime path; iOS simulator validated, physical iPhone pending |
-| Intel | GPU (XPU/Vulkan) | `intel` | Inductor, eager, IREE Vulkan export |
-| Arm | GPU (Mali/Vulkan) | `arm`, `arm:mali-g715` | IREE Vulkan export; never executed on device |
-| Intel | NPU | `intel:npu` | OpenVINO; mock-tested |
-| Google | TPU | `tpu` | OpenXLA, eager |
-| Tenstorrent | Wormhole, Blackhole | `tenstorrent` | tt-xla/tt-mlir/tt-metal, eager; mock-tested |
-| Mobile/embedded | CPU | `cpu` | ExecuTorch export |
-| Qualcomm | Snapdragon 8 Elite HTP | `qualcomm:sm8750` | QNN export |
-| AWS | Trainium | `aws:trainium` | Parse only; never executed |
+| Vendor | Hardware | `target` | Integrated backends | Evidence |
+| --- | --- | --- | --- | --- |
+| Intel, AMD, Arm, Apple | CPU (x86-64, ARM64) | `cpu` | Inductor, AOTInductor, OpenVINO, ONNX Runtime, eager; explicit/export integrations | ✅ Hardware |
+| NVIDIA | GPU | `nvidia` | Inductor, AOTInductor, TensorRT, ONNX Runtime, eager, IREE Vulkan export | ✅ Hardware |
+| AMD | GPU (ROCm/Vulkan) | `amd` | Inductor, AOTInductor, eager, IREE Vulkan export | ✅ Hardware |
+| Apple | GPU (Metal) | `apple` | Inductor, AOTInductor, eager | ✅ Hardware + CI |
+| Apple | SoC (Mac/iOS CPU, GPU, ANE) | `apple` | Core ML export/runtime path | ✅ Mac hardware · 🧪 iOS simulator |
+| Intel | GPU (XPU/Vulkan) | `intel` | Inductor, eager, IREE Vulkan export | 🧪 Mock only |
+| Arm | GPU (Mali/Vulkan) | `arm`, `arm:mali-g715` | IREE Vulkan export | 📦 Export-tested only |
+| Intel | NPU | `intel:npu` | OpenVINO | 🧪 Mock only |
+| Google | TPU | `tpu` | OpenXLA, eager | ✅ Hardware |
+| Tenstorrent | Wormhole, Blackhole | `tenstorrent` | tt-xla/tt-mlir/tt-metal, eager | 🧪 Mock only |
+| Mobile/embedded | CPU | `cpu` | ExecuTorch export | ✅ Physical device |
+| Qualcomm | Snapdragon 8 Elite HTP | `qualcomm:sm8750` | QNN export | 🧪 Mock only |
+| AWS | Trainium | `aws:trainium` | Target parsing only | 🔎 Parse only |
 
-Intel XPU, Tenstorrent, Intel NPU, and Trainium have not run through LM7 on real
-hardware. AMD ROCm has, once: an MI300X (`gfx942`, CDNA 3) ran detection, the
+`✅` means at least one listed path ran on physical hardware, not that every
+backend in the row ran on every device. `🧪` is mock or simulator evidence,
+`📦` stops at artifact export, and `🔎` stops at target parsing. AMD ROCm has,
+once: an MI300X (`gfx942`, CDNA 3) ran detection, the
 core benchmark matrix, FP8 quantization, AOTInductor packaging, MoE/dense 7B
 capacity checks, short-context decode, local serving, and the vLLM ROCm handoff
 — see [AMD MI300X](docs/amd-mi300x.md). See [tested
