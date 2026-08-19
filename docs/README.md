@@ -105,7 +105,8 @@ Measured investigations, including the ones that did not become backends.
 - [Qualcomm Hexagon](qualcomm-hexagon.md) — lower-level Hexagon-MLIR plan; the QNN export path is documented in [qnn.md](qnn.md).
 - [StableHLO and PJRT](stablehlo-pjrt-evaluation.md) — became the `stablehlo` backend.
 - [torch-mlir lowering](torch-mlir-lowering-evaluation.md) — evaluated, not adopted.
-- [RISC-V](riscv.md) — nothing to build yet; blocked on PyTorch, not on LM7.
+- [RISC-V](riscv.md) — measured on real hardware: LM7 runs unchanged and
+  Inductor compiles. Nothing to build; blocked on PyTorch, not on LM7.
 
 ## Reference
 
