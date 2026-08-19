@@ -152,6 +152,8 @@ the repeated decode step changes from eager to
 `torch.compile(mode="reduce-overhead")`. Each cell is the median of three full
 generations. The table reports **end-to-end speedup**, prefill included:
 
+![Grouped horizontal bar chart showing end-to-end compiled generation speedup for Llama-3.2-1B on RTX 4070 SUPER across five prompt lengths and batches 1, 4, and 8. Speedup declines toward eager parity as context and batch grow; outlined long-context bars mark BF16 token divergence.](docs/figures/rtx-compiled-generation.png)
+
 | prompt tokens | batch 1 | batch 4 | batch 8 |
 | ---: | ---: | ---: | ---: |
 | 512 | **5.93x** | **4.25x** | **3.42x** |
