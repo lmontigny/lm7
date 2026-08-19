@@ -21,8 +21,8 @@ output = compiled(example_input)
 **See what this machine can actually run before touching your model:**
 
 ```bash
-uv run lm7 doctor          # human-readable capability report
-uv run lm7 doctor --json   # the same data for CI and fleet inventory
+uv run --no-sync lm7 doctor          # human-readable capability report
+uv run --no-sync lm7 doctor --json   # the same data for CI and fleet inventory
 ```
 
 `lm7 doctor` reports Python and PyTorch versions, detected hardware, native and
@@ -261,6 +261,13 @@ LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
 does **not** install GPU drivers, CUDA or ROCm, Xcode, PyTorch/XLA, or vendor
 toolchains.
 
+Install uv once inside Linux, macOS, or WSL:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+```
+
 ```bash
 git clone https://github.com/lmontigny/lm7.git
 cd lm7
@@ -269,18 +276,19 @@ uv pip install torch --torch-backend=auto
 uv pip install -e .
 ```
 
-`uv run` uses the project's `.venv` automatically, so activating the virtual
-environment is optional.
+`uv run --no-sync` executes the editable install already in `.venv` without
+asking uv to resolve every hardware-specific optional backend or replace the
+chosen PyTorch build. Activating the virtual environment is optional.
 
 You still install the driver and compiler/runtime required by your hardware.
 LM7 removes the per-vendor application glue and tells you what is missing
 through `lm7 doctor`.
 
 ```bash
-uv run lm7 doctor
-uv run lm7 targets
-uv run lm7 backends
-uv run lm7 explain --target auto
+uv run --no-sync lm7 doctor
+uv run --no-sync lm7 targets
+uv run --no-sync lm7 backends
+uv run --no-sync lm7 explain --target auto
 ```
 
 Then compile a model without hard-coding its device:
