@@ -112,33 +112,41 @@ utilization, because a launch-bound model genuinely cannot keep it busy — that
 is a real property of the workload, not an artifact, and it is why the eager
 figures carry the clock they do.
 
-## Reconciling with the existing sm89 table
+## Reconciling with the measurement in #219
 
-[TorchInductor options](inductor-options.md#rtx-4070-super-eager-versus-reduce-overhead)
-records an earlier eager-versus-`reduce-overhead` comparison on this same card.
-Re-running `benchmarks/gpu.py` unchanged on this box today, alongside the new
-script's per-call arm:
+[PR #219](https://github.com/lmontigny/lm7/pull/219) measures the same card with
+the same question, through `benchmarks/gpu.py`'s direct PyTorch arms, and was
+open at the same time as this page. It is not merged, so nothing below edits it
+— but two of its rows overlap this one, and one of them does not reproduce.
+Re-running `gpu.py` unchanged on this box, alongside this page's per-call arm:
 
 | model | source | eager | compiled | speedup |
 | --- | --- | ---: | ---: | ---: |
-| SmolLM2-135M | recorded in `inductor-options.md` | 70.867 ms | 4.455 ms | 15.91x |
+| SmolLM2-135M | measured in #219 | 70.867 ms | 4.455 ms | 15.91x |
 | | `benchmarks/gpu.py` today | 51.981 ms | 3.453 ms | 15.06x |
 | | `compile_modes.py`, per-call | 61.178 ms | 3.487 ms | 17.55x |
-| Llama-3.2-1B | recorded in `inductor-options.md` | 38.721 ms | **17.982 ms** | 2.15x |
+| Llama-3.2-1B | measured in #219 | 38.721 ms | **17.982 ms** | 2.15x |
 | | `benchmarks/gpu.py` today | 30.848 ms | **7.907 ms** | 3.90x |
 | | `compile_modes.py`, per-call | 47.926 ms | **8.048 ms** | 5.96x |
 
 The SmolLM2 row reconciles: three harnesses land between 15.06x and 17.55x, and
-the compiled latency agrees to within 0.04 ms across the two harnesses run today.
+the two run today agree on compiled latency to within 0.04 ms. Its absolute
+latencies sit about 30% above today's on *both* arms, which is what machine
+state looks like — it scales the arms together and leaves the ratio intact.
 
-The Llama row does not. The recorded 17.982 ms does not reproduce — `gpu.py`,
-its own harness, now returns 7.907 ms on the same card and model. Note where
-17.982 ms does land: on top of this page's `inductor` arm for Llama, 17.615 ms
-batched, which is the no-CUDA-Graph number. The most likely reading is that
-CUDA Graph capture was not active in the run that produced the recorded row,
-which is exactly the confusion `cudagraphs_active` was added to settle. That is
-a hypothesis from the number's position, not a diagnosis of a session that
-cannot be re-run, and the recorded row is left in place rather than edited.
+The Llama row does not reconcile, and it is not a whole-run offset: the eager
+arms are within 1.26x while the compiled arms differ by 2.27x. Only the compiled
+arm moved. Note where 17.982 ms lands — on top of this page's `inductor` arm for
+Llama, 17.615 ms batched, which is the no-CUDA-Graph number.
+
+Capture is not the limitation. Compiling both models through LM7's Inductor
+backend at `reduce-overhead` on this box reports `cudagraphs=True`,
+`cudagraph_skips=0`, `cudagraphs_active=True` for SmolLM2 **and** for
+Llama-3.2-1B, so Llama captures cleanly here. The reading that fits is that the
+graph was not replaying in that particular run — which is exactly the confusion
+`cudagraphs_active` exists to settle, and #219 verified capture for SmolLM2 only.
+That is inference from where the number sits, not a diagnosis of a session that
+cannot be re-run.
 
 The eager column is a separate, smaller disagreement: `compile_modes.py` builds
 its input as `input_ids` alone, while `gpu.py` passes the tokenizer's full
