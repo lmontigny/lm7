@@ -21,13 +21,15 @@ output = compiled(example_input)
 **See what this machine can actually run before touching your model:**
 
 ```bash
+lm7 test            # run a tiny local model through LM7
 lm7 doctor          # human-readable capability report
 lm7 doctor --json   # the same data for CI and fleet inventory
 ```
 
-`lm7 doctor` reports Python and PyTorch versions, detected hardware, native and
-emulated precision, available backends, missing dependencies, and visible
-Vulkan devices.
+`lm7 test` runs a small deterministic PyTorch model locally and checks that LM7
+can resolve a target, execute the model, and match the eager output. `lm7 doctor`
+reports Python and PyTorch versions, detected hardware, native and emulated
+precision, available backends, missing dependencies, and visible Vulkan devices.
 
 > [!WARNING]
 > **LM7 is an early, inference-only prototype.** Model coverage and
