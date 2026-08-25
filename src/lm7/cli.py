@@ -4,12 +4,14 @@ import argparse
 import json
 import platform
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
 
 from .api import backends as inspect_backends
+from .api import compile as compile_model
 from .api import version
 from .artifact_generation import ArtifactGenerateResult, generate_from_artifact
 from .backends import registry
@@ -122,6 +124,46 @@ def _doctor_data() -> dict[str, Any]:
     }
 
 
+def _quick_test_data(target: str, backend: str) -> dict[str, Any]:
+    model = torch.nn.Sequential(
+        torch.nn.Linear(4, 8),
+        torch.nn.ReLU(),
+        torch.nn.Linear(8, 3),
+    ).eval()
+    example = torch.tensor([[-1.0, -0.25, 0.5, 1.25], [0.0, 0.75, -0.5, 1.0]], dtype=torch.float32)
+    with torch.inference_mode():
+        expected = model(example).detach().cpu()
+        wrapped = compile_model(model, target=target, backend=backend, fallback="error")
+        started = time.perf_counter()
+        actual = wrapped(example)
+        first_call_ms = (time.perf_counter() - started) * 1000.0
+        started = time.perf_counter()
+        steady_actual = wrapped(example)
+        steady_call_ms = (time.perf_counter() - started) * 1000.0
+
+    assert wrapped.target is not None
+    assert wrapped.selected_backend is not None
+    actual_cpu = actual.detach().cpu()
+    steady_cpu = steady_actual.detach().cpu()
+    try:
+        torch.testing.assert_close(actual_cpu, expected, rtol=1e-4, atol=1e-5)
+        torch.testing.assert_close(steady_cpu, expected, rtol=1e-4, atol=1e-5)
+    except AssertionError as exc:
+        raise LM7Error(f"Quick test failed numerical validation: {exc}") from exc
+    max_abs_error = torch.max(torch.abs(actual_cpu - expected)).item()
+    return {
+        "status": "ok",
+        "target": str(wrapped.target),
+        "backend": wrapped.selected_backend,
+        "device": str(actual.device),
+        "input_shape": list(example.shape),
+        "output_shape": list(actual.shape),
+        "first_call_ms": first_call_ms,
+        "steady_call_ms": steady_call_ms,
+        "max_abs_error": max_abs_error,
+    }
+
+
 def _target_spec_from_data(value: dict[str, Any]) -> TargetSpec:
     return TargetSpec(
         value["vendor"],
@@ -196,6 +238,18 @@ def _print_backends(backends: Sequence[dict[str, Any]]) -> None:
         print(f"  {backend['name']}: {status}{version_suffix}")
         if backend["reason"]:
             print(f"    {backend['reason']}")
+
+
+def _print_quick_test(data: Mapping[str, Any]) -> None:
+    print("LM7 quick test: ok")
+    print(f"Target: {data['target']}")
+    print(f"Backend: {data['backend']}")
+    print(f"Device: {data['device']}")
+    print(f"Input shape: {tuple(data['input_shape'])}")
+    print(f"Output shape: {tuple(data['output_shape'])}")
+    print(f"First call: {data['first_call_ms']:.2f} ms")
+    print(f"Steady call: {data['steady_call_ms']:.2f} ms")
+    print(f"Max abs error: {data['max_abs_error']:.3g}")
 
 
 def _print_vulkan(data: Mapping[str, Any]) -> None:
@@ -505,6 +559,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
     backends_parser = subparsers.add_parser("backends", help="list registered compiler backends")
     _add_json_argument(backends_parser)
+
+    test_parser = subparsers.add_parser(
+        "test", help="run a quick local smoke test with a tiny PyTorch model"
+    )
+    test_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
+    test_parser.add_argument(
+        "--backend",
+        default="eager",
+        help=(
+            "backend selector (default: eager, for a fast first-run check; use auto to "
+            "exercise compiler selection)"
+        ),
+    )
+    _add_json_argument(test_parser)
 
     explain_parser = subparsers.add_parser("explain", help="explain backend selection for a target")
     explain_parser.add_argument("--target", default="auto", help="target selector (default: auto)")
@@ -895,6 +963,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             backends = list(inspect_backends())
             data = {"backends": backends}
             _emit_json(data) if args.json else _print_backends(backends)
+        elif args.command == "test":
+            data = _quick_test_data(args.target, args.backend)
+            _emit_json(data) if args.json else _print_quick_test(data)
         elif args.command == "explain":
             data = _explain_data(args.target, args.backend)
             _emit_json(data) if args.json else _print_explanation(data)

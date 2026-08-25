@@ -63,6 +63,62 @@ def test_backends_text(monkeypatch, capsys):
     assert "dependency missing" in output
 
 
+def test_quick_test_text(monkeypatch, capsys):
+    calls = {}
+
+    def quick_test_data(target, backend):
+        calls["target"] = target
+        calls["backend"] = backend
+        return {
+            "status": "ok",
+            "target": "cpu:x86_64",
+            "backend": "eager",
+            "device": "cpu",
+            "input_shape": [2, 4],
+            "output_shape": [2, 3],
+            "first_call_ms": 1.25,
+            "steady_call_ms": 0.25,
+            "max_abs_error": 0.0,
+        }
+
+    monkeypatch.setattr(cli, "_quick_test_data", quick_test_data)
+
+    assert cli.main(["test"]) == 0
+
+    assert calls == {"target": "auto", "backend": "eager"}
+    output = capsys.readouterr().out
+    assert "LM7 quick test: ok" in output
+    assert "Target: cpu:x86_64" in output
+    assert "Backend: eager" in output
+    assert "Input shape: (2, 4)" in output
+
+
+def test_quick_test_json(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "_quick_test_data",
+        lambda target, backend: {
+            "status": "ok",
+            "target": target,
+            "backend": backend,
+            "device": "cpu",
+            "input_shape": [2, 4],
+            "output_shape": [2, 3],
+            "first_call_ms": 1.25,
+            "steady_call_ms": 0.25,
+            "max_abs_error": 0.0,
+        },
+    )
+
+    assert cli.main(["test", "--target", "cpu", "--backend", "auto", "--json"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "ok"
+    assert output["target"] == "cpu"
+    assert output["backend"] == "auto"
+    assert output["output_shape"] == [2, 3]
+
+
 def test_doctor_json(monkeypatch, capsys, detected_devices, tmp_path):
     monkeypatch.setattr(cli, "detect_targets", lambda: detected_devices)
     monkeypatch.setattr(
