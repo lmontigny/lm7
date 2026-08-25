@@ -36,18 +36,67 @@ precision, available backends, missing dependencies, and visible Vulkan devices.
 > compiled-artifact compatibility are not stable. See
 > [limitations](docs/limitations.md) before depending on it.
 
+## Quick start
+
+LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
+does **not** install GPU drivers, CUDA or ROCm, Xcode, PyTorch/XLA, or vendor
+toolchains.
+
+For a local checkout, install uv once inside Linux, macOS, or WSL:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+```
+
+```bash
+git clone https://github.com/lmontigny/lm7.git
+cd lm7
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install torch --torch-backend=auto
+uv pip install -e .
+```
+
+You still install the driver and compiler/runtime required by your hardware.
+LM7 removes the per-vendor application glue and tells you what is missing
+through `lm7 doctor`. Start with the local smoke test, then inspect the machine:
+
+```bash
+lm7 test
+lm7 doctor
+lm7 targets
+lm7 backends
+lm7 explain --target auto
+```
+
+Then compile a model without hard-coding its device:
+
+```python
+compiled = lm7.compile(model.eval(), target="auto")
+result = compiled(example_input)
+
+print(compiled.target, compiled.selected_backend)
+```
+
+Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cuda) ·
+[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
+[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
+
+Export and device setup: [ExecuTorch](docs/executorch.md) ·
+[Core ML](docs/coreml.md) · [Qualcomm QNN](docs/qnn.md) ·
+[Android device testing](docs/android-device-testing.md) ·
+[iOS device testing](docs/ios-device-testing.md).
+
 ## When should I use LM7?
 
 Use LM7 when the same PyTorch model needs to survive a change of hardware
 without growing vendor-specific branches:
 
-- software distributed to users with different accelerators;
-- development on one platform and deployment on another;
-- servers, workstations, or laptops with more than one kind of accelerator;
-- evaluating multiple compiler/runtime stacks for the same PyTorch model;
-- accelerator vendors exposing their stack to existing PyTorch applications;
-- runtime detection of hardware and compiler availability;
-- artifact build, inspection, and loading through one interface.
+- shipping software to users with different accelerators;
+- developing on one platform and deploying on another;
+- evaluating compiler/runtime stacks for one PyTorch model;
+- detecting available hardware and compiler support at runtime.
 
 If one `torch.compile(model)` call already covers your machine and deployment
 needs, LM7 is probably extra machinery. On CPU, NVIDIA, AMD, Intel GPU, and
@@ -55,14 +104,9 @@ Apple Silicon, LM7 often *does* use `torch.compile` with TorchInductor
 underneath. LM7 is not another compiler and does not replace Inductor,
 TensorRT, OpenXLA, OpenVINO, or the other toolchains it integrates.
 
-The missing layer is everything around the compiler call:
-
-- detecting NVIDIA, AMD ROCm, Intel XPU, Apple MPS, TPU, and other accelerators;
-- normalizing their different device semantics;
-- selecting an available compiler for the resolved target;
-- moving nested inputs and caching variants by input signature;
-- handling first-call compilation failures and controlled fallback;
-- explaining backend selection and managing artifacts across compiler stacks.
+The missing layer is everything around the compiler call: target detection,
+device normalization, backend selection, input movement, signature caching,
+controlled fallback, backend explanations, and artifact inspection.
 
 Some targets are not an Inductor call at all: TPU uses PyTorch/XLA and OpenXLA,
 Intel NPU uses OpenVINO, and other accelerators bring their own compiler and
@@ -119,7 +163,7 @@ LM7 sits between one PyTorch model and the vendor toolchains that compile it.
 >
 > **Arm:** Neoverse N2/N3 CPU
 >
-> **Apple:** M3 Pro · M4 · M4 Pro· iPhone
+> **Apple:** M3 Pro · M4 · M4 Pro · iPhone
 >
 > **Google:** TPU v6e
 >
@@ -260,58 +304,6 @@ every compiler. Use `lm7 model compatibility hf://...` as a fast preflight,
 then run the model on the intended target for the definitive check. See
 [model compatibility](docs/model-compatibility.md), [tested hardware](docs/tested-hardware.md),
 and [limitations](docs/limitations.md).
-
-## Quick start
-
-LM7 requires Python 3.10+ and a PyTorch build matching the target machine. It
-does **not** install GPU drivers, CUDA or ROCm, Xcode, PyTorch/XLA, or vendor
-toolchains.
-
-Install uv once inside Linux, macOS, or WSL:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source "$HOME/.local/bin/env"
-```
-
-```bash
-git clone https://github.com/lmontigny/lm7.git
-cd lm7
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip install torch --torch-backend=auto
-uv pip install -e .
-```
-
-You still install the driver and compiler/runtime required by your hardware.
-LM7 removes the per-vendor application glue and tells you what is missing
-through `lm7 doctor`. Start with the local smoke test, then inspect the machine:
-
-```bash
-lm7 test
-lm7 doctor
-lm7 targets
-lm7 backends
-lm7 explain --target auto
-```
-
-Then compile a model without hard-coding its device:
-
-```python
-compiled = lm7.compile(model.eval(), target="auto")
-result = compiled(example_input)
-
-print(compiled.target, compiled.selected_backend)
-```
-
-Per-hardware setup: [CPU](docs/cpu.md) · [NVIDIA](docs/development.md#nvidia-cuda) ·
-[AMD ROCm](docs/amd-rocm.md) · [Apple Silicon](docs/apple-mps.md) ·
-[Google TPU](docs/google-tpu.md) · [Tenstorrent](docs/tenstorrent.md).
-
-Export and device setup: [ExecuTorch](docs/executorch.md) ·
-[Core ML](docs/coreml.md) · [Qualcomm QNN](docs/qnn.md) ·
-[Android device testing](docs/android-device-testing.md) ·
-[iOS device testing](docs/ios-device-testing.md).
 
 ## Compiler and backend overview
 
