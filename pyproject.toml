@@ -9,7 +9,7 @@ description = "A PyTorch-first hardware target and compiler orchestration layer.
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
-dependencies = ["torch>=2.0"]
+dependencies = ["torch>=2.0", "numpy>=1.26,<2.5"]
 
 [project.scripts]
 lm7 = "lm7.cli:main"
