@@ -130,9 +130,7 @@ def _quick_test_data(target: str, backend: str) -> dict[str, Any]:
         torch.nn.ReLU(),
         torch.nn.Linear(8, 3),
     ).eval()
-    example = torch.tensor(
-        [[-1.0, -0.25, 0.5, 1.25], [0.0, 0.75, -0.5, 1.0]], dtype=torch.float32
-    )
+    example = torch.tensor([[-1.0, -0.25, 0.5, 1.25], [0.0, 0.75, -0.5, 1.0]], dtype=torch.float32)
     with torch.inference_mode():
         expected = model(example).detach().cpu()
         wrapped = compile_model(model, target=target, backend=backend, fallback="error")
