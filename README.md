@@ -285,9 +285,10 @@ uv pip install -e .
 
 You still install the driver and compiler/runtime required by your hardware.
 LM7 removes the per-vendor application glue and tells you what is missing
-through `lm7 doctor`.
+through `lm7 doctor`. Start with the local smoke test, then inspect the machine:
 
 ```bash
+lm7 test
 lm7 doctor
 lm7 targets
 lm7 backends
