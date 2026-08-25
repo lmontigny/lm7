@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
 
 
 def test_base_install_includes_numpy_for_torch_import() -> None:
