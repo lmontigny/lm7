@@ -1,0 +1,283 @@
+# Does LM7 run on RISC-V? docs/riscv.md argues it should by construction --
+# `cpu:riscv64` already parses and detection reads platform.machine() -- but the
+# claim had never been executed on the architecture.
+#
+# RISE provides free native RISC-V GitHub Actions runners to open source
+# projects, so the claim is now testable. The results are written up in
+# docs/riscv.md; this file is how they were produced and how to reproduce them.
+#
+# Dispatch only, on purpose. A run costs eighteen minutes, fourteen of which are
+# numpy compiling from source, and nothing here gates a pull request -- the
+# question it answers changes when PyTorch ships a riscv64 wheel, not when LM7
+# changes. Run it from the Actions tab when that happens, or when a claim in
+# docs/riscv.md needs rechecking.
+#
+# What it cannot answer: performance. RISE runs on Scaleway EM-RV1, and the
+# "Describe the machine" step below shows why that is fatal to any speed claim --
+# the ISA string is rv64imafdcsu, with no `v` at all, so there is no vector
+# extension here to measure with any toolchain.
+name: RISC-V experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# RISE donates this hardware, and one run occupies a four-core machine for the
+# better part of twenty minutes. Two dispatches in quick succession otherwise
+# queue two full runs, which is rude on a shared fleet and tells us nothing
+# twice.
+concurrency:
+  group: riscv-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  riscv64:
+    # No continue-on-error here, and none below except where an outcome is
+    # deliberately consulted. It was here to keep a failing experiment from
+    # failing a pull request; nothing gates a pull request now, and the cost was
+    # that GitHub rewrote every conclusion to `success` and showed green over a
+    # run whose Inductor compile had died. Red should mean red.
+    name: RISC-V experiment
+    runs-on: ubuntu-24.04-riscv
+    timeout-minutes: 60
+
+    # Python block-buffers stdout when it is a pipe, so a traceback on stderr
+    # lands in the log above the prints that introduce it. The whole value of
+    # this job is a readable record, so keep the two streams in order.
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Establishes the ground truth docs/riscv.md is written against: which
+      # extensions this silicon actually reports, and whether "v" appears at all.
+      - name: Describe the machine
+        run: |
+          echo "## machine"
+          uname -m -r
+          echo "## isa"
+          grep -m4 -E 'isa|uarch|mvendorid|marchid' /proc/cpuinfo || true
+          echo "## cores / memory"
+          nproc
+          free -h | head -2
+          echo "## toolchain"
+          gcc --version | head -1 || true
+          cc -march=native -Q --help=target 2>/dev/null | grep -m1 -- '-march=' || true
+
+      # `command -v` returns non-zero for every version that is absent, and the
+      # loop's last iteration decides the step's exit code -- which on the first
+      # run failed the step and skipped everything after it.
+      - name: Report the Python that is present
+        run: |
+          echo "default: $(python3 --version)"
+          for v in 3.10 3.11 3.12 3.13; do
+            if command -v "python$v" >/dev/null 2>&1; then
+              echo "found python$v: $(python$v --version)"
+            else
+              echo "no python$v"
+            fi
+          done
+          exit 0
+
+      # The runner ships CPython 3.12 only, and the one riscv64 wheel on PyPI is
+      # tagged cp311, so this tries the distro package first and falls back to
+      # fetching a 3.11 interpreter. Each strategy reports rather than aborting,
+      # because which one works is the thing being measured.
+      - name: Look for a usable riscv64 PyTorch
+        id: torch
+        continue-on-error: true
+        run: |
+          set +e
+          echo "===== is torch packaged for riscv64? ====="
+          apt-cache policy python3-torch 2>&1 | head -5
+
+          echo "===== strategy 1: distro package ====="
+          echo "(empty output above means python3-torch is not packaged for riscv64)"
+
+          # The wheel is not auditwheel-repaired -- which is also why it carries
+          # the wrong none-any tag -- so its shared libraries are not bundled.
+          echo "===== system libraries the wheel expects ====="
+          sudo apt-get update -qq
+          sudo apt-get install -y libopenblas0 libgomp1 2>&1 | tail -2
+
+          echo "===== strategy 2: CPython 3.11 via uv, then pytorch-riscv64 ====="
+          curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv python install 3.11 2>&1 | tail -2
+          uv venv --python 3.11 /tmp/rv 2>&1 | tail -1
+          # `uv venv` does not install pip, so reach for uv's own installer.
+          uv pip install --python /tmp/rv/bin/python "pytorch-riscv64==2.3.0a1" 2>&1 | tail -4
+          if /tmp/rv/bin/python -c "import torch; print('torch', torch.__version__)" 2>&1 | tail -3; then
+            /tmp/rv/bin/python -c "import torch" 2>/dev/null && {
+              echo "PYBIN=/tmp/rv/bin/python" >> "$GITHUB_ENV"
+              echo "strategy=uv-3.11" >> "$GITHUB_OUTPUT"
+              exit 0
+            }
+          fi
+          echo "strategy 2 failed"
+
+          echo "no riscv64 PyTorch could be installed"
+          echo "strategy=none" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # --no-deps matters: LM7 declares torch>=2.0, and letting pip resolve that
+      # on riscv64 finds no wheel and starts a source build that will not finish.
+      - name: Install LM7 without letting pip resolve torch
+        if: steps.torch.outcome == 'success'
+        run: |
+          uv pip install --python "$PYBIN" --no-deps -e .
+          uv pip install --python "$PYBIN" pytest
+          # TorchInductor's C++ codegen builds the generated extension through
+          # setuptools, which a uv venv does not include. Without it Inductor
+          # fails with ModuleNotFoundError and LM7 falls back to eager, which
+          # reads like an architecture limitation and is not one.
+          uv pip install --python "$PYBIN" setuptools wheel
+          # The pin is not caution, it is the wheel's own requirement: this torch
+          # was built against NumPy 1.x, so an unpinned install resolves to 2.x
+          # and torch then refuses it with "Failed to initialize NumPy:
+          # _ARRAY_API not found" on every subsequent import. There is no riscv64
+          # numpy wheel either way, so this compiles from source and is the
+          # slowest step in the job by an order of magnitude.
+          uv pip install --python "$PYBIN" "numpy<2" || echo "no numpy for riscv64; continuing"
+          "$PYBIN" -c "import lm7; print('lm7 imported')"
+
+      # torch 2.3's codecache.py hardcodes -march=native for every machine but
+      # ppc64le, so RISC-V takes the x86 path and GCC rejects it: "'-march=native':
+      # ISA string must begin with rv32 or rv64". PyTorch has since fixed this
+      # (pytorch#167071, in 2.10: riscv64 gets -march=rv64gc), but the only
+      # riscv64 wheel that exists is 2.3.0a1, which predates the fix.
+      #
+      # So this shim is not a workaround LM7 should ship -- it is that upstream
+      # fix, backported into a compiler wrapper, so the job can isolate the flag
+      # as the variable and answer the question underneath it: with the flag
+      # corrected, does LM7 compile on RISC-V?
+      - name: Backport PyTorch's riscv64 -march fix into a g++ wrapper
+        if: steps.torch.outcome == 'success'
+        run: |
+          mkdir -p /tmp/shim
+          cat > /tmp/shim/g++ <<'SHIM'
+          #!/usr/bin/env bash
+          args=()
+          for a in "$@"; do
+            case "$a" in
+              -march=native) args+=("-march=rv64gc") ;;
+              *) args+=("$a") ;;
+            esac
+          done
+          exec /usr/bin/g++ "${args[@]}"
+          SHIM
+          chmod +x /tmp/shim/g++
+          /tmp/shim/g++ --version | head -1
+
+      # Written once and run twice, because the two runs differ by exactly one
+      # environment variable and any other difference would weaken the claim.
+      #
+      # It asks the compiled module which backend ran rather than inferring it
+      # from an absent warning: lm7.compile returns a numerically correct answer
+      # whether Inductor compiled or the eager fallback caught it, so "max abs
+      # diff 0.0" on its own says nothing about which one happened.
+      - name: Write the compile probe
+        if: steps.torch.outcome == 'success'
+        run: |
+          cat > /tmp/probe.py <<'PY'
+          import os
+          import sys
+          import traceback
+
+          import lm7
+          import torch
+
+          # Each arm states its expectation up front, because one of the two is
+          # supposed to fail and a reader landing on its traceback has no way to
+          # know that. An unannotated stack trace under a green check is the
+          # exact ambiguity this job exists to remove.
+          arm, expected_backend = sys.argv[1], sys.argv[2]
+
+          print(f"=== arm: {arm} ===")
+          print("expected backend:", expected_backend)
+          print("torch:", torch.__version__)
+          print("CXX:", os.environ.get("CXX", "<unset>"))
+
+          model = torch.nn.Sequential(
+              torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)
+          ).eval()
+          x = torch.randn(2, 8)
+          with torch.no_grad():
+              expected = model(x)
+
+          compiled = lm7.compile(model, target="cpu")
+          got = compiled(x)
+          actual = compiled.selected_backend
+          print("backend that ran:", actual)
+          print("max abs diff vs eager:", float((got - expected).abs().max()))
+
+          if actual != "inductor":
+              # LM7 fell back. Re-raise the backend's own error instead of guessing
+              # at it, then show torch.compile failing the same way with LM7 out of
+              # the picture -- otherwise a reader cannot tell whose problem this is.
+              print("=== why Inductor did not run ===")
+              try:
+                  lm7.compile(model, target="cpu", fallback="error")(x)
+              except Exception:
+                  traceback.print_exc()
+
+              print("=== bare torch.compile, no LM7 in the way ===")
+              try:
+                  torch.compile(model)(x)
+                  print("torch.compile worked")
+              except Exception:
+                  traceback.print_exc()
+
+          if actual == expected_backend:
+              print(f"RESULT: {actual}, as expected for this arm.")
+              raise SystemExit(0)
+
+          print(f"RESULT: UNEXPECTED -- expected {expected_backend}, got {actual}.")
+          raise SystemExit(1)
+          PY
+
+      # The claim under test: a RISC-V host resolves to cpu:riscv64 on its own,
+      # with no architecture-specific code in LM7.
+      - name: Does LM7 detect this machine
+        if: steps.torch.outcome == 'success'
+        run: |
+          "$PYBIN" - <<'PY'
+          import platform
+          from lm7.targets import parse_target
+          spec = parse_target("cpu:riscv64")
+          print("parsed:", spec, "| architecture:", spec.architecture)
+          print("platform.machine():", platform.machine())
+          import lm7
+          print("detected targets:", [str(t) for t in lm7.detect_targets()])
+          print("backends:", sorted(b["name"] for b in lm7.backends()))
+          PY
+
+      - name: Run the target and planner tests
+        if: steps.torch.outcome == 'success'
+        run: |
+          "$PYBIN" -m pytest tests/test_targets.py tests/test_planner.py -q
+
+      # What a RISC-V user gets today: the shim is on neither PATH nor CXX, so
+      # Inductor drives the compiler exactly as torch 2.3 configures it. This
+      # arm is *supposed* to fail, and its traceback is the finding, not a fault
+      # -- hence the name, which has to survive being read on its own in a
+      # collapsed step list.
+      - name: Control -- unpatched torch 2.3, Inductor expected to fail
+        if: steps.torch.outcome == 'success'
+        run: |
+          "$PYBIN" /tmp/probe.py unpatched eager
+
+      # The same probe, one flag different. If this reports `inductor` where the
+      # arm above reports `eager`, then nothing about the architecture was the
+      # obstacle -- a single stale compiler flag was.
+      - name: Treatment -- -march=native corrected, Inductor expected to compile
+        if: steps.torch.outcome == 'success'
+        env:
+          CXX: /tmp/shim/g++
+        run: |
+          export PATH="/tmp/shim:$PATH"
+          "$PYBIN" /tmp/probe.py patched inductor
