@@ -73,6 +73,9 @@ This index covers everything else.
   preflight for model type, workflows, target/backend selection, and quantization.
 - [TorchInductor options](inductor-options.md) — compile modes, CUDA Graphs,
   individual backend controls, and benchmarking guidance.
+- [torch.compile modes on sm89](torch-compile-modes.md) — why the headline number
+  is CUDA Graphs rather than codegen, how it decays to a slowdown as context
+  grows, and the two ways the timing loop misreports it.
 - [Quantization](quantization.md) — weight-only modes, validation gates, caveats.
 - [DeepSeek coverage](deepseek.md) — one model measured across every locally
   installable backend.
